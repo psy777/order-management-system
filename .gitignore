@@ -27,5 +27,4 @@ Thumbs.db
 
 # Uploads folder (if you store temporary uploads here)
 uploads/
-
-.env
+data/
