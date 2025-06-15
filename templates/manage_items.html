@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manage Items - Order Manager</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon-16x16.png">
+    <link rel="manifest" href="/assets/site.webmanifest">
+    <style>
+        .back-to-settings-button {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            color: #dd6b20; /* text-orange-600 */
+            font-weight: 600; /* font-semibold */
+            text-decoration: none;
+            margin-bottom: 1rem;
+        }
+        .back-to-settings-button:hover {
+            color: #c05621; /* text-orange-800 */
+        }
+        .modal-lg { max-width: 800px; }
+        .action-buttons button { margin-left: 5px; }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+        <a href="/settings" target="_top" class="back-to-settings-button">&larr; Back to Settings</a>
+        <h1>Manage Items (Crosses)</h1>
+        <hr>
+
+        <button type="button" class="btn btn-primary mb-3" data-toggle="modal" data-target="#itemModal" onclick="prepareAddItemModal()">
+            Add New Item
+        </button>
+
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>Item Code</th>
+                    <th>Name</th>
+                    <th>Type</th>
+                    <th>Price ($)</th>
+                    <th>Styles</th>
+                    <th>Weight (oz)</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="itemsTableBody">
+                <!-- Items will be loaded here by JavaScript -->
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Item Modal (Add/Edit) -->
+    <div class="modal fade" id="itemModal" tabindex="-1" role="dialog" aria-labelledby="itemModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="itemModalLabel">Add Item</h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <form id="itemForm">
+                        <input type="hidden" id="itemId">
+                        <div class="form-group">
+                            <label for="itemCode">Item Code</label>
+                            <input type="text" class="form-control" id="itemCode" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="itemName">Name</label>
+                            <input type="text" class="form-control" id="itemName" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="itemPrice">Price ($)</label>
+                            <input type="number" class="form-control" id="itemPrice" required min="0" step="0.01">
+                        </div>
+                         <div class="form-group">
+                            <label for="itemType">Type</label>
+                            <select class="form-control" id="itemType">
+                                <option value="cross">Cross</option>
+                                <option value="display">Display</option>
+                                <option value="other">Other</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="itemWeightOz">Weight (oz)</label>
+                            <input type="number" class="form-control" id="itemWeightOz" min="0" step="0.1">
+                        </div>
+                        <div class="form-group">
+                            <label for="itemStyles">Styles (comma-separated)</label>
+                            <input type="text" class="form-control" id="itemStyles">
+                        </div>
+                        <!-- Add more fields as necessary, e.g., category, stock, image URL -->
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-primary" onclick="saveItem()">Save Item</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.5.4/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+    <script>
+        $(document).ready(function() {
+            loadItems();
+        });
+
+        function loadItems() {
+            fetch('/api/items')
+                .then(response => response.json())
+                .then(data => {
+                    const tableBody = $('#itemsTableBody');
+                    tableBody.empty(); // Clear existing rows
+                    data.forEach(item => {
+                        // item.price from API is in cents, convert to dollars for display
+                        const priceFormatted = typeof item.price === 'number' ? (item.price / 100).toFixed(2) : 'N/A';
+                        const stylesFormatted = Array.isArray(item.styles) ? item.styles.join(', ') : 'N/A';
+                        const weightFormatted = typeof item.weight_oz === 'number' ? item.weight_oz : 'N/A';
+                        const row = `
+                            <tr>
+                                <td>${item.item_code || 'N/A'}</td>
+                                <td>${item.name || 'N/A'}</td>
+                                <td>${item.type || 'N/A'}</td>
+                                <td>$${priceFormatted}</td>
+                                <td>${stylesFormatted}</td>
+                                <td>${weightFormatted}</td>
+                                <td class="action-buttons">
+                                    <button class="btn btn-sm btn-info" onclick="prepareEditItemModal('${item.id}')">Edit</button>
+                                    <button class="btn btn-sm btn-danger" onclick="deleteItem('${item.id}')">Delete</button>
+                                </td>
+                            </tr>
+                        `;
+                        tableBody.append(row);
+                    });
+                })
+                .catch(error => console.error('Error loading items:', error));
+        }
+
+        function prepareAddItemModal() {
+            $('#itemModalLabel').text('Add New Item');
+            $('#itemForm')[0].reset();
+            $('#itemId').val('');
+            $('#itemCode').prop('readonly', false); // Allow editing item code for new items
+        }
+
+        function prepareEditItemModal(itemIdOrCode) {
+            fetch(`/api/items`) // Fetch all items to find the one to edit
+                .then(response => response.json())
+                .then(items => {
+                    const item = items.find(i => i.id === itemIdOrCode || i.item_code === itemIdOrCode);
+                    if (item) {
+                        $('#itemModalLabel').text('Edit Item');
+                        $('#itemId').val(item.id); 
+                        $('#itemCode').val(item.item_code || '');
+                        // $('#itemCode').prop('readonly', true); // Item code is the ID, should not be editable directly here
+                                                              // Or, if allowed, backend must handle key change in dict
+                        $('#itemName').val(item.name || '');
+                        // item.price from API is in cents, convert to dollars for form input
+                        $('#itemPrice').val(typeof item.price === 'number' ? (item.price / 100).toFixed(2) : '');
+                        $('#itemType').val(item.type || 'cross');
+                        $('#itemWeightOz').val(item.weight_oz || '');
+                        $('#itemStyles').val(Array.isArray(item.styles) ? item.styles.join(', ') : '');
+                        $('#itemModal').modal('show');
+                    } else {
+                        alert('Item not found for editing.');
+                    }
+                })
+                .catch(error => console.error('Error fetching item for edit:', error));
+        }
+
+        function saveItem() {
+            const itemId = $('#itemId').val();
+            const itemData = {
+                item_code: $('#itemCode').val().trim(),
+                name: $('#itemName').val().trim(),
+                // Price is now float (dollars)
+                price: parseFloat($('#itemPrice').val()), 
+                type: $('#itemType').val(),
+                weight_oz: parseFloat($('#itemWeightOz').val()) || null,
+                styles: $('#itemStyles').val().split(',').map(s => s.trim()).filter(s => s) // Split comma-sep string into array
+            };
+
+            if (!itemData.item_code || !itemData.name || isNaN(itemData.price)) {
+                alert('Item Code, Name, and a valid Price (dollars) are required.');
+                return;
+            }
+            
+            // If itemData.weight_oz was empty, parseFloat might result in NaN. Convert to null.
+            if (isNaN(itemData.weight_oz)) {
+                itemData.weight_oz = null;
+            }
+
+
+            let url = '/api/items';
+            let method = 'POST';
+
+            if (itemId) { // If itemId exists, it's an update (PUT)
+                url = `/api/items/${itemId}`;
+                method = 'PUT';
+                itemData.id = itemId; // Ensure ID is part of the payload for PUT if needed by backend
+            }
+
+            fetch(url, {
+                method: method,
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(itemData),
+            })
+            .then(response => response.json().then(data => ({ status: response.status, body: data })))
+            .then(result => {
+                if (result.status === 200 || result.status === 201) {
+                    $('#itemModal').modal('hide');
+                    loadItems(); // Refresh the table
+                    alert(result.body.message || 'Item saved successfully!');
+                } else {
+                    alert('Error saving item: ' + (result.body.message || 'Unknown error'));
+                }
+            })
+            .catch(error => {
+                console.error('Error saving item:', error);
+                alert('Error saving item. See console for details.');
+            });
+        }
+
+        function deleteItem(itemIdOrCode) {
+            if (!confirm('Are you sure you want to delete this item?')) {
+                return;
+            }
+
+            fetch(`/api/items/${itemIdOrCode}`, {
+                method: 'DELETE',
+            })
+            .then(response => response.json().then(data => ({ status: response.status, body: data })))
+            .then(result => {
+                if (result.status === 200) {
+                    loadItems(); // Refresh the table
+                    alert(result.body.message || 'Item deleted successfully!');
+                } else {
+                    alert('Error deleting item: ' + (result.body.message || 'Unknown error'));
+                }
+            })
+            .catch(error => {
+                console.error('Error deleting item:', error);
+                alert('Error deleting item. See console for details.');
+            });
+        }
+    </script>
+</body>
+</html>

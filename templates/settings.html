@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings - Order Manager</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon-16x16.png">
+    <link rel="manifest" href="/assets/site.webmanifest">
+    <style>
+        .back-to-dashboard-button {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            color: #dd6b20; /* text-orange-600 */
+            font-weight: 600; /* font-semibold */
+            text-decoration: none;
+            margin-bottom: 1rem;
+        }
+        .back-to-dashboard-button:hover {
+            color: #c05621; /* text-orange-800 */
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+        <a href="/" target="_top" class="back-to-dashboard-button">&larr; Back to Dashboard</a>
+        <h1>Settings</h1>
+        <hr>
+
+        <h2>General Settings</h2>
+        <form id="generalSettingsForm">
+            <div class="form-group">
+                <label for="companyName">Company Name</label>
+                <input type="text" class="form-control" id="companyName" name="companyName">
+            </div>
+            <div class="form-group">
+                <label for="shippingZipCode">Default Shipping Zip Code</label>
+                <input type="text" class="form-control" id="shippingZipCode" name="shippingZipCode">
+            </div>
+            <div class="form-group">
+                <label for="defaultEmailBody">Default Email Body</label>
+                <textarea class="form-control" id="defaultEmailBody" name="defaultEmailBody" rows="5"></textarea>
+                <small class="form-text text-muted">
+                    Available placeholders: [customerName], [orderID]
+                </small>
+            </div>
+            <button type="submit" class="btn btn-primary">Save General Settings</button>
+        </form>
+
+        <hr class="mt-5">
+
+        <h2>Data Management</h2>
+        <div class="row">
+            <div class="col-md-6">
+                <h3>Customer Records</h3>
+                <p>View and manage customer information.</p>
+                <button class="btn btn-secondary" id="manageCustomers">Manage Customers</button>
+            </div>
+            <div class="col-md-6">
+                <h3>Item Records (Crosses)</h3>
+                <p>View and manage item details.</p>
+                <button class="btn btn-secondary" id="manageItems">Manage Items</button>
+            </div>
+        </div>
+        <div class="row mt-3">
+            <div class="col-md-6">
+                <h3>Package Records</h3>
+                <p>View and manage package information.</p>
+                <button class="btn btn-secondary" id="managePackages">Manage Packages</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.5.4/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+    <script>
+        $(document).ready(function() {
+            // Load existing settings
+            $.getJSON('/api/settings', function(data) {
+                $('#companyName').val(data.company_name);
+                $('#shippingZipCode').val(data.default_shipping_zip_code);
+                $('#defaultEmailBody').val(data.default_email_body);
+            });
+
+            // Handle general settings form submission
+            $('#generalSettingsForm').on('submit', function(event) {
+                event.preventDefault();
+                const settingsData = {
+                    company_name: $('#companyName').val(),
+                    default_shipping_zip_code: $('#shippingZipCode').val(),
+                    default_email_body: $('#defaultEmailBody').val()
+                };
+                $.ajax({
+                    url: '/api/settings',
+                    type: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify(settingsData),
+                    success: function(response) {
+                        alert('Settings saved successfully!');
+                    },
+                    error: function(error) {
+                        alert('Error saving settings.');
+                        console.error(error);
+                    }
+                });
+            });
+
+            // Redirect to dedicated management pages
+            $('#manageCustomers').on('click', function() {
+                window.location.href = '/manage/customers';
+            });
+
+            $('#manageItems').on('click', function() {
+                window.location.href = '/manage/items';
+            });
+
+            $('#managePackages').on('click', function() {
+                window.location.href = '/manage/packages';
+            });
+        });
+    </script>
+</body>
+</html>

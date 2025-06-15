@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manage Customers - Order Manager</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon-16x16.png">
+    <link rel="manifest" href="/assets/site.webmanifest">
+    <style>
+        .back-to-settings-button {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            color: #dd6b20; /* text-orange-600 */
+            font-weight: 600; /* font-semibold */
+            text-decoration: none;
+            margin-bottom: 1rem;
+        }
+        .back-to-settings-button:hover {
+            color: #c05621; /* text-orange-800 */
+        }
+        .modal-lg { max-width: 800px; }
+        .action-buttons button { margin-left: 5px; }
+        textarea { resize: vertical; }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+        <a href="/settings" target="_top" class="back-to-settings-button">&larr; Back to Settings</a>
+        <h1>Manage Customers</h1>
+        <hr>
+
+        <button type="button" class="btn btn-primary mb-3" data-toggle="modal" data-target="#customerModal" onclick="prepareAddCustomerModal()">
+            Add New Customer
+        </button>
+
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>Company Name</th>
+                    <th>Contact Name</th>
+                    <th>Email</th>
+                    <th>Phone</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="customersTableBody">
+                <!-- Customers will be loaded here by JavaScript -->
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Customer Modal (Add/Edit) -->
+    <div class="modal fade" id="customerModal" tabindex="-1" role="dialog" aria-labelledby="customerModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="customerModalLabel">Add Customer</h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <form id="customerForm">
+                        <input type="hidden" id="customerId">
+                        <div class="form-group">
+                            <label for="customerCompanyName">Company Name</label>
+                            <input type="text" class="form-control" id="customerCompanyName" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="customerContactName">Contact Name</label>
+                            <input type="text" class="form-control" id="customerContactName">
+                        </div>
+                        <div class="form-group">
+                            <label for="customerEmail">Email</label>
+                            <input type="email" class="form-control" id="customerEmail">
+                        </div>
+                        <div class="form-group">
+                            <label for="customerPhone">Phone</label>
+                            <input type="tel" class="form-control" id="customerPhone">
+                        </div>
+                        <div class="form-group">
+                            <label for="customerBillingAddress">Billing Address</label>
+                            <textarea class="form-control" id="customerBillingAddress" rows="3"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="customerShippingAddress">Shipping Address</label>
+                            <textarea class="form-control" id="customerShippingAddress" rows="3"></textarea>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-primary" onclick="saveCustomer()">Save Customer</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.5.4/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+    <script>
+        $(document).ready(function() {
+            loadCustomers();
+        });
+
+        let allCustomers = []; // To store customers for editing
+
+        function loadCustomers() {
+            fetch('/api/vendors')
+                .then(response => response.json())
+                .then(data => {
+                    allCustomers = data; // Store for later use
+                    const tableBody = $('#customersTableBody');
+                    tableBody.empty(); 
+                    allCustomers.forEach(customer => {
+                        const row = `
+                            <tr>
+                                <td>${customer.companyName || 'N/A'}</td>
+                                <td>${customer.contactName || 'N/A'}</td>
+                                <td>${customer.email || 'N/A'}</td>
+                                <td>${customer.phone || 'N/A'}</td>
+                                <td class="action-buttons">
+                                    <button class="btn btn-sm btn-info" onclick="prepareEditCustomerModal('${customer.id}')">Edit</button>
+                                    <button class="btn btn-sm btn-danger" onclick="deleteCustomer('${customer.id}')">Delete</button>
+                                </td>
+                            </tr>
+                        `;
+                        tableBody.append(row);
+                    });
+                })
+                .catch(error => console.error('Error loading customers:', error));
+        }
+
+        function prepareAddCustomerModal() {
+            $('#customerModalLabel').text('Add New Customer');
+            $('#customerForm')[0].reset();
+            $('#customerId').val('');
+        }
+
+        function prepareEditCustomerModal(customerId) {
+            const customer = allCustomers.find(c => c.id === customerId);
+            if (customer) {
+                $('#customerModalLabel').text('Edit Customer');
+                $('#customerId').val(customer.id);
+                $('#customerCompanyName').val(customer.companyName || '');
+                $('#customerContactName').val(customer.contactName || '');
+                $('#customerEmail').val(customer.email || '');
+                $('#customerPhone').val(customer.phone || '');
+                $('#customerBillingAddress').val(customer.billingAddress || '');
+                $('#customerShippingAddress').val(customer.shippingAddress || '');
+                $('#customerModal').modal('show');
+            } else {
+                alert('Customer not found for editing.');
+            }
+        }
+
+        function saveCustomer() {
+            const customerId = $('#customerId').val();
+            const customerData = {
+                companyName: $('#customerCompanyName').val().trim(),
+                contactName: $('#customerContactName').val().trim(),
+                email: $('#customerEmail').val().trim(),
+                phone: $('#customerPhone').val().trim(),
+                billingAddress: $('#customerBillingAddress').val().trim(),
+                shippingAddress: $('#customerShippingAddress').val().trim(),
+            };
+
+            if (!customerData.companyName) {
+                alert('Company Name is required.');
+                return;
+            }
+
+            let url = '/api/vendors';
+            let method = 'POST';
+
+            if (customerId) { // If customerId exists, it's an update (PUT)
+                url = `/api/vendors/${customerId}`;
+                method = 'PUT';
+                customerData.id = customerId; 
+            }
+
+            fetch(url, {
+                method: method,
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(customerData),
+            })
+            .then(response => response.json().then(data => ({ status: response.status, body: data })))
+            .then(result => {
+                if (result.status === 200 || result.status === 201) {
+                    $('#customerModal').modal('hide');
+                    loadCustomers(); 
+                    alert(result.body.message || 'Customer saved successfully!');
+                } else {
+                    alert('Error saving customer: ' + (result.body.message || 'Unknown error'));
+                }
+            })
+            .catch(error => {
+                console.error('Error saving customer:', error);
+                alert('Error saving customer. See console for details.');
+            });
+        }
+
+        function deleteCustomer(customerId) {
+            if (!confirm('Are you sure you want to delete this customer? This action cannot be undone.')) {
+                return;
+            }
+
+            fetch(`/api/vendors/${customerId}`, {
+                method: 'DELETE',
+            })
+            .then(response => response.json().then(data => ({ status: response.status, body: data })))
+            .then(result => {
+                if (result.status === 200) {
+                    loadCustomers(); 
+                    alert(result.body.message || 'Customer deleted successfully!');
+                } else {
+                    alert('Error deleting customer: ' + (result.body.message || 'Unknown error'));
+                }
+            })
+            .catch(error => {
+                console.error('Error deleting customer:', error);
+                alert('Error deleting customer. See console for details.');
+            });
+        }
+    </script>
+</body>
+</html>

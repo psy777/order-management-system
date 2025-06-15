@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manage Packages - Order Manager</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon-16x16.png">
+    <link rel="manifest" href="/assets/site.webmanifest">
+    <style>
+        .back-to-settings-button {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            color: #dd6b20; /* text-orange-600 */
+            font-weight: 600; /* font-semibold */
+            text-decoration: none;
+            margin-bottom: 1rem;
+        }
+        .back-to-settings-button:hover {
+            color: #c05621; /* text-orange-800 */
+        }
+        .modal-lg { max-width: 800px; }
+        .action-buttons button { margin-left: 5px; }
+        textarea { resize: vertical; }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+        <a href="/settings" target="_top" class="back-to-settings-button">&larr; Back to Settings</a>
+        <h1>Manage Packages</h1>
+        <hr>
+
+        <button type="button" class="btn btn-primary mb-3" data-toggle="modal" data-target="#packageModal" onclick="prepareAddPackageModal()">
+            Add New Package
+        </button>
+
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>ID</th>
+                    <th>Type</th>
+                    <th>Contents</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="packagesTableBody">
+                <!-- Packages will be loaded here by JavaScript -->
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Package Modal (Add/Edit) -->
+    <div class="modal fade" id="packageModal" tabindex="-1" role="dialog" aria-labelledby="packageModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="packageModalLabel">Add Package</h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <form id="packageForm">
+                        <input type="hidden" id="originalPackageIdForEdit"> <!-- Used to identify package for PUT -->
+                        <div class="form-group">
+                            <label for="packageName">Package Name</label>
+                            <input type="text" class="form-control" id="packageName" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="packageId">Package ID (e.g., 4000)</label>
+                            <input type="number" class="form-control" id="packageId" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="packageType">Type</label>
+                            <input type="text" class="form-control" id="packageType" value="package" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="packageContents">Contents (one itemCode:quantity per line)</label>
+                            <textarea class="form-control" id="packageContents" rows="5" placeholder="Example:\n8000:2\n1000:1"></textarea>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-primary" onclick="savePackage()">Save Package</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.5.4/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+    <script>
+        $(document).ready(function() {
+            loadPackages();
+        });
+
+        let allPackagesData = {}; // To store packages for editing, keyed by ID
+
+        function loadPackages() {
+            fetch('/api/packages')
+                .then(response => response.json())
+                .then(data => {
+                    allPackagesData = data; // Store for later use { "4000": {details}, "4001": {details} }
+                    const tableBody = $('#packagesTableBody');
+                    tableBody.empty(); 
+                    Object.values(allPackagesData).forEach(pkg => { // Iterate over values of the object
+                        const contentsFormatted = pkg.contents.map(c => `${c.itemCode} (x${c.quantity})`).join(', ');
+                        const row = `
+                            <tr>
+                                <td>${pkg.name || 'N/A'}</td>
+                                <td>${pkg.id_val || 'N/A'}</td>
+                                <td>${pkg.type || 'N/A'}</td>
+                                <td>${contentsFormatted || 'N/A'}</td>
+                                <td class="action-buttons">
+                                    <button class="btn btn-sm btn-info" onclick="prepareEditPackageModal('${pkg.id_val}')">Edit</button>
+                                    <button class="btn btn-sm btn-danger" onclick="deletePackage('${pkg.id_val}')">Delete</button>
+                                </td>
+                            </tr>
+                        `;
+                        tableBody.append(row);
+                    });
+                })
+                .catch(error => console.error('Error loading packages:', error));
+        }
+
+        function prepareAddPackageModal() {
+            $('#packageModalLabel').text('Add New Package');
+            $('#packageForm')[0].reset();
+            $('#originalPackageIdForEdit').val('');
+            $('#packageType').val('package'); // Default type
+        }
+
+        function prepareEditPackageModal(packageId) {
+            const pkg = allPackagesData[packageId]; // Direct lookup using ID
+            if (pkg) {
+                $('#packageModalLabel').text('Edit Package');
+                $('#originalPackageIdForEdit').val(pkg.id_val); // Store the original ID for the PUT request URL
+                $('#packageName').val(pkg.name || '');
+                $('#packageId').val(pkg.id_val || ''); // The numeric ID
+                $('#packageType').val(pkg.type || 'package');
+                const contentsText = pkg.contents.map(c => `${c.itemCode}:${c.quantity}`).join('\\n');
+                $('#packageContents').val(contentsText);
+                $('#packageModal').modal('show');
+            } else {
+                alert('Package not found for editing.');
+            }
+        }
+
+        function savePackage() {
+            const originalId = $('#originalPackageIdForEdit').val(); // This is string version of ID for PUT URL
+            const packageData = {
+                name: $('#packageName').val().trim(),
+                id_val: parseInt($('#packageId').val(), 10), // The numeric ID, potentially new
+                type: $('#packageType').val().trim(),
+                contents_raw_text: $('#packageContents').val().trim()
+            };
+
+            if (!packageData.name || isNaN(packageData.id_val)) {
+                alert('Package Name and a numeric Package ID are required.');
+                return;
+            }
+
+            let url = '/api/packages';
+            let method = 'POST';
+
+            if (originalId) { // If originalId exists, it's an update (PUT)
+                url = `/api/packages/${originalId}`; // Use original ID for the URL
+                method = 'PUT';
+            }
+
+            fetch(url, {
+                method: method,
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(packageData),
+            })
+            .then(response => response.json().then(data => ({ status: response.status, body: data })))
+            .then(result => {
+                if (result.status === 200 || result.status === 201) {
+                    $('#packageModal').modal('hide');
+                    loadPackages(); 
+                    alert(result.body.message || 'Package saved successfully!');
+                } else {
+                    alert('Error saving package: ' + (result.body.message || 'Unknown error'));
+                }
+            })
+            .catch(error => {
+                console.error('Error saving package:', error);
+                alert('Error saving package. See console for details.');
+            });
+        }
+
+        function deletePackage(packageId) {
+            if (!confirm('Are you sure you want to delete this package? This action cannot be undone.')) {
+                return;
+            }
+
+            fetch(`/api/packages/${packageId}`, { // packageId is the numeric ID
+                method: 'DELETE',
+            })
+            .then(response => response.json().then(data => ({ status: response.status, body: data })))
+            .then(result => {
+                if (result.status === 200) {
+                    loadPackages(); 
+                    alert(result.body.message || 'Package deleted successfully!');
+                } else {
+                    alert('Error deleting package: ' + (result.body.message || 'Unknown error'));
+                }
+            })
+            .catch(error => {
+                console.error('Error deleting package:', error);
+                alert('Error deleting package. See console for details.');
+            });
+        }
+    </script>
+</body>
+</html>
