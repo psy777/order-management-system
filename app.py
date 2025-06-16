@@ -15,9 +15,10 @@ from datetime import datetime, timezone
 import traceback
 import time
 import json
+import csv
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, request, send_from_directory
+from flask import Flask, jsonify, render_template, request, send_from_directory, redirect, flash
 from shipcostestimate import calculate_shipping_cost_for_order
 from database import get_db_connection, init_db
 
@@ -27,6 +28,7 @@ load_dotenv()
 # --- App Initialization ---
 app = Flask(__name__, template_folder='templates')
 app.config['JSON_SORT_KEYS'] = False
+app.secret_key = os.urandom(24)
 
 DATA_DIR = 'data'
 SETTINGS_FILE = os.path.join(DATA_DIR, 'settings.json')
@@ -601,6 +603,89 @@ def upload_attachment():
         app.logger.error(f"Error saving uploaded file: {e}")
         return jsonify({"status": "error", "message": f"Could not save file: {str(e)}"}), 500
 
+@app.route('/api/import-customers-csv', methods=['POST'])
+def import_customers_csv():
+    if 'csv_file' not in request.files:
+        return "No file part", 400
+    file = request.files['csv_file']
+    if file.filename == '':
+        return "No selected file", 400
+    if file and file.filename and file.filename.endswith('.csv'):
+        try:
+            csv_file = file.stream.read().decode("utf-8")
+            csv_reader = csv.reader(csv_file.splitlines())
+            header = [h.lower().strip() for h in next(csv_reader)]
+            
+            # Map CSV headers to database columns
+            header_map = {
+                'company name': 'company_name',
+                'contact name': 'contact_name',
+                'email': 'email',
+                'phone': 'phone',
+                'billing address': 'billing_address',
+                'shipping address': 'shipping_address'
+            }
+            
+            # Get the indices of the columns we care about
+            column_indices = {db_col: header.index(csv_col) for csv_col, db_col in header_map.items() if csv_col in header}
+
+            if not column_indices:
+                flash("Could not find any matching headers in the CSV file. Please make sure the file contains at least one of the following headers: Company Name, Contact Name, Email, Phone, Billing Address, Shipping Address.", "warning")
+                return redirect('/manage/customers')
+
+            if 'company_name' not in column_indices:
+                flash("CSV must have a 'Company Name' column.", "danger")
+                return redirect('/manage/customers')
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            for row in csv_reader:
+                company_name_idx = column_indices.get('company_name')
+                if company_name_idx is None:
+                    continue
+                company_name = row[company_name_idx]
+
+                contact_name_idx = column_indices.get('contact_name')
+                contact_name = row[contact_name_idx] if contact_name_idx is not None else ''
+
+                email_idx = column_indices.get('email')
+                email = row[email_idx] if email_idx is not None else ''
+
+                phone_idx = column_indices.get('phone')
+                phone = row[phone_idx] if phone_idx is not None else ''
+
+                billing_address_idx = column_indices.get('billing_address')
+                billing_address = row[billing_address_idx] if billing_address_idx is not None else ''
+
+                shipping_address_idx = column_indices.get('shipping_address')
+                shipping_address = row[shipping_address_idx] if shipping_address_idx is not None else ''
+
+                cursor.execute("SELECT id FROM vendors WHERE company_name = ?", (company_name,))
+                existing_vendor = cursor.fetchone()
+                
+                if existing_vendor:
+                    cursor.execute("""
+                        UPDATE vendors 
+                        SET contact_name = ?, email = ?, phone = ?, billing_address = ?, shipping_address = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE company_name = ?
+                    """, (contact_name, email, phone, billing_address, shipping_address, company_name))
+                else:
+                    vendor_id = str(uuid.uuid4())
+                    cursor.execute("""
+                        INSERT INTO vendors (id, company_name, contact_name, email, phone, billing_address, shipping_address)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (vendor_id, company_name, contact_name, email, phone, billing_address, shipping_address))
+            
+            conn.commit()
+            conn.close()
+            
+            return redirect('/manage/customers')
+        except Exception as e:
+            app.logger.error(f"Error processing CSV file: {e}")
+            return "Error processing file", 500
+    return "Invalid file type", 400
+
 @app.route('/api/send-order-email', methods=['POST'])
 def send_order_email_route():
     data = request.json
@@ -676,9 +761,9 @@ def send_order_email_route():
                         "companyName": updated_order_resp.pop('vendor_company_name') or "[Vendor Not Found]",
                         "contactName": updated_order_resp.pop('vendor_contact_name'),
                         "email": updated_order_resp.pop('vendor_email'),
-                        "phone": updated_order_resp.pop('vendor_phone'),
-                        "billingAddress": updated_order_resp.pop('vendor_billing_address'),
-                        "shippingAddress": updated_order_resp.pop('vendor_shipping_address')
+                        "phone": updated_order_resp.pop('phone'),
+                        "billingAddress": updated_order_resp.pop('billing_address'),
+                        "shippingAddress": updated_order_resp.pop('shipping_address')
                     }
                     if not updated_order_resp['vendorInfo']['id']: 
                         updated_order_resp['vendorInfo'] = {"id": None, "companyName": "[Vendor Not Found]", "contactName": "", "email": "", "phone": "", "billingAddress": "", "shippingAddress": ""}

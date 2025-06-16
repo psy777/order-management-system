@@ -31,10 +31,27 @@
         <a href="/settings" target="_top" class="back-to-settings-button">&larr; Back to Settings</a>
         <h1>Manage Customers</h1>
         <hr>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
 
         <button type="button" class="btn btn-primary mb-3" data-toggle="modal" data-target="#customerModal" onclick="prepareAddCustomerModal()">
             Add New Customer
         </button>
+
+        <hr>
+        <h5>Import Customers from CSV</h5>
+        <form id="importCsvForm" action="/api/import-customers-csv" method="post" enctype="multipart/form-data" class="form-inline mb-3">
+            <div class="form-group mr-2">
+                <input type="file" class="form-control-file" name="csv_file" id="csv_file" accept=".csv" required>
+            </div>
+            <button type="submit" class="btn btn-secondary">Import CSV</button>
+        </form>
+        <hr>
 
         <table class="table table-striped">
             <thead>
