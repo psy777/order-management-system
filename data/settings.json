@@ -1,5 +1,0 @@
-{
-    "company_name": "Comfort Cross",
-    "default_shipping_zip_code": "63366",
-    "default_email_body": "Dear [customerName],\n\nThis email is regarding purchase order [orderID] for [vendorCompanyName].\n\nPlease find the PO attached for your records.\n\nWe appreciate your business!\n\nThank you,\n[yourCompany]"
-}
