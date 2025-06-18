@@ -16,6 +16,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32x32.png">
     <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
     <link rel="manifest" href="../assets/site.webmanifest">
+    <link rel="stylesheet" href="../assets/css/styles.css">
 </head>
 <body>
     <div id="root"></div>
@@ -415,6 +416,7 @@ const EmailModal = ({ order, onClose, allItems, onEmailClientOpened, appSettings
     const fileInputRef = useRef(null);
     const [attachments, setAttachments] = useState([]); // Handles multiple attachments
     const [isSending, setIsSending] = useState(false);
+    const [emailSent, setEmailSent] = useState(false);
     const [isUploading, setIsUploading] = useState(false); // For upload progress
     const [editableBody, setEditableBody] = useState('');
 
@@ -515,8 +517,8 @@ ${fallbackYourCompanyName}`
     const getMailtoHref = () => `mailto:${recipient}?subject=${encodeURIComponent(subjectText)}&body=${encodeURIComponent(editableBody)}`;
 
     return (
-        <div id="email-modal-backdrop" className="fixed inset-0 bg-black bg-opacity-50 z-50 flex justify-center items-center p-4">
-            <div className="bg-white rounded-lg shadow-xl p-8 w-full max-w-2xl">
+    <div id="email-modal-backdrop" className="fixed inset-0 bg-black bg-opacity-50 z-50 flex justify-center items-center p-4">
+        <div className="bg-white rounded-lg shadow-xl p-8 w-full max-w-2xl max-h-[90vh] overflow-y-auto modal-content">
                 <h2 className="text-2xl font-bold text-slate-800 mb-4">Send Order Confirmation</h2>
                 <div className="space-y-4">
                     <Input label="To" value={order.vendorInfo.email} disabled />
@@ -598,6 +600,7 @@ ${fallbackYourCompanyName}`
 
                             const hasMismatchedPo = attachments.some(att => !att.isMatch);
                             if (attachments.length === 0) {
+                                // popup
                                 if (!window.confirm("No files are attached. Send email without attachments?")) return;
                             } else if (hasMismatchedPo) {
                                 const expectedPoName = `PO_${order.id}.pdf`;
@@ -621,13 +624,15 @@ ${fallbackYourCompanyName}`
                                 });
                                 const result = await response.json();
                                 if (response.ok) {
-                                    alert(result.message || "Email sent successfully.");
+                                    setEmailSent(true);
                                     if (result.order && onOrderUpdatedAfterEmail) {
                                         onOrderUpdatedAfterEmail(result.order);
                                     }
-                                    if (onEmailClientOpened) {
-                                        onEmailClientOpened();
-                                    }
+                                    setTimeout(() => {
+                                        if (onEmailClientOpened) {
+                                            onEmailClientOpened();
+                                        }
+                                    }, 1000);
                                 } else {
                                     alert(`Failed to send email: ${result.message || 'Server error'}`);
                                 }
@@ -637,10 +642,10 @@ ${fallbackYourCompanyName}`
                                 setIsSending(false);
                             }
                         }}
-                        className={`px-6 py-2 bg-green-600 text-white font-semibold rounded-md hover:bg-green-700 transition-colors ${isSending || isUploading ? 'opacity-50 cursor-not-allowed' : ''}`}
-                        disabled={isSending || isUploading}
+                        className={`px-6 py-2 bg-green-600 text-white font-semibold rounded-md hover:bg-green-700 transition-colors ${isSending || isUploading || emailSent ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        disabled={isSending || isUploading || emailSent}
                     >
-                        {isSending ? 'Sending...' : 'Send Email via Server'}
+                        {emailSent ? 'Sent!' : isSending ? 'Sending...' : 'Send via Server'}
                     </button>
                 </div>
             </div>

@@ -70,3 +70,13 @@ hr {
 .card-title {
     color: #007bff;
 }
+
+/* Hide scrollbar for modal */
+.modal-content::-webkit-scrollbar {
+    display: none;
+}
+
+.modal-content {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
+}
