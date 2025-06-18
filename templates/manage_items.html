@@ -31,9 +31,26 @@
         <h1>Manage Items (Crosses)</h1>
         <hr>
 
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
         <button type="button" class="btn btn-primary mb-3" data-toggle="modal" data-target="#itemModal" onclick="prepareAddItemModal()">
             Add New Item
         </button>
+
+        <!-- CSV Upload Form -->
+        <form action="/api/import-items-csv" method="post" enctype="multipart/form-data" class="form-inline mb-3">
+            <div class="form-group">
+                <label for="csv_file" class="mr-2">Upload Items CSV:</label>
+                <input type="file" name="csv_file" id="csv_file" class="form-control-file" accept=".csv" required>
+            </div>
+            <button type="submit" class="btn btn-success ml-2">Import CSV</button>
+        </form>
 
         <table class="table table-striped">
             <thead>

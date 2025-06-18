@@ -5,23 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Settings - Order Manager</title>
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <link rel="stylesheet" href="/assets/css/styles.css">
     <link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png">
     <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32x32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon-16x16.png">
     <link rel="manifest" href="/assets/site.webmanifest">
-    <style>
-        .back-to-dashboard-button {
-            display: inline-block;
-            padding: 0.5rem 1rem;
-            color: #dd6b20; /* text-orange-600 */
-            font-weight: 600; /* font-semibold */
-            text-decoration: none;
-            margin-bottom: 1rem;
-        }
-        .back-to-dashboard-button:hover {
-            color: #c05621; /* text-orange-800 */
-        }
-    </style>
 </head>
 <body>
     <div class="container mt-4">
@@ -30,45 +18,78 @@
         <hr>
 
         <h2>General Settings</h2>
-        <form id="generalSettingsForm">
-            <div class="form-group">
-                <label for="companyName">Company Name</label>
-                <input type="text" class="form-control" id="companyName" name="companyName">
+        <div class="card">
+            <div class="card-body">
+                <form id="generalSettingsForm">
+                    <div class="form-group">
+                        <label for="companyName">Company Name</label>
+                        <input type="text" class="form-control" id="companyName" name="companyName">
+                    </div>
+                    <div class="form-group">
+                        <label for="shippingZipCode">Default Shipping Zip Code</label>
+                        <input type="text" class="form-control" id="shippingZipCode" name="shippingZipCode">
+                    </div>
+                    <div class="form-group">
+                        <label for="defaultEmailBody">Default Email Body</label>
+                        <textarea class="form-control" id="defaultEmailBody" name="defaultEmailBody" rows="5"></textarea>
+                        <small class="form-text text-muted">
+                            Available placeholders: [customerName], [orderID]
+                        </small>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Save General Settings</button>
+                </form>
             </div>
-            <div class="form-group">
-                <label for="shippingZipCode">Default Shipping Zip Code</label>
-                <input type="text" class="form-control" id="shippingZipCode" name="shippingZipCode">
+        </div>
+
+        <hr class="mt-5">
+
+        <h2>Email Server Settings</h2>
+        <div class="card">
+            <div class="card-body">
+                <form id="emailSettingsForm">
+                    <div class="form-group">
+                        <label for="emailAddress">Email Address</label>
+                        <input type="email" class="form-control" id="emailAddress" name="emailAddress">
+                    </div>
+                    <div class="form-group">
+                        <label for="appPassword">App Password</label>
+                        <input type="password" class="form-control" id="appPassword" name="appPassword">
+                    </div>
+                    <button type="submit" class="btn btn-primary">Save Email Settings</button>
+                </form>
             </div>
-            <div class="form-group">
-                <label for="defaultEmailBody">Default Email Body</label>
-                <textarea class="form-control" id="defaultEmailBody" name="defaultEmailBody" rows="5"></textarea>
-                <small class="form-text text-muted">
-                    Available placeholders: [customerName], [orderID]
-                </small>
-            </div>
-            <button type="submit" class="btn btn-primary">Save General Settings</button>
-        </form>
+        </div>
 
         <hr class="mt-5">
 
         <h2>Data Management</h2>
         <div class="row">
-            <div class="col-md-6">
-                <h3>Customer Records</h3>
-                <p>View and manage customer information.</p>
-                <button class="btn btn-secondary" id="manageCustomers">Manage Customers</button>
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Customer Records</h5>
+                        <p class="card-text">View and manage customer information.</p>
+                        <button class="btn btn-secondary" id="manageCustomers">Manage Customers</button>
+                    </div>
+                </div>
             </div>
-            <div class="col-md-6">
-                <h3>Item Records (Crosses)</h3>
-                <p>View and manage item details.</p>
-                <button class="btn btn-secondary" id="manageItems">Manage Items</button>
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Item Records (Crosses)</h5>
+                        <p class="card-text">View and manage item details.</p>
+                        <button class="btn btn-secondary" id="manageItems">Manage Items</button>
+                    </div>
+                </div>
             </div>
-        </div>
-        <div class="row mt-3">
-            <div class="col-md-6">
-                <h3>Package Records</h3>
-                <p>View and manage package information.</p>
-                <button class="btn btn-secondary" id="managePackages">Manage Packages</button>
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Package Records</h5>
+                        <p class="card-text">View and manage package information.</p>
+                        <button class="btn btn-secondary" id="managePackages">Manage Packages</button>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -83,6 +104,8 @@
                 $('#companyName').val(data.company_name);
                 $('#shippingZipCode').val(data.default_shipping_zip_code);
                 $('#defaultEmailBody').val(data.default_email_body);
+                $('#emailAddress').val(data.email_address);
+                $('#appPassword').val(data.app_password);
             });
 
             // Handle general settings form submission
@@ -103,6 +126,28 @@
                     },
                     error: function(error) {
                         alert('Error saving settings.');
+                        console.error(error);
+                    }
+                });
+            });
+
+            // Handle email settings form submission
+            $('#emailSettingsForm').on('submit', function(event) {
+                event.preventDefault();
+                const emailData = {
+                    email_address: $('#emailAddress').val(),
+                    app_password: $('#appPassword').val()
+                };
+                $.ajax({
+                    url: '/api/settings/email',
+                    type: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify(emailData),
+                    success: function(response) {
+                        alert('Email settings saved successfully!');
+                    },
+                    error: function(error) {
+                        alert('Error saving email settings.');
                         console.error(error);
                     }
                 });

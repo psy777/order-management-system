@@ -728,6 +728,98 @@ def import_customers_csv():
             return "Error processing file", 500
     return "Invalid file type", 400
 
+@app.route('/api/import-items-csv', methods=['POST'])
+def import_items_csv():
+    if 'csv_file' not in request.files:
+        flash("No file part", "danger")
+        return redirect('/manage/items')
+    file = request.files['csv_file']
+    if file.filename == '':
+        flash("No selected file", "danger")
+        return redirect('/manage/items')
+    if file and file.filename and file.filename.endswith('.csv'):
+        try:
+            csv_file = file.stream.read().decode("utf-8")
+            csv_reader = csv.reader(csv_file.splitlines())
+            header = [h.lower().strip() for h in next(csv_reader)]
+            
+            header_map = {
+                'item code': 'item_code',
+                'name': 'name',
+                'type': 'type',
+                'price': 'price_cents',
+                'weight oz': 'weight_oz'
+            }
+            
+            column_indices = {db_col: header.index(csv_col) for csv_col, db_col in header_map.items() if csv_col in header}
+
+            if not column_indices or 'item_code' not in column_indices or 'name' not in column_indices:
+                flash("CSV must have at least 'Item Code' and 'Name' columns.", "danger")
+                return redirect('/manage/items')
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            items_added = 0
+            items_updated = 0
+
+            for row in csv_reader:
+                try:
+                    item_code = row[column_indices['item_code']].strip()
+                    name = row[column_indices['name']].strip()
+                    if not item_code or not name:
+                        continue
+
+                    item_type = row[column_indices['type']].strip() if 'type' in column_indices and column_indices['type'] < len(row) else 'other'
+                    
+                    price_cents = 0
+                    if 'price_cents' in column_indices and column_indices['price_cents'] < len(row):
+                        try:
+                            price_dollars = float(row[column_indices['price_cents']])
+                            price_cents = int(price_dollars * 100)
+                        except (ValueError, TypeError):
+                            price_cents = 0
+
+                    weight_oz = None
+                    if 'weight_oz' in column_indices and column_indices['weight_oz'] < len(row):
+                        try:
+                            weight_oz = float(row[column_indices['weight_oz']])
+                        except (ValueError, TypeError):
+                            weight_oz = None
+
+                    cursor.execute("SELECT item_code FROM items WHERE item_code = ?", (item_code,))
+                    existing_item = cursor.fetchone()
+                    
+                    if existing_item:
+                        cursor.execute("""
+                            UPDATE items 
+                            SET name = ?, type = ?, price_cents = ?, weight_oz = ?, updated_at = CURRENT_TIMESTAMP
+                            WHERE item_code = ?
+                        """, (name, item_type, price_cents, weight_oz, item_code))
+                        items_updated += 1
+                    else:
+                        cursor.execute("""
+                            INSERT INTO items (item_code, name, type, price_cents, weight_oz)
+                            VALUES (?, ?, ?, ?, ?)
+                        """, (item_code, name, item_type, price_cents, weight_oz))
+                        items_added += 1
+                except IndexError:
+                    app.logger.warning(f"Skipping malformed row: {row}")
+                    continue
+
+            conn.commit()
+            conn.close()
+            
+            flash(f"Successfully added {items_added} and updated {items_updated} items.", "success")
+            return redirect('/manage/items')
+        except Exception as e:
+            app.logger.error(f"Error processing items CSV file: {e}")
+            flash(f"Error processing file: {e}", "danger")
+            return redirect('/manage/items')
+    
+    flash("Invalid file type. Please upload a .csv file.", "warning")
+    return redirect('/manage/items')
+
 @app.route('/api/send-order-email', methods=['POST'])
 def send_order_email_route():
     data = request.json
@@ -855,23 +947,106 @@ def send_order_email_route():
 @app.route('/api/settings', methods=['GET'])
 def get_settings():
     settings = read_json_file(SETTINGS_FILE)
-    if not isinstance(settings, dict): 
-        settings = {} 
-    if not settings: 
-        default_settings = {"company_name": "Your Company Name", "default_shipping_zip_code": "00000", "default_email_body": "Dear [vendorCompany],\n\nPlease find attached the purchase order [orderID] for your records.\n\nWe appreciate your business!\n\nThank you,\n[yourCompany]"}
-        write_json_file(SETTINGS_FILE, default_settings)
-        return jsonify(default_settings)
-    if 'default_email_body' not in settings:
-        settings['default_email_body'] = "Dear [vendorCompany],\n\nPlease find attached the purchase order [orderID] for your records.\n\nWe appreciate your business!\n\nThank you,\n[yourCompany]"
+    if not isinstance(settings, dict):
+        settings = {}
+    
+    # Ensure default values are present if the file is empty or new
+    if not settings:
+        settings = {
+            "company_name": "Your Company Name",
+            "default_shipping_zip_code": "00000",
+            "default_email_body": "Dear [vendorCompany],\n\nPlease find attached the purchase order [orderID] for your records.\n\nWe appreciate your business!\n\nThank you,\n[yourCompany]",
+            "email_address": "",
+            "app_password": ""
+        }
         write_json_file(SETTINGS_FILE, settings)
+    else:
+        # Add email fields if they don't exist for backward compatibility
+        updated = False
+        if 'email_address' not in settings:
+            settings['email_address'] = ""
+            updated = True
+        if 'app_password' not in settings:
+            settings['app_password'] = ""
+            updated = True
+        if 'default_email_body' not in settings:
+            settings['default_email_body'] = "Dear [vendorCompany],\n\nPlease find attached the purchase order [orderID] for your records.\n\nWe appreciate your business!\n\nThank you,\n[yourCompany]"
+            updated = True
+        if updated:
+            write_json_file(SETTINGS_FILE, settings)
+            
     return jsonify(settings)
 
 @app.route('/api/settings', methods=['POST'])
 def update_settings():
-    new_settings = request.json
-    if not new_settings: return jsonify({"message":"Request must be JSON"}),400
-    write_json_file(SETTINGS_FILE, new_settings)
-    return jsonify({"message":"Settings updated."}),200
+    new_settings_payload = request.json
+    if not new_settings_payload:
+        return jsonify({"message": "Request must be JSON"}), 400
+    
+    # Read existing settings to preserve fields not in the payload
+    existing_settings = read_json_file(SETTINGS_FILE)
+    if not isinstance(existing_settings, dict):
+        existing_settings = {}
+
+    # Update only the fields present in the general settings form
+    existing_settings['company_name'] = new_settings_payload.get('company_name', existing_settings.get('company_name'))
+    existing_settings['default_shipping_zip_code'] = new_settings_payload.get('default_shipping_zip_code', existing_settings.get('default_shipping_zip_code'))
+    existing_settings['default_email_body'] = new_settings_payload.get('default_email_body', existing_settings.get('default_email_body'))
+
+    write_json_file(SETTINGS_FILE, existing_settings)
+    return jsonify({"message": "Settings updated."}), 200
+
+@app.route('/api/settings/email', methods=['POST'])
+def update_email_settings():
+    email_settings_payload = request.json
+    if not email_settings_payload:
+        return jsonify({"message": "Request must be JSON"}), 400
+
+    email_address = email_settings_payload.get('email_address')
+    app_password = email_settings_payload.get('app_password')
+
+    if not email_address or not app_password:
+        return jsonify({"message": "Email address and App Password are required."}), 400
+
+    # Read existing settings to update them
+    existing_settings = read_json_file(SETTINGS_FILE)
+    if not isinstance(existing_settings, dict):
+        existing_settings = {}
+
+    # Update email-specific fields
+    existing_settings['email_address'] = email_address
+    existing_settings['app_password'] = app_password
+    
+    # Update environment variables for immediate use by the email sending logic
+    os.environ['EMAIL_USER'] = email_address
+    os.environ['EMAIL_PASS'] = app_password
+
+    write_json_file(SETTINGS_FILE, existing_settings)
+    
+    # Also, update the .env file for persistence across server restarts
+    try:
+        env_file_path = '.env'
+        env_vars = {}
+        if os.path.exists(env_file_path):
+            with open(env_file_path, 'r') as f:
+                for line in f:
+                    if '=' in line:
+                        key, value = line.strip().split('=', 1)
+                        env_vars[key] = value
+        
+        env_vars['EMAIL_USER'] = email_address
+        env_vars['EMAIL_PASS'] = app_password
+        
+        with open(env_file_path, 'w') as f:
+            for key, value in env_vars.items():
+                f.write(f"{key}={value}\n")
+                
+    except Exception as e:
+        app.logger.error(f"Could not update .env file: {e}")
+        # This is not a critical failure, the app will use the settings.json for the current session
+        # but we should probably let the user know. For now, just log it.
+
+    return jsonify({"message": "Email settings updated successfully."}), 200
 
 @app.route('/manage/customers')
 def manage_customers_page(): return render_template('manage_customers.html')
@@ -893,14 +1068,14 @@ def home(): return render_template('index.html')
 def shutdown(): Timer(0.1,lambda:os._exit(0)).start(); return "Shutdown initiated.",200
 
 def open_browser():
-    webbrowser.open_new("http://127.0.0.1:5001/")
+    webbrowser.open_new("http://127.0.0.1:5002/")
 
 def is_port_in_use(port):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         return s.connect_ex(('127.0.0.1', port)) == 0
 
 def main():
-    PORT = 5001
+    PORT = 5002
     if is_port_in_use(PORT):
         print(f"Port {PORT} is already in use. Opening browser to existing instance.")
         open_browser()
