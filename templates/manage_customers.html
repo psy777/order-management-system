@@ -98,13 +98,53 @@
                             <label for="customerPhone">Phone</label>
                             <input type="tel" class="form-control" id="customerPhone">
                         </div>
-                        <div class="form-group">
-                            <label for="customerBillingAddress">Billing Address</label>
-                            <textarea class="form-control" id="customerBillingAddress" rows="3"></textarea>
+                        <div class="form-row">
+                            <div class="form-group col-md-12">
+                                <label for="customerShippingAddress">Shipping Address</label>
+                                <input type="text" class="form-control" id="customerShippingAddress">
+                            </div>
                         </div>
-                        <div class="form-group">
-                            <label for="customerShippingAddress">Shipping Address</label>
-                            <textarea class="form-control" id="customerShippingAddress" rows="3"></textarea>
+                        <div class="form-row">
+                            <div class="form-group col-md-6">
+                                <label for="customerShippingCity">City</label>
+                                <input type="text" class="form-control" id="customerShippingCity">
+                            </div>
+                            <div class="form-group col-md-4">
+                                <label for="customerShippingState">State</label>
+                                <input type="text" class="form-control" id="customerShippingState">
+                            </div>
+                            <div class="form-group col-md-2">
+                                <label for="customerShippingZipCode">Zip Code</label>
+                                <input type="text" class="form-control" id="customerShippingZipCode">
+                            </div>
+                        </div>
+                        <div class="form-check mb-3">
+                            <input class="form-check-input" type="checkbox" id="sameAsShipping" onchange="toggleBillingAddress(this.checked)">
+                            <label class="form-check-label" for="sameAsShipping">
+                                Billing address is the same as shipping
+                            </label>
+                        </div>
+                        <div id="billingAddressSection">
+                            <div class="form-row">
+                                <div class="form-group col-md-12">
+                                    <label for="customerBillingAddress">Billing Address</label>
+                                    <input type="text" class="form-control" id="customerBillingAddress">
+                                </div>
+                            </div>
+                        <div class="form-row">
+                            <div class="form-group col-md-6">
+                                <label for="customerBillingCity">City</label>
+                                <input type="text" class="form-control" id="customerBillingCity">
+                            </div>
+                            <div class="form-group col-md-4">
+                                <label for="customerBillingState">State</label>
+                                <input type="text" class="form-control" id="customerBillingState">
+                            </div>
+                            <div class="form-group col-md-2">
+                                <label for="customerBillingZipCode">Zip Code</label>
+                                <input type="text" class="form-control" id="customerBillingZipCode">
+                            </div>
+                        </div>
                         </div>
                     </form>
                 </div>
@@ -167,8 +207,26 @@
                 $('#customerContactName').val(customer.contactName || '');
                 $('#customerEmail').val(customer.email || '');
                 $('#customerPhone').val(customer.phone || '');
-                $('#customerBillingAddress').val(customer.billingAddress || '');
                 $('#customerShippingAddress').val(customer.shippingAddress || '');
+                $('#customerShippingCity').val(customer.shippingCity || '');
+                $('#customerShippingState').val(customer.shippingState || '');
+                $('#customerShippingZipCode').val(customer.shippingZipCode || '');
+
+                const sameAsShipping = customer.shippingAddress === customer.billingAddress &&
+                                     customer.shippingCity === customer.billingCity &&
+                                     customer.shippingState === customer.billingState &&
+                                     customer.shippingZipCode === customer.billingZipCode;
+
+                $('#sameAsShipping').prop('checked', sameAsShipping);
+                toggleBillingAddress(sameAsShipping);
+
+                if (!sameAsShipping) {
+                    $('#customerBillingAddress').val(customer.billingAddress || '');
+                    $('#customerBillingCity').val(customer.billingCity || '');
+                    $('#customerBillingState').val(customer.billingState || '');
+                    $('#customerBillingZipCode').val(customer.billingZipCode || '');
+                }
+
                 $('#customerModal').modal('show');
             } else {
                 alert('Customer not found for editing.');
@@ -177,13 +235,20 @@
 
         function saveCustomer() {
             const customerId = $('#customerId').val();
+            const sameAsShipping = $('#sameAsShipping').is(':checked');
             const customerData = {
                 companyName: $('#customerCompanyName').val().trim(),
                 contactName: $('#customerContactName').val().trim(),
                 email: $('#customerEmail').val().trim(),
                 phone: $('#customerPhone').val().trim(),
-                billingAddress: $('#customerBillingAddress').val().trim(),
                 shippingAddress: $('#customerShippingAddress').val().trim(),
+                shippingCity: $('#customerShippingCity').val().trim(),
+                shippingState: $('#customerShippingState').val().trim(),
+                shippingZipCode: $('#customerShippingZipCode').val().trim(),
+                billingAddress: sameAsShipping ? $('#customerShippingAddress').val().trim() : $('#customerBillingAddress').val().trim(),
+                billingCity: sameAsShipping ? $('#customerShippingCity').val().trim() : $('#customerBillingCity').val().trim(),
+                billingState: sameAsShipping ? $('#customerShippingState').val().trim() : $('#customerBillingState').val().trim(),
+                billingZipCode: sameAsShipping ? $('#customerShippingZipCode').val().trim() : $('#customerBillingZipCode').val().trim(),
             };
 
             if (!customerData.companyName) {
@@ -244,6 +309,14 @@
                 console.error('Error deleting customer:', error);
                 alert('Error deleting customer. See console for details.');
             });
+        }
+
+        function toggleBillingAddress(isSame) {
+            if (isSame) {
+                $('#billingAddressSection').hide();
+            } else {
+                $('#billingAddressSection').show();
+            }
         }
     </script>
 </body>

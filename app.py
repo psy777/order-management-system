@@ -54,31 +54,46 @@ def write_json_file(file_path, data):
 
 def update_or_create_vendor(cursor, vendor_info_payload):
     if not vendor_info_payload or not vendor_info_payload.get("companyName"): return vendor_info_payload.get("id") if vendor_info_payload else None
-    provided_id, company_name, contact_name, email, phone, billing_address, shipping_address = (
-        vendor_info_payload.get("id"), vendor_info_payload.get("companyName"), vendor_info_payload.get("contactName", ""),
-        vendor_info_payload.get("email", ""), vendor_info_payload.get("phone", ""),
-        vendor_info_payload.get("billingAddress", ""), vendor_info_payload.get("shippingAddress", ""))
+    
+    provided_id = vendor_info_payload.get("id")
+    company_name = vendor_info_payload.get("companyName")
+    contact_name = vendor_info_payload.get("contactName", "")
+    email = vendor_info_payload.get("email", "")
+    phone = vendor_info_payload.get("phone", "")
+    billing_address = vendor_info_payload.get("billingAddress", "")
+    billing_city = vendor_info_payload.get("billingCity", "")
+    billing_state = vendor_info_payload.get("billingState", "")
+    billing_zip_code = vendor_info_payload.get("billingZipCode", "")
+    shipping_address = vendor_info_payload.get("shippingAddress", "")
+    shipping_city = vendor_info_payload.get("shippingCity", "")
+    shipping_state = vendor_info_payload.get("shippingState", "")
+    shipping_zip_code = vendor_info_payload.get("shippingZipCode", "")
+
     final_vendor_id = provided_id
     if provided_id:
-        cursor.execute("UPDATE vendors SET company_name = ?, contact_name = ?, email = ?, phone = ?, billing_address = ?, shipping_address = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                       (company_name, contact_name, email, phone, billing_address, shipping_address, provided_id))
+        cursor.execute("UPDATE vendors SET company_name = ?, contact_name = ?, email = ?, phone = ?, billing_address = ?, billing_city = ?, billing_state = ?, billing_zip_code = ?, shipping_address = ?, shipping_city = ?, shipping_state = ?, shipping_zip_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                       (company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, provided_id))
         if cursor.rowcount == 0:
             final_vendor_id = str(uuid.uuid4())
-            cursor.execute("INSERT INTO vendors (id, company_name, contact_name, email, phone, billing_address, shipping_address) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                           (final_vendor_id, company_name, contact_name, email, phone, billing_address, shipping_address))
+            cursor.execute("INSERT INTO vendors (id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                           (final_vendor_id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code))
     else:
         final_vendor_id = str(uuid.uuid4())
-        cursor.execute("INSERT INTO vendors (id, company_name, contact_name, email, phone, billing_address, shipping_address) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                       (final_vendor_id, company_name, contact_name, email, phone, billing_address, shipping_address))
+        cursor.execute("INSERT INTO vendors (id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                       (final_vendor_id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code))
     return final_vendor_id
 
 def update_vendor_by_id(cursor, vendor_id, vendor_data_payload):
-    field_mappings = {"companyName": "company_name", "contactName": "contact_name", "email": "email", "phone": "phone", "billingAddress": "billing_address", "shippingAddress": "shipping_address"}
+    field_mappings = {
+        "companyName": "company_name", "contactName": "contact_name", "email": "email", "phone": "phone",
+        "billingAddress": "billing_address", "billingCity": "billing_city", "billingState": "billing_state", "billingZipCode": "billing_zip_code",
+        "shippingAddress": "shipping_address", "shippingCity": "shipping_city", "shippingState": "shipping_state", "shippingZipCode": "shipping_zip_code"
+    }
     fields_to_update, values_to_update = [], []
     for pk, dn in field_mappings.items():
         if pk in vendor_data_payload: fields_to_update.append(f"{dn} = ?"); values_to_update.append(vendor_data_payload[pk])
     if not fields_to_update:
-        cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, shipping_address FROM vendors WHERE id = ?", (vendor_id,))
+        cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code FROM vendors WHERE id = ?", (vendor_id,))
         cv = cursor.fetchone()
         return dict(cv) if cv else None
     sql_query = f"UPDATE vendors SET {', '.join(fields_to_update)}, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
@@ -86,7 +101,7 @@ def update_vendor_by_id(cursor, vendor_id, vendor_data_payload):
     try:
         cursor.execute(sql_query, tuple(values_to_update))
         if cursor.rowcount == 0: return None
-        cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, shipping_address FROM vendors WHERE id = ?", (vendor_id,))
+        cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code FROM vendors WHERE id = ?", (vendor_id,))
         uvd = cursor.fetchone()
         return dict(uvd) if uvd else None
     except sqlite3.Error as e: app.logger.error(f"DB error updating vendor {vendor_id}: {e}"); raise
@@ -96,20 +111,36 @@ if not os.path.exists(DATA_DIR):
 if not os.path.exists(SETTINGS_FILE):
     write_json_file(SETTINGS_FILE, {"company_name": "Your Company Name", "default_shipping_zip_code": "00000"})
 
-with app.app_context():
-    init_db()
-
 @app.route('/api/orders', methods=['GET'])
 def get_orders():
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT o.*, v.company_name as vendor_company_name, v.contact_name as vendor_contact_name, v.email as vendor_email, v.phone as vendor_phone, v.billing_address as vendor_billing_address, v.shipping_address as vendor_shipping_address FROM orders o LEFT JOIN vendors v ON o.vendor_id = v.id WHERE o.status != 'Deleted' ORDER BY o.order_date DESC, o.order_id DESC")
+    cursor.execute("SELECT o.*, v.company_name as vendor_company_name, v.contact_name as vendor_contact_name, v.email as vendor_email, v.phone as vendor_phone, v.billing_address as vendor_billing_address, v.billing_city as vendor_billing_city, v.billing_state as vendor_billing_state, v.billing_zip_code as vendor_billing_zip_code, v.shipping_address as vendor_shipping_address, v.shipping_city as vendor_shipping_city, v.shipping_state as vendor_shipping_state, v.shipping_zip_code as vendor_shipping_zip_code FROM orders o LEFT JOIN vendors v ON o.vendor_id = v.id WHERE o.status != 'Deleted' ORDER BY o.order_date DESC, o.order_id DESC")
     orders_from_db = cursor.fetchall()
     active_orders_response = []
     for order_row in orders_from_db:
         order_dict = dict(order_row)
-        order_dict['vendorInfo'] = {"id": order_dict.pop('vendor_id'), "companyName": order_dict.pop('vendor_company_name') or "[Vendor Not Found]", "contactName": order_dict.pop('vendor_contact_name'), "email": order_dict.pop('vendor_email'), "phone": order_dict.pop('vendor_phone'), "billingAddress": order_dict.pop('vendor_billing_address'), "shippingAddress": order_dict.pop('vendor_shipping_address')}
-        if not order_dict['vendorInfo']['id']: order_dict['vendorInfo'] = {"id": None, "companyName": "[Vendor Not Found]", "contactName": "", "email": "", "phone": "", "billingAddress": "", "shippingAddress": ""}
+        order_dict['vendorInfo'] = {
+            "id": order_dict.pop('vendor_id'),
+            "companyName": order_dict.pop('vendor_company_name') or "[Vendor Not Found]",
+            "contactName": order_dict.pop('vendor_contact_name'),
+            "email": order_dict.pop('vendor_email'),
+            "phone": order_dict.pop('vendor_phone'),
+            "billingAddress": order_dict.pop('vendor_billing_address'),
+            "billingCity": order_dict.pop('vendor_billing_city'),
+            "billingState": order_dict.pop('vendor_billing_state'),
+            "billingZipCode": order_dict.pop('vendor_billing_zip_code'),
+            "shippingAddress": order_dict.pop('vendor_shipping_address'),
+            "shippingCity": order_dict.pop('vendor_shipping_city'),
+            "shippingState": order_dict.pop('vendor_shipping_state'),
+            "shippingZipCode": order_dict.pop('vendor_shipping_zip_code')
+        }
+        if not order_dict['vendorInfo']['id']:
+            order_dict['vendorInfo'] = {
+                "id": None, "companyName": "[Vendor Not Found]", "contactName": "", "email": "", "phone": "",
+                "billingAddress": "", "billingCity": "", "billingState": "", "billingZipCode": "",
+                "shippingAddress": "", "shippingCity": "", "shippingState": "", "shippingZipCode": ""
+            }
         cursor.execute("SELECT item_code, package_code, quantity, price_per_unit_cents, style_chosen, item_type FROM order_line_items WHERE order_id = ?", (order_dict['order_id'],))
         order_dict['lineItems'] = [{'item': li['item_code'], 'packageCode': li['package_code'], 'price': li['price_per_unit_cents'], 'quantity': li['quantity'], 'style': li['style_chosen'], 'type': li['item_type']} for li in cursor.fetchall()]
         cursor.execute("SELECT status, status_date FROM order_status_history WHERE order_id = ? ORDER BY status_date ASC", (order_dict['order_id'],))
@@ -190,35 +221,24 @@ def save_order():
         subtotal_cents = sum(item.get('quantity',0) * item.get('price',0) for item in new_order_payload.get('lineItems',[]))
         name_drop_surcharge_cents = sum(item.get('quantity',0) * 100 for item in new_order_payload.get('lineItems',[]) if new_order_payload.get('nameDrop',False) and item.get('type')=='cross')
         
-        estimated_shipping_cost_dollars = 0.0
-        origin_zip = "63366"; destination_zip = None
-        shipping_zip_code_raw = new_order_payload.get('shippingZipCode')
-        if isinstance(shipping_zip_code_raw, str) and shipping_zip_code_raw.strip():
-            if re.fullmatch(r'\d{5}', shipping_zip_code_raw.strip()): destination_zip = shipping_zip_code_raw.strip()
-        
-        if destination_zip:
-            total_weight_oz = sum( (item.get('quantity',0)*5 if item.get('type')=='cross' else (item.get('quantity',0)*80 if item.get('type')=='display' else 0)) for item in new_order_payload.get('lineItems',[]))
-            if total_weight_oz > 0:
-                shipping_cost_calculated = calculate_shipping_cost_for_order(origin_zip, destination_zip, total_weight_oz / 16.0)
-                if shipping_cost_calculated is not None: estimated_shipping_cost_dollars = round(float(shipping_cost_calculated), 2)
-        
-        new_order_payload['estimatedShipping'] = estimated_shipping_cost_dollars
+        estimated_shipping_cost_dollars = new_order_payload.get('estimatedShipping', 0.0)
+        if not isinstance(estimated_shipping_cost_dollars, (int, float)):
+            estimated_shipping_cost_dollars = 0.0
         estimated_shipping_cents = int(round(estimated_shipping_cost_dollars * 100))
         final_total_dollars = round((subtotal_cents + name_drop_surcharge_cents + estimated_shipping_cents) / 100.0, 2)
         new_order_payload['total'] = final_total_dollars
 
-        if current_order_id_for_db_ops: 
-            cursor.execute("UPDATE orders SET vendor_id=?, order_date=?, status=?, notes=?, estimated_shipping_date=?, shipping_zip_code=?, estimated_shipping_cost=?, scent_option=?, name_drop=?, signature_data_url=?, total_amount=?, updated_at=CURRENT_TIMESTAMP WHERE order_id=?",
-                           (db_processed_vendor_id, new_order_payload.get('date', datetime.now(timezone.utc).isoformat()+"Z"), new_order_payload.get('status','Draft'), new_order_payload.get('notes'), new_order_payload.get('estimatedShippingDate'), new_order_payload.get('shippingZipCode'), estimated_shipping_cost_dollars, new_order_payload.get('scentOption'), 1 if new_order_payload.get('nameDrop') else 0, new_order_payload.get('signatureDataUrl'), final_total_dollars, current_order_id_for_db_ops))
+        if current_order_id_for_db_ops:
+            cursor.execute("UPDATE orders SET vendor_id=?, order_date=?, status=?, notes=?, estimated_shipping_date=?, shipping_address=?, shipping_city=?, shipping_state=?, shipping_zip_code=?, estimated_shipping_cost=?, scent_option=?, name_drop=?, signature_data_url=?, total_amount=?, updated_at=CURRENT_TIMESTAMP WHERE order_id=?",
+                           (db_processed_vendor_id, new_order_payload.get('date', datetime.now(timezone.utc).isoformat()+"Z"), new_order_payload.get('status','Draft'), new_order_payload.get('notes'), new_order_payload.get('estimatedShippingDate'), new_order_payload.get('shippingAddress'), new_order_payload.get('shippingCity'), new_order_payload.get('shippingState'), new_order_payload.get('shippingZipCode'), estimated_shipping_cost_dollars, new_order_payload.get('scentOption'), 1 if new_order_payload.get('nameDrop') else 0, new_order_payload.get('signatureDataUrl'), final_total_dollars, current_order_id_for_db_ops))
             cursor.execute("DELETE FROM order_line_items WHERE order_id = ?", (current_order_id_for_db_ops,))
             cursor.execute("DELETE FROM order_status_history WHERE order_id = ?", (current_order_id_for_db_ops,))
-        else: 
-            # Generate timestamp-based ID to match existing pattern
+        else:
             timestamp_ms = int(time.time() * 1000)
             current_order_id_for_db_ops = f"PO-{timestamp_ms}"
-            new_order_payload['id'] = current_order_id_for_db_ops 
-            cursor.execute("INSERT INTO orders (order_id, vendor_id, order_date, status, notes, estimated_shipping_date, shipping_zip_code, estimated_shipping_cost, scent_option, name_drop, signature_data_url, total_amount) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                           (current_order_id_for_db_ops, db_processed_vendor_id, new_order_payload.get('date', datetime.now(timezone.utc).isoformat()+"Z"), new_order_payload.get('status','Draft'), new_order_payload.get('notes'), new_order_payload.get('estimatedShippingDate'), new_order_payload.get('shippingZipCode'), estimated_shipping_cost_dollars, new_order_payload.get('scentOption'), 1 if new_order_payload.get('nameDrop') else 0, new_order_payload.get('signatureDataUrl'), final_total_dollars))
+            new_order_payload['id'] = current_order_id_for_db_ops
+            cursor.execute("INSERT INTO orders (order_id, vendor_id, order_date, status, notes, estimated_shipping_date, shipping_address, shipping_city, shipping_state, shipping_zip_code, estimated_shipping_cost, scent_option, name_drop, signature_data_url, total_amount) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                           (current_order_id_for_db_ops, db_processed_vendor_id, new_order_payload.get('date', datetime.now(timezone.utc).isoformat()+"Z"), new_order_payload.get('status','Draft'), new_order_payload.get('notes'), new_order_payload.get('estimatedShippingDate'), new_order_payload.get('shippingAddress'), new_order_payload.get('shippingCity'), new_order_payload.get('shippingState'), new_order_payload.get('shippingZipCode'), estimated_shipping_cost_dollars, new_order_payload.get('scentOption'), 1 if new_order_payload.get('nameDrop') else 0, new_order_payload.get('signatureDataUrl'), final_total_dollars))
         
         processed_order_id = current_order_id_for_db_ops 
         app.logger.info(f"DB-OP: processed_order_id is now set to: '{processed_order_id}' before line item processing.")
@@ -402,8 +422,12 @@ def delete_item(item_code_url):
 @app.route('/api/vendors', methods=['GET'])
 def get_vendors():
     conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, shipping_address FROM vendors ORDER BY company_name COLLATE NOCASE ASC")
-    vendors_list = [{"id":r["id"],"companyName":r["company_name"],"contactName":r["contact_name"],"email":r["email"],"phone":r["phone"],"billingAddress":r["billing_address"],"shippingAddress":r["shipping_address"]} for r in cursor.fetchall()]
+    cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code FROM vendors ORDER BY company_name COLLATE NOCASE ASC")
+    vendors_list = [{
+        "id": r["id"], "companyName": r["company_name"], "contactName": r["contact_name"], "email": r["email"], "phone": r["phone"],
+        "billingAddress": r["billing_address"], "billingCity": r["billing_city"], "billingState": r["billing_state"], "billingZipCode": r["billing_zip_code"],
+        "shippingAddress": r["shipping_address"], "shippingCity": r["shipping_city"], "shippingState": r["shipping_state"], "shippingZipCode": r["shipping_zip_code"]
+    } for r in cursor.fetchall()]
     conn.close(); return jsonify(vendors_list)
 
 @app.route('/api/vendors/<string:vendor_id>', methods=['PUT'])
@@ -427,7 +451,7 @@ def api_create_vendor():
     try:
         vendor_id=update_or_create_vendor(cursor,payload)
         if not vendor_id: conn.rollback(); conn.close(); return jsonify({"message":"Failed to process vendor."}),500
-        cursor.execute("SELECT id,company_name,contact_name,email,phone,billing_address,shipping_address FROM vendors WHERE id=?",(vendor_id,))
+        cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code FROM vendors WHERE id=?",(vendor_id,))
         vendor_db=cursor.fetchone()
         if not vendor_db: conn.rollback(); conn.close(); app.logger.error(f"Vendor {vendor_id} processed but not retrieved."); return jsonify({"message":"Vendor processed but not retrieved."}),500
         conn.commit(); conn.close()
@@ -623,7 +647,13 @@ def import_customers_csv():
                 'email': 'email',
                 'phone': 'phone',
                 'billing address': 'billing_address',
-                'shipping address': 'shipping_address'
+                'billing city': 'billing_city',
+                'billing state': 'billing_state',
+                'billing zip code': 'billing_zip_code',
+                'shipping address': 'shipping_address',
+                'shipping city': 'shipping_city',
+                'shipping state': 'shipping_state',
+                'shipping zip code': 'shipping_zip_code'
             }
             
             # Get the indices of the columns we care about
@@ -657,9 +687,21 @@ def import_customers_csv():
 
                 billing_address_idx = column_indices.get('billing_address')
                 billing_address = row[billing_address_idx] if billing_address_idx is not None else ''
+                billing_city_idx = column_indices.get('billing_city')
+                billing_city = row[billing_city_idx] if billing_city_idx is not None else ''
+                billing_state_idx = column_indices.get('billing_state')
+                billing_state = row[billing_state_idx] if billing_state_idx is not None else ''
+                billing_zip_code_idx = column_indices.get('billing_zip_code')
+                billing_zip_code = row[billing_zip_code_idx] if billing_zip_code_idx is not None else ''
 
                 shipping_address_idx = column_indices.get('shipping_address')
                 shipping_address = row[shipping_address_idx] if shipping_address_idx is not None else ''
+                shipping_city_idx = column_indices.get('shipping_city')
+                shipping_city = row[shipping_city_idx] if shipping_city_idx is not None else ''
+                shipping_state_idx = column_indices.get('shipping_state')
+                shipping_state = row[shipping_state_idx] if shipping_state_idx is not None else ''
+                shipping_zip_code_idx = column_indices.get('shipping_zip_code')
+                shipping_zip_code = row[shipping_zip_code_idx] if shipping_zip_code_idx is not None else ''
 
                 cursor.execute("SELECT id FROM vendors WHERE company_name = ?", (company_name,))
                 existing_vendor = cursor.fetchone()
@@ -667,15 +709,15 @@ def import_customers_csv():
                 if existing_vendor:
                     cursor.execute("""
                         UPDATE vendors 
-                        SET contact_name = ?, email = ?, phone = ?, billing_address = ?, shipping_address = ?, updated_at = CURRENT_TIMESTAMP
+                        SET contact_name = ?, email = ?, phone = ?, billing_address = ?, billing_city = ?, billing_state = ?, billing_zip_code = ?, shipping_address = ?, shipping_city = ?, shipping_state = ?, shipping_zip_code = ?, updated_at = CURRENT_TIMESTAMP
                         WHERE company_name = ?
-                    """, (contact_name, email, phone, billing_address, shipping_address, company_name))
+                    """, (contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, company_name))
                 else:
                     vendor_id = str(uuid.uuid4())
                     cursor.execute("""
-                        INSERT INTO vendors (id, company_name, contact_name, email, phone, billing_address, shipping_address)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (vendor_id, company_name, contact_name, email, phone, billing_address, shipping_address))
+                        INSERT INTO vendors (id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (vendor_id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code))
             
             conn.commit()
             conn.close()
@@ -752,21 +794,31 @@ def send_order_email_route():
                 conn_upd.commit()
                 app.logger.info(f"Order {order_id_update} status updated to Sent.")
                 
-                cur_upd.execute("SELECT o.*, v.company_name as vendor_company_name, v.contact_name as vendor_contact_name, v.email as vendor_email, v.phone as vendor_phone, v.billing_address as vendor_billing_address, v.shipping_address as vendor_shipping_address FROM orders o LEFT JOIN vendors v ON o.vendor_id=v.id WHERE o.order_id=?", (order_id_update,))
+                cur_upd.execute("SELECT o.*, v.company_name as vendor_company_name, v.contact_name as vendor_contact_name, v.email as vendor_email, v.phone as vendor_phone, v.billing_address as vendor_billing_address, v.billing_city as vendor_billing_city, v.billing_state as vendor_billing_state, v.billing_zip_code as vendor_billing_zip_code, v.shipping_address as vendor_shipping_address, v.shipping_city as vendor_shipping_city, v.shipping_state as vendor_shipping_state, v.shipping_zip_code as vendor_shipping_zip_code FROM orders o LEFT JOIN vendors v ON o.vendor_id=v.id WHERE o.order_id=?", (order_id_update,))
                 updated_row = cur_upd.fetchone()
                 if updated_row:
                     updated_order_resp = dict(updated_row)
                     updated_order_resp['vendorInfo'] = {
-                        "id": updated_order_resp.pop('vendor_id'), 
+                        "id": updated_order_resp.pop('vendor_id'),
                         "companyName": updated_order_resp.pop('vendor_company_name') or "[Vendor Not Found]",
                         "contactName": updated_order_resp.pop('vendor_contact_name'),
                         "email": updated_order_resp.pop('vendor_email'),
                         "phone": updated_order_resp.pop('phone'),
                         "billingAddress": updated_order_resp.pop('billing_address'),
-                        "shippingAddress": updated_order_resp.pop('shipping_address')
+                        "billingCity": updated_order_resp.pop('billing_city'),
+                        "billingState": updated_order_resp.pop('billing_state'),
+                        "billingZipCode": updated_order_resp.pop('billing_zip_code'),
+                        "shippingAddress": updated_order_resp.pop('shipping_address'),
+                        "shippingCity": updated_order_resp.pop('shipping_city'),
+                        "shippingState": updated_order_resp.pop('shipping_state'),
+                        "shippingZipCode": updated_order_resp.pop('shipping_zip_code')
                     }
-                    if not updated_order_resp['vendorInfo']['id']: 
-                        updated_order_resp['vendorInfo'] = {"id": None, "companyName": "[Vendor Not Found]", "contactName": "", "email": "", "phone": "", "billingAddress": "", "shippingAddress": ""}
+                    if not updated_order_resp['vendorInfo']['id']:
+                        updated_order_resp['vendorInfo'] = {
+                            "id": None, "companyName": "[Vendor Not Found]", "contactName": "", "email": "", "phone": "",
+                            "billingAddress": "", "billingCity": "", "billingState": "", "billingZipCode": "",
+                            "shippingAddress": "", "shippingCity": "", "shippingState": "", "shippingZipCode": ""
+                        }
                     
                     cur_upd.execute("SELECT item_code, package_code, quantity, price_per_unit_cents, style_chosen, item_type FROM order_line_items WHERE order_id=?", (order_id_update,))
                     updated_order_resp['lineItems'] = [{'item': li['item_code'], 'packageCode': li['package_code'], 'price': li['price_per_unit_cents'], 'quantity': li['quantity'], 'style': li['style_chosen'], 'type': li['item_type']} for li in cur_upd.fetchall()]
@@ -840,14 +892,24 @@ def home(): return render_template('index.html')
 @app.route('/shutdown', methods=['POST'])
 def shutdown(): Timer(0.1,lambda:os._exit(0)).start(); return "Shutdown initiated.",200
 
-def open_browser(): webbrowser.open_new("http://127.0.0.1:5000/")
-def is_port_in_use(port):
-    with socket.socket(socket.AF_INET,socket.SOCK_STREAM) as s:
-        try: s.bind(("127.0.0.1",port))
-        except socket.error as e: return e.errno==10048 
-        return False
+def open_browser():
+    webbrowser.open_new("http://127.0.0.1:5001/")
 
-if __name__=='__main__':
-    PORT=5000
-    if is_port_in_use(PORT): print(f"Port {PORT} in use."); open_browser(); sys.exit(0)
-    else: print(f"Port {PORT} free."); Timer(1,open_browser).start(); app.run(port=PORT,debug=False)
+def is_port_in_use(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(('127.0.0.1', port)) == 0
+
+def main():
+    PORT = 5001
+    if is_port_in_use(PORT):
+        print(f"Port {PORT} is already in use. Opening browser to existing instance.")
+        open_browser()
+        sys.exit(0)
+    else:
+        print(f"Port {PORT} is free. Starting new server.")
+        Timer(1, open_browser).start()
+        app.run(port=PORT, debug=False)
+
+if __name__ == '__main__':
+    init_db()
+    main()

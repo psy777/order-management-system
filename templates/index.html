@@ -108,22 +108,24 @@ const generatePdf = (order, allItems, action = 'save') => {
     doc.text(`${vendorInfo.phone}`, leftColumnX, leftColumnY); leftColumnY += 5;
 
     // Billing Address - Right Column
-    if (vendorInfo.billingAddress) {
+    if (vendorInfo.billingAddress || vendorInfo.billingCity) {
         doc.setFontSize(10);
         doc.text("Billing Address:", rightColumnX, rightColumnY); rightColumnY += 5;
-        const billingAddressLines = doc.splitTextToSize(vendorInfo.billingAddress, 90); // Max width for address block
+        const ba = `${vendorInfo.billingAddress || ''}\n${vendorInfo.billingCity || ''}, ${vendorInfo.billingState || ''} ${vendorInfo.billingZipCode || ''}`;
+        const billingAddressLines = doc.splitTextToSize(ba, 90);
         doc.text(billingAddressLines, rightColumnX, rightColumnY);
-        rightColumnY += (billingAddressLines.length * 4) + 2; // Adjust Y based on number of lines
+        rightColumnY += (billingAddressLines.length * 4) + 2;
     }
 
     // Shipping Address - Right Column, below Billing
-    if (vendorInfo.shippingAddress) {
-        if (vendorInfo.billingAddress) rightColumnY += 3; // Add a small gap if billing was present
+    if (vendorInfo.shippingAddress || vendorInfo.shippingCity) {
+        if (vendorInfo.billingAddress || vendorInfo.billingCity) rightColumnY += 3;
         doc.setFontSize(10);
         doc.text("Shipping Address:", rightColumnX, rightColumnY); rightColumnY += 5;
-        const shippingAddressLines = doc.splitTextToSize(vendorInfo.shippingAddress, 90); // Max width for address block
+        const sa = `${vendorInfo.shippingAddress || ''}\n${vendorInfo.shippingCity || ''}, ${vendorInfo.shippingState || ''} ${vendorInfo.shippingZipCode || ''}`;
+        const shippingAddressLines = doc.splitTextToSize(sa, 90);
         doc.text(shippingAddressLines, rightColumnX, rightColumnY);
-        rightColumnY += (shippingAddressLines.length * 4) + 2; // Adjust Y based on number of lines
+        rightColumnY += (shippingAddressLines.length * 4) + 2;
     }
     
     // Determine the starting Y for the table, ensuring it's below both columns
@@ -787,15 +789,32 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allVendors, allSelectableIte
     );
 };
 
+const UnsavedChangesModal = ({ onCancel, onDelete, onSaveAndClose }) => {
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex justify-center items-center p-4">
+            <div className="bg-white rounded-lg shadow-xl p-8 w-full max-w-md">
+                <h2 className="text-xl font-bold text-slate-800 mb-4">You have unsaved changes.</h2>
+                <p className="text-slate-600 mb-6">What would you like to do?</p>
+                <div className="flex justify-end space-x-4">
+                    <button onClick={onCancel} className="px-4 py-2 bg-slate-200 text-slate-700 font-semibold rounded-md hover:bg-slate-300 transition-colors">Cancel</button>
+                    <button onClick={onDelete} className="px-4 py-2 bg-red-600 text-white font-semibold rounded-md hover:bg-red-700 transition-colors">Delete</button>
+                    <button onClick={onSaveAndClose} className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors">Save and Close</button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allVendors, allSelectableItems, itemData, packageData, fetchAndUpdateVendors, setOrderForEmailModal }) => { // Added setOrderForEmailModal
     const { useState, useMemo, useEffect, useRef } = React;
     const [isEditing, setIsEditing] = useState(!order || order.status === 'Draft');
-    const [formData, setFormData] = useState(order ? {...order, estimatedShipping: order.estimatedShipping || '', scentOption: order.scentOption || 'Scented'} : { vendorInfo: { companyName: '', contactName: '', email: '', phone: '', billingAddress: '', shippingAddress: '' }, lineItems: [], notes: "", estimatedShippingDate: '', shippingZipCode: '', estimatedShipping: '', scentOption: 'Scented', nameDrop: false, signatureDataUrl: null, statusHistory: [{ status: 'Draft', date: new Date().toISOString() }], status: 'Draft' });
+    const [formData, setFormData] = useState(order ? {...order, estimatedShipping: order.estimatedShipping || '', scentOption: order.scentOption || 'Scented'} : { vendorInfo: { companyName: '', contactName: '', email: '', phone: '', billingAddress: '', billingCity: '', billingState: '', billingZipCode: '', shippingAddress: '', shippingCity: '', shippingState: '', shippingZipCode: '' }, lineItems: [], notes: "", estimatedShippingDate: '', estimatedShipping: '', scentOption: 'Scented', nameDrop: false, signatureDataUrl: null, statusHistory: [{ status: 'Draft', date: new Date().toISOString() }], status: 'Draft' });
     const [vendorSuggestions, setVendorSuggestions] = useState([]);
+    const [showUnsavedChangesModal, setShowUnsavedChangesModal] = useState(false);
     // orderToEmail state is removed, setOrderForEmailModal prop will be used directly
     const [scanInput, setScanInput] = useState('');
     const scanInputRef = React.useRef(null);
-    const [sameAsBilling, setSameAsBilling] = useState(true);
+    const [sameAsShipping, setSameAsShipping] = useState(true);
     const [isAutofilledVendorActive, setIsAutofilledVendorActive] = useState(false); // Renamed
     const [initialVendorInfoAfterAutofill, setInitialVendorInfoAfterAutofill] = useState(null); // New state
     const [isEditingAutofilledVendor, setIsEditingAutofilledVendor] = useState(false);
@@ -803,23 +822,43 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allVendors, allS
     const hideSuggestionsTimeoutRef = React.useRef(null);
     // fetchAndUpdateVendors is now directly available from props destructuring
 
+    const handleReturnToDashboard = () => {
+        const isNewUnsavedDraft = !order && (formData.lineItems.length > 0 || (formData.vendorInfo && formData.vendorInfo.companyName));
+
+        if (isNewUnsavedDraft) {
+            setShowUnsavedChangesModal(true);
+        } else {
+            navigateTo('dashboard');
+        }
+    };
+
     useEffect(() => {
-        if (formData.vendorInfo.shippingAddress) {
-            const addressString = formData.vendorInfo.shippingAddress;
-            // Regex to find a 5-digit ZIP code, possibly at the end of a line or string,
-            // and can be preceded by a comma and space.
-            const zipRegex = /(\b\d{5}\b)(?!.*\b\d{5}\b)/; // Gets the last 5-digit number
-            const match = addressString.match(zipRegex);
-            if (match && match[1]) {
-                const extractedZip = match[1];
-                // Only update if the extracted ZIP is different from the current one
-                // to prevent potential loops if the user is also editing the ZIP code field directly.
-                if (formData.shippingZipCode !== extractedZip) {
-                    setFormData(prev => ({ ...prev, shippingZipCode: extractedZip }));
-                }
+        // Debounce function
+        const debounce = (func, delay) => {
+            let timeoutId;
+            return (...args) => {
+                clearTimeout(timeoutId);
+                timeoutId = setTimeout(() => {
+                    func.apply(this, args);
+                }, delay);
+            };
+        };
+
+        const debouncedFetchShipping = debounce(fetchEstimatedShipping, 750); // 750ms debounce
+
+        if (formData.vendorInfo.shippingZipCode && formData.lineItems) {
+             // Only call if zip is 5 digits and there are items
+            if (formData.vendorInfo.shippingZipCode.length === 5 && /^\d{5}$/.test(formData.vendorInfo.shippingZipCode) && formData.lineItems.length > 0) {
+                debouncedFetchShipping(formData.vendorInfo.shippingZipCode, formData.lineItems);
+            } else if (formData.vendorInfo.shippingZipCode.length === 5 && /^\d{5}$/.test(formData.vendorInfo.shippingZipCode) && formData.lineItems.length === 0) {
+                // If valid zip but no items, set shipping to 0
+                setFormData(prev => ({ ...prev, estimatedShipping: '0.00' }));
             }
         }
-    }, [formData.vendorInfo.shippingAddress]); // Listen to changes in shippingAddress
+    }, [formData.vendorInfo.shippingZipCode, formData.lineItems]);
+
+
+
 
 
     const fetchEstimatedShipping = async (zipCode, items) => {
@@ -868,16 +907,16 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allVendors, allS
 
         const debouncedFetchShipping = debounce(fetchEstimatedShipping, 750); // 750ms debounce
 
-        if (formData.shippingZipCode && formData.lineItems) {
+        if (formData.vendorInfo.shippingZipCode && formData.lineItems) {
              // Only call if zip is 5 digits and there are items
-            if (formData.shippingZipCode.length === 5 && /^\d{5}$/.test(formData.shippingZipCode) && formData.lineItems.length > 0) {
-                debouncedFetchShipping(formData.shippingZipCode, formData.lineItems);
-            } else if (formData.shippingZipCode.length === 5 && /^\d{5}$/.test(formData.shippingZipCode) && formData.lineItems.length === 0) {
+            if (formData.vendorInfo.shippingZipCode.length === 5 && /^\d{5}$/.test(formData.vendorInfo.shippingZipCode) && formData.lineItems.length > 0) {
+                debouncedFetchShipping(formData.vendorInfo.shippingZipCode, formData.lineItems);
+            } else if (formData.vendorInfo.shippingZipCode.length === 5 && /^\d{5}$/.test(formData.vendorInfo.shippingZipCode) && formData.lineItems.length === 0) {
                 // If valid zip but no items, set shipping to 0
                 setFormData(prev => ({ ...prev, estimatedShipping: '0.00' }));
             }
         }
-    }, [formData.shippingZipCode, formData.lineItems]);
+    }, [formData.vendorInfo.shippingZipCode, formData.lineItems]);
 
 
     const formatPhoneNumber = (value) => {
@@ -1011,45 +1050,54 @@ const unpackPackage = (id, pkgCode) => {
         } else { setVendorSuggestions([]); }
     };
 
-    const handleSameAsBillingChange = (e) => {
+    const handleSameAsShippingChange = (e) => {
         const isChecked = e.target.checked;
-        setSameAsBilling(isChecked);
+        setSameAsShipping(isChecked);
         setFormData(prev => ({
             ...prev,
             vendorInfo: {
                 ...prev.vendorInfo,
-                shippingAddress: isChecked ? prev.vendorInfo.billingAddress : ''
+                billingAddress: isChecked ? prev.vendorInfo.shippingAddress : '',
+                billingCity: isChecked ? prev.vendorInfo.shippingCity : '',
+                billingState: isChecked ? prev.vendorInfo.shippingState : '',
+                billingZipCode: isChecked ? prev.vendorInfo.shippingZipCode : ''
             }
         }));
     };
     
     useEffect(() => {
-        // Initialize sameAsBilling based on whether shipping and billing addresses are identical when an order is loaded
+        // Initialize sameAsShipping based on whether shipping and billing addresses are identical when an order is loaded
         if (order && order.vendorInfo) {
-            if (order.vendorInfo.billingAddress && order.vendorInfo.billingAddress === order.vendorInfo.shippingAddress) {
-                setSameAsBilling(true);
-            } else if (order.vendorInfo.billingAddress && !order.vendorInfo.shippingAddress) {
-                 // If shipping is empty but billing is not, assume sameAsBilling should be true initially
-                setSameAsBilling(true);
+            if (order.vendorInfo.shippingAddress && order.vendorInfo.shippingAddress === order.vendorInfo.billingAddress) {
+                setSameAsShipping(true);
+            } else if (order.vendorInfo.shippingAddress && !order.vendorInfo.billingAddress) {
+                 // If billing is empty but shipping is not, assume sameAsShipping should be true initially
+                setSameAsShipping(true);
                 setFormData(prev => ({
                     ...prev,
                     vendorInfo: {
                         ...prev.vendorInfo,
-                        shippingAddress: prev.vendorInfo.billingAddress
+                        billingAddress: prev.vendorInfo.shippingAddress,
+                        billingCity: prev.vendorInfo.shippingCity,
+                        billingState: prev.vendorInfo.shippingState,
+                        billingZipCode: prev.vendorInfo.shippingZipCode
                     }
                 }));
             }
             else {
-                setSameAsBilling(false);
+                setSameAsShipping(false);
             }
         } else {
             // For new orders, default to true
-            setSameAsBilling(true);
-             setFormData(prev => ({ // ensure shipping address is copied if billing has a default
+            setSameAsShipping(true);
+             setFormData(prev => ({ // ensure billing address is copied if shipping has a default
                 ...prev,
                 vendorInfo: {
                     ...prev.vendorInfo,
-                    shippingAddress: prev.vendorInfo.billingAddress
+                    billingAddress: prev.vendorInfo.shippingAddress,
+                    billingCity: prev.vendorInfo.shippingCity,
+                    billingState: prev.vendorInfo.shippingState,
+                    billingZipCode: prev.vendorInfo.shippingZipCode
                 }
             }));
         }
@@ -1060,11 +1108,17 @@ const unpackPackage = (id, pkgCode) => {
         clearTimeout(hideSuggestionsTimeoutRef.current); // Clear any pending hide
         setFormData(prev => {
             const newVendorInfo = {...vendor};
-            if (sameAsBilling) {
-                newVendorInfo.shippingAddress = newVendorInfo.billingAddress;
+            if (sameAsShipping) {
+                newVendorInfo.billingAddress = newVendorInfo.shippingAddress;
+                newVendorInfo.billingCity = newVendorInfo.shippingCity;
+                newVendorInfo.billingState = newVendorInfo.shippingState;
+                newVendorInfo.billingZipCode = newVendorInfo.shippingZipCode;
             } else {
-                // If not sameAsBilling, retain existing shippingAddress from form or set to empty if vendor doesn't have one
-                newVendorInfo.shippingAddress = prev.vendorInfo.shippingAddress || vendor.shippingAddress || '';
+                // If not sameAsShipping, retain existing billingAddress from form or set to empty if vendor doesn't have one
+                newVendorInfo.billingAddress = prev.vendorInfo.billingAddress || vendor.billingAddress || '';
+                newVendorInfo.billingCity = prev.vendorInfo.billingCity || vendor.billingCity || '';
+                newVendorInfo.billingState = prev.vendorInfo.billingState || vendor.billingState || '';
+                newVendorInfo.billingZipCode = prev.vendorInfo.billingZipCode || vendor.billingZipCode || '';
             }
             return {...prev, vendorInfo: newVendorInfo};
         }); 
@@ -1311,8 +1365,21 @@ const unpackPackage = (id, pkgCode) => {
 
     return (
         <>
+            {showUnsavedChangesModal && (
+                <UnsavedChangesModal
+                    onCancel={() => setShowUnsavedChangesModal(false)}
+                    onDelete={() => {
+                        setShowUnsavedChangesModal(false);
+                        navigateTo('dashboard');
+                    }}
+                    onSaveAndClose={() => {
+                        setShowUnsavedChangesModal(false);
+                        handleSaveDraft();
+                    }}
+                />
+            )}
             {/* EmailModal is now handled at the App level, triggered by setOrderForEmailModal prop */}
-            <div className="mb-6"><button onClick={() => navigateTo('dashboard')} className="text-orange-600 hover:text-orange-800 font-semibold">&larr; Back to Dashboard</button><h1 className="text-3xl font-bold text-slate-800 mt-2">{order ? `Order Details: ${order.id}` : 'New Purchase Order'}</h1>{order && <StatusBar status={formData.status} statusHistory={formData.statusHistory} />}</div>
+            <div className="mb-6"><button onClick={handleReturnToDashboard} className="text-orange-600 hover:text-orange-800 font-semibold">&larr; Back to Dashboard</button><h1 className="text-3xl font-bold text-slate-800 mt-2">{order ? `Order Details: ${order.id}` : 'New Purchase Order'}</h1>{order && <StatusBar status={formData.status} statusHistory={formData.statusHistory} />}</div>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 <div className="lg:col-span-2 space-y-6">
                     <div className="relative">
@@ -1337,21 +1404,26 @@ const unpackPackage = (id, pkgCode) => {
                                     <Input label="Phone" value={formData.vendorInfo.phone} onChange={e => handleVendorInfoChange('phone', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
                                 </div>
                                 <div className="space-y-4">
-                                    <Textarea label="Billing Address" value={formData.vendorInfo.billingAddress} onChange={e => handleVendorInfoChange('billingAddress', e.target.value)} rows={3} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} /> 
-                                    <label className="block text-sm font-medium text-slate-600">Shipping Address</label>
-                                    <div className="flex items-center">
-                                        <input 
-                                            id="sameAsBilling" 
-                                            type="checkbox" 
-                                            checked={sameAsBilling} 
-                                            onChange={handleSameAsBillingChange} 
-                                            disabled={!canEdit}
-                                            className="h-4 w-4 text-orange-600 border-slate-300 rounded focus:ring-orange-500 disabled:opacity-50" 
-                                        />
-                                        <label htmlFor="sameAsBilling" className="ml-2 block text-sm text-slate-700">Same as Billing Address</label>
+                                    <Input label="Shipping Address" value={formData.vendorInfo.shippingAddress} onChange={e => handleVendorInfoChange('shippingAddress', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                        <Input label="City" value={formData.vendorInfo.shippingCity} onChange={e => handleVendorInfoChange('shippingCity', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
+                                        <Input label="State" value={formData.vendorInfo.shippingState} onChange={e => handleVendorInfoChange('shippingState', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
+                                        <Input label="Zip Code" value={formData.vendorInfo.shippingZipCode} onChange={e => handleVendorInfoChange('shippingZipCode', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
                                     </div>
-                                    {!sameAsBilling && (
-                                        <Textarea value={formData.vendorInfo.shippingAddress} onChange={e => handleVendorInfoChange('shippingAddress', e.target.value)} rows={3} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
+                                    <label className="block text-sm font-medium text-slate-600 pt-4">Billing Address</label>
+                                    <div className="flex items-center">
+                                        <input id="sameAsShipping" type="checkbox" checked={sameAsShipping} onChange={handleSameAsShippingChange} disabled={!canEdit} className="h-4 w-4 text-orange-600 border-slate-300 rounded focus:ring-orange-500 disabled:opacity-50" />
+                                        <label htmlFor="sameAsShipping" className="ml-2 block text-sm text-slate-700">Same as Shipping Address</label>
+                                    </div>
+                                    {!sameAsShipping && (
+                                        <div className="space-y-4">
+                                            <Input label="Billing Address" value={formData.vendorInfo.billingAddress} onChange={e => handleVendorInfoChange('billingAddress', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
+                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                                <Input label="City" value={formData.vendorInfo.billingCity} onChange={e => handleVendorInfoChange('billingCity', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
+                                                <Input label="State" value={formData.vendorInfo.billingState} onChange={e => handleVendorInfoChange('billingState', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
+                                                <Input label="Zip Code" value={formData.vendorInfo.billingZipCode} onChange={e => handleVendorInfoChange('billingZipCode', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
+                                            </div>
+                                        </div>
                                     )}
                                 </div>
                             </div>
