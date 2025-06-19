@@ -411,7 +411,7 @@ const SignaturePad = ({ onSave, initialDataUrl, disabled = false }) => {
 };
 
 
-const EmailModal = ({ order, onClose, allItems, onEmailClientOpened, appSettings, onOrderUpdatedAfterEmail }) => {
+const EmailModal = ({ order, onClose, allItems, onEmailClientOpened, appSettings, saveOrder, onOrderUpdatedAfterEmail }) => {
     const { useState, useEffect, useRef } = React;
     const fileInputRef = useRef(null);
     const [attachments, setAttachments] = useState([]); // Handles multiple attachments
@@ -625,9 +625,19 @@ ${fallbackYourCompanyName}`
                                 const result = await response.json();
                                 if (response.ok) {
                                     setEmailSent(true);
-                                    if (result.order && onOrderUpdatedAfterEmail) {
-                                        onOrderUpdatedAfterEmail(result.order);
+                                    
+                                    // New logic: After email sends, update the order status to 'Sent' and save it.
+                                    const newStatusHistory = [...order.statusHistory, { status: 'Sent', date: new Date().toISOString() }];
+                                    const updatedOrderForStatusChange = { ...order, status: 'Sent', statusHistory: newStatusHistory };
+
+                                    try {
+                                        // saveOrder is passed from App, it handles the API call and global state update.
+                                        await saveOrder(updatedOrderForStatusChange);
+                                    } catch (saveError) {
+                                        // If saving the status fails, the user should be notified.
+                                        alert(`Email was sent successfully, but there was an error updating the order status: ${saveError.message}`);
                                     }
+
                                     setTimeout(() => {
                                         if (onEmailClientOpened) {
                                             onEmailClientOpened();
@@ -1704,6 +1714,7 @@ const App = () => {
                     order={orderForEmailModal}
                     allItems={allSelectableItems}
                     appSettings={appSettings} // Pass appSettings
+                    saveOrder={saveOrder}
                     onClose={() => setOrderForEmailModal(null)}
                     onOrderUpdatedAfterEmail={handleOrderUpdate} // Pass the new handler
                     onEmailClientOpened={() => {

@@ -830,13 +830,17 @@ def send_order_email_route():
     to_email = data.get('recipientEmail')
     subject = data.get('subject')
     body = data.get('body')
-    custom_attachment_filenames = data.get('attachments', []) 
+    custom_attachment_filenames = data.get('attachments', [])
 
     if not all([order_data, to_email, subject, body]):
         return jsonify({"message": "Missing required email data."}), 400
 
-    from_email = os.environ.get('EMAIL_USER')
-    from_pass = os.environ.get('EMAIL_PASS')
+    settings = read_json_file(SETTINGS_FILE)
+    from_email = settings.get('email_address')
+    from_pass = settings.get('app_password')
+    email_cc = settings.get('email_cc')
+    email_bcc = settings.get('email_bcc')
+
     if not from_email or not from_pass:
         app.logger.error("Email credentials are not configured on the server.")
         return jsonify({"message": "Email service is not configured."}), 500
@@ -847,6 +851,10 @@ def send_order_email_route():
         msg = MIMEMultipart()
         msg['From'] = from_email
         msg['To'] = to_email
+        if email_cc:
+            msg['Cc'] = email_cc
+        if email_bcc:
+            msg['Bcc'] = email_bcc
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'plain'))
 
@@ -870,67 +878,22 @@ def send_order_email_route():
         server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
         server.ehlo()
         server.login(from_email, from_pass)
-        server.sendmail(from_email, to_email, msg.as_string())
+        
+        all_recipients = [to_email]
+        if email_cc:
+            all_recipients.extend([e.strip() for e in email_cc.split(',')])
+        if email_bcc:
+            all_recipients.extend([e.strip() for e in email_bcc.split(',')])
+            
+        server.sendmail(from_email, all_recipients, msg.as_string())
         server.close()
         
         app.logger.info(f"Email with {len(attachment_paths_to_delete)} attachment(s) sent for order {order_id_log}")
         
-        order_id_update, updated_order_resp = order_data.get('order_id'), None
-        if order_id_update:
-            conn_upd = get_db_connection()
-            cur_upd = conn_upd.cursor()
-            try:
-                utc_now_iso = datetime.now(timezone.utc).isoformat() + "Z"
-                cur_upd.execute("UPDATE orders SET status='Sent', updated_at=CURRENT_TIMESTAMP WHERE order_id=?", (order_id_update,))
-                cur_upd.execute("INSERT INTO order_status_history (order_id, status, status_date) VALUES (?, ?, ?)", (order_id_update, 'Sent', utc_now_iso))
-                conn_upd.commit()
-                app.logger.info(f"Order {order_id_update} status updated to Sent.")
-                
-                cur_upd.execute("SELECT o.*, v.company_name as vendor_company_name, v.contact_name as vendor_contact_name, v.email as vendor_email, v.phone as vendor_phone, v.billing_address as vendor_billing_address, v.billing_city as vendor_billing_city, v.billing_state as vendor_billing_state, v.billing_zip_code as vendor_billing_zip_code, v.shipping_address as vendor_shipping_address, v.shipping_city as vendor_shipping_city, v.shipping_state as vendor_shipping_state, v.shipping_zip_code as vendor_shipping_zip_code FROM orders o LEFT JOIN vendors v ON o.vendor_id=v.id WHERE o.order_id=?", (order_id_update,))
-                updated_row = cur_upd.fetchone()
-                if updated_row:
-                    updated_order_resp = dict(updated_row)
-                    updated_order_resp['vendorInfo'] = {
-                        "id": updated_order_resp.pop('vendor_id'),
-                        "companyName": updated_order_resp.pop('vendor_company_name') or "[Vendor Not Found]",
-                        "contactName": updated_order_resp.pop('vendor_contact_name'),
-                        "email": updated_order_resp.pop('vendor_email'),
-                        "phone": updated_order_resp.pop('phone'),
-                        "billingAddress": updated_order_resp.pop('billing_address'),
-                        "billingCity": updated_order_resp.pop('billing_city'),
-                        "billingState": updated_order_resp.pop('billing_state'),
-                        "billingZipCode": updated_order_resp.pop('billing_zip_code'),
-                        "shippingAddress": updated_order_resp.pop('shipping_address'),
-                        "shippingCity": updated_order_resp.pop('shipping_city'),
-                        "shippingState": updated_order_resp.pop('shipping_state'),
-                        "shippingZipCode": updated_order_resp.pop('shipping_zip_code')
-                    }
-                    if not updated_order_resp['vendorInfo']['id']:
-                        updated_order_resp['vendorInfo'] = {
-                            "id": None, "companyName": "[Vendor Not Found]", "contactName": "", "email": "", "phone": "",
-                            "billingAddress": "", "billingCity": "", "billingState": "", "billingZipCode": "",
-                            "shippingAddress": "", "shippingCity": "", "shippingState": "", "shippingZipCode": ""
-                        }
-                    
-                    cur_upd.execute("SELECT item_code, package_code, quantity, price_per_unit_cents, style_chosen, item_type FROM order_line_items WHERE order_id=?", (order_id_update,))
-                    updated_order_resp['lineItems'] = [{'item': li['item_code'], 'packageCode': li['package_code'], 'price': li['price_per_unit_cents'], 'quantity': li['quantity'], 'style': li['style_chosen'], 'type': li['item_type']} for li in cur_upd.fetchall()]
-                    cur_upd.execute("SELECT status, status_date FROM order_status_history WHERE order_id=? ORDER BY status_date ASC", (order_id_update,))
-                    updated_order_resp['statusHistory'] = [{'status': h['status'], 'date': h['status_date']} for h in cur_upd.fetchall()]
-                    updated_order_resp['date'] = updated_order_resp.pop('order_date')
-                    updated_order_resp['total'] = updated_order_resp.pop('total_amount')
-                    updated_order_resp['estimatedShipping'] = updated_order_resp.pop('estimated_shipping_cost')
-                    updated_order_resp['nameDrop'] = True if updated_order_resp.pop('name_drop', 0) == 1 else False
-                else:
-                    app.logger.warning(f"Order {order_id_update} status updated, but failed to re-fetch.")
-            except sqlite3.Error as e_upd:
-                conn_upd.rollback()
-                app.logger.error(f"DB error updating status for {order_id_update}: {e_upd}")
-            finally:
-                conn_upd.close()
-        else:
-            app.logger.warning("Order ID missing, cannot update status.")
+        # The responsibility of updating the order status is now moved to the frontend.
+        # The frontend will make a separate call to the save_order endpoint after this returns successfully.
         
-        return jsonify({"message": "Email sent.", "order": updated_order_resp} if updated_order_resp else {"message": "Email sent."}), 200
+        return jsonify({"message": "Email sent."}), 200
     except Exception as e:
         app.logger.error(f"Failed to send email for order {order_data.get('id', 'N/A')}: {e}")
         app.logger.error(traceback.format_exc())
@@ -972,6 +935,12 @@ def get_settings():
         if 'default_email_body' not in settings:
             settings['default_email_body'] = "Dear [vendorCompany],\n\nPlease find attached the purchase order [orderID] for your records.\n\nWe appreciate your business!\n\nThank you,\n[yourCompany]"
             updated = True
+        if 'email_cc' not in settings:
+            settings['email_cc'] = ""
+            updated = True
+        if 'email_bcc' not in settings:
+            settings['email_bcc'] = ""
+            updated = True
         if updated:
             write_json_file(SETTINGS_FILE, settings)
             
@@ -1004,48 +973,23 @@ def update_email_settings():
 
     email_address = email_settings_payload.get('email_address')
     app_password = email_settings_payload.get('app_password')
+    email_cc = email_settings_payload.get('email_cc', '')
+    email_bcc = email_settings_payload.get('email_bcc', '')
 
     if not email_address or not app_password:
         return jsonify({"message": "Email address and App Password are required."}), 400
 
-    # Read existing settings to update them
     existing_settings = read_json_file(SETTINGS_FILE)
     if not isinstance(existing_settings, dict):
         existing_settings = {}
 
-    # Update email-specific fields
     existing_settings['email_address'] = email_address
     existing_settings['app_password'] = app_password
+    existing_settings['email_cc'] = email_cc
+    existing_settings['email_bcc'] = email_bcc
     
-    # Update environment variables for immediate use by the email sending logic
-    os.environ['EMAIL_USER'] = email_address
-    os.environ['EMAIL_PASS'] = app_password
-
     write_json_file(SETTINGS_FILE, existing_settings)
     
-    # Also, update the .env file for persistence across server restarts
-    try:
-        env_file_path = '.env'
-        env_vars = {}
-        if os.path.exists(env_file_path):
-            with open(env_file_path, 'r') as f:
-                for line in f:
-                    if '=' in line:
-                        key, value = line.strip().split('=', 1)
-                        env_vars[key] = value
-        
-        env_vars['EMAIL_USER'] = email_address
-        env_vars['EMAIL_PASS'] = app_password
-        
-        with open(env_file_path, 'w') as f:
-            for key, value in env_vars.items():
-                f.write(f"{key}={value}\n")
-                
-    except Exception as e:
-        app.logger.error(f"Could not update .env file: {e}")
-        # This is not a critical failure, the app will use the settings.json for the current session
-        # but we should probably let the user know. For now, just log it.
-
     return jsonify({"message": "Email settings updated successfully."}), 200
 
 @app.route('/manage/customers')

@@ -33,7 +33,7 @@
                         <label for="defaultEmailBody">Default Email Body</label>
                         <textarea class="form-control" id="defaultEmailBody" name="defaultEmailBody" rows="5"></textarea>
                         <small class="form-text text-muted">
-                            Available placeholders: [customerName], [orderID]
+                            Available placeholders: [vendorCompany], [orderID], [yourCompany]
                         </small>
                     </div>
                     <button type="submit" class="btn btn-primary">Save General Settings</button>
@@ -54,6 +54,16 @@
                     <div class="form-group">
                         <label for="appPassword">App Password</label>
                         <input type="password" class="form-control" id="appPassword" name="appPassword">
+                    </div>
+                    <div class="form-group">
+                        <label for="emailCc">CC</label>
+                        <input type="email" class="form-control" id="emailCc" name="emailCc">
+                        <small class="form-text text-muted">Comma-separated list of emails to CC.</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="emailBcc">BCC</label>
+                        <input type="email" class="form-control" id="emailBcc" name="emailBcc">
+                        <small class="form-text text-muted">Comma-separated list of emails to BCC.</small>
                     </div>
                     <button type="submit" class="btn btn-primary">Save Email Settings</button>
                 </form>
@@ -106,6 +116,8 @@
                 $('#defaultEmailBody').val(data.default_email_body);
                 $('#emailAddress').val(data.email_address);
                 $('#appPassword').val(data.app_password);
+                $('#emailCc').val(data.email_cc);
+                $('#emailBcc').val(data.email_bcc);
             });
 
             // Handle general settings form submission
@@ -136,7 +148,9 @@
                 event.preventDefault();
                 const emailData = {
                     email_address: $('#emailAddress').val(),
-                    app_password: $('#appPassword').val()
+                    app_password: $('#appPassword').val(),
+                    email_cc: $('#emailCc').val(),
+                    email_bcc: $('#emailBcc').val()
                 };
                 $.ajax({
                     url: '/api/settings/email',
