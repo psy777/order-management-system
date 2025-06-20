@@ -1,0 +1,9 @@
+{
+    "company_name": "Your Company Name",
+    "default_shipping_zip_code": "00000",
+    "default_email_body": "Dear [vendorCompany],\n\nPlease find attached the purchase order [orderID] for your records.\n\nWe appreciate your business!\n\nThank you,\n[yourCompany]",
+    "email_address": "",
+    "app_password": "",
+    "email_cc": "",
+    "email_bcc": ""
+}

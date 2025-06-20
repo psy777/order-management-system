@@ -1,5 +1,0 @@
-Flask
-werkzeug
-reportlab
-python-dotenv
-PyInstaller

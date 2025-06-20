@@ -1,0 +1,19 @@
+- customer records, item records, and orders csv export
+- popups
+- email sent notification more obvious
+- integration with clerk
+
+
+
+DONE
+- pretty up settings
+- changed address schema
+- support for uploading items csv
+- made email sending modal scrollable
+- removed email sent successfully popup
+- added email server settings to settings
+- fix 'Send via Server' button not setting status to 'sent'
+
+
+
+
