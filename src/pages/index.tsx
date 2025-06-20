@@ -162,6 +162,9 @@ const App = () => {
             case 'createOrder': return <OrderForm navigateTo={navigateTo} saveOrder={saveOrder} deleteOrder={deleteOrder} allVendors={allVendors} allSelectableItems={allSelectableItems} itemData={itemData} packageData={packageData} fetchAndUpdateVendors={fetchAndUpdateVendors} setOrderForEmailModal={setOrderForEmailModal} />;
             case 'viewOrder': return <OrderForm order={activeOrder as OrderFormData} navigateTo={navigateTo} saveOrder={saveOrder} deleteOrder={deleteOrder} allVendors={allVendors} allSelectableItems={allSelectableItems} itemData={itemData} packageData={packageData} fetchAndUpdateVendors={fetchAndUpdateVendors} setOrderForEmailModal={setOrderForEmailModal} />;
             case 'settings': return <iframe src="/settings.html" style={{ width: '100%', height: 'calc(100vh - 100px)', border: 'none' }}></iframe>;
+            case 'manage-customers': return <iframe src="/manage_customers.html" style={{ width: '100%', height: 'calc(100vh - 100px)', border: 'none' }}></iframe>;
+            case 'manage-items': return <iframe src="/manage_items.html" style={{ width: '100%', height: 'calc(100vh - 100px)', border: 'none' }}></iframe>;
+            case 'manage-packages': return <iframe src="/manage_packages.html" style={{ width: '100%', height: 'calc(100vh - 100px)', border: 'none' }}></iframe>;
             case 'dashboard': default: return <Dashboard orders={orders} navigateTo={navigateTo} viewOrder={viewOrder} allVendors={allVendors} allSelectableItems={allSelectableItems} setOrderForEmailModal={setOrderForEmailModal} />;
         }
     }
@@ -226,6 +229,42 @@ const App = () => {
                             role="menuitem"
                         >
                             Settings
+                        </a>
+                        <a
+                            href="#"
+                            onClick={(e) => {
+                                e.preventDefault();
+                                navigateTo('manage-customers');
+                                setShowSettingsMenu(false);
+                            }}
+                            className="block px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 hover:text-slate-900"
+                            role="menuitem"
+                        >
+                            Manage Customers
+                        </a>
+                        <a
+                            href="#"
+                            onClick={(e) => {
+                                e.preventDefault();
+                                navigateTo('manage-items');
+                                setShowSettingsMenu(false);
+                            }}
+                            className="block px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 hover:text-slate-900"
+                            role="menuitem"
+                        >
+                            Manage Items
+                        </a>
+                        <a
+                            href="#"
+                            onClick={(e) => {
+                                e.preventDefault();
+                                navigateTo('manage-packages');
+                                setShowSettingsMenu(false);
+                            }}
+                            className="block px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 hover:text-slate-900"
+                            role="menuitem"
+                        >
+                            Manage Packages
                         </a>
                         <button
                             onClick={() => {

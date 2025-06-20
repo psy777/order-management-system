@@ -150,7 +150,7 @@ const postOrder = (req: NextApiRequest, res: NextApiResponse) => {
     return res.status(400).json({ status: "error", message: "Request must be JSON" });
   }
 
-  const processed_order_id = new_order_payload.get('id', 'NEW_ORDER_PENDING_ID');
+  const processed_order_id = new_order_payload.id || 'NEW_ORDER_PENDING_ID';
 
   const transaction = db.transaction(() => {
     const order_id_from_payload = new_order_payload.id;

@@ -6,7 +6,9 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "db:init": "node scripts/init-db.mjs",
+    "postinstall": "npm run db:init"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0",

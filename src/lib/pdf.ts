@@ -1,12 +1,11 @@
 import { jsPDF } from "jspdf";
-import "jspdf-autotable";
+import autoTable from "jspdf-autotable";
 
 declare module "jspdf" {
     interface jsPDF {
         lastAutoTable: {
             finalY: number;
         };
-        autoTable: (options: any) => jsPDF;
     }
 }
 
@@ -53,7 +52,7 @@ export const generatePdf = (order: any, allItems: any, action = 'save') => {
 
     const tableColumn = ["Item", "Style", "Quantity", "Unit Price", "Total"];
     const tableRows = lineItems.map((item: any) => [allItems[item.item]?.name || item.item, item.style, item.quantity, `$${(item.price / 100).toFixed(2)}`, `$${((item.quantity * item.price) / 100).toFixed(2)}`]);
-    doc.autoTable({ head: [tableColumn], body: tableRows, startY: tableStartY });
+    autoTable(doc, { head: [tableColumn], body: tableRows, startY: tableStartY });
 
     let calculatedSubtotal = 0;
     lineItems.forEach((item: any) => {
