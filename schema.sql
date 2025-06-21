@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS order_line_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     order_id TEXT NOT NULL,
     item_code TEXT NOT NULL,
-    package_code TEXT,
+    package_code INTEGER,
     quantity INTEGER NOT NULL,
     price_per_unit_cents INTEGER,
     style_chosen TEXT,
@@ -96,4 +96,15 @@ CREATE TABLE IF NOT EXISTS package_items (
     PRIMARY KEY (package_id, item_code),
     FOREIGN KEY (package_id) REFERENCES packages (package_id) ON DELETE CASCADE,
     FOREIGN KEY (item_code) REFERENCES items (item_code) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_name TEXT,
+    default_shipping_zip_code TEXT,
+    default_email_body TEXT,
+    email_address TEXT,
+    app_password TEXT,
+    email_cc TEXT,
+    email_bcc TEXT
 );
