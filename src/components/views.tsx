@@ -1,4 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/router';
 import { Card, Input, Select, Textarea, TrashIcon, DollarSignIcon, DocumentTextIcon, ChartBarIcon, ViewIcon, PdfIcon, EmailIcon, TrendingUpIcon, CogIcon } from './ui';
 import { PriceInput, ScentToggle, NameDropToggle, StatusBar } from './shared';
 import { SalesChart, SignaturePad, EmailModal, ShippedStatusBadge } from './features';
@@ -54,7 +56,7 @@ export interface OrderFormData {
 }
 
 // --- COMPONENTS ---
-export const Dashboard = ({ orders, navigateTo, viewOrder, allVendors, allSelectableItems, setOrderForEmailModal }: { orders: any[], navigateTo: (page: string) => void, viewOrder: (order: any) => void, allVendors: any[], allSelectableItems: any, setOrderForEmailModal: (order: any) => void }) => {
+export const Dashboard = ({ orders, viewOrder, allVendors, allSelectableItems, setOrderForEmailModal }: { orders: any[], viewOrder: (order: any) => void, allVendors: any[], allSelectableItems: any, setOrderForEmailModal: (order: any) => void }) => {
     const [filteredOrders, setFilteredOrders] = useState(orders);
     const [dashboardStats, setDashboardStats] = useState({ totalRevenue: 0, averageOrderRevenue: 0, totalOrders: 0 });
 
@@ -88,7 +90,7 @@ export const Dashboard = ({ orders, navigateTo, viewOrder, allVendors, allSelect
             <div className="flex justify-between items-center mb-6">
                 <h1 className="text-3xl font-bold text-slate-800">Dashboard</h1>
                 <div className="flex space-x-2">
-                    <button onClick={() => navigateTo('createOrder')} className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors shadow">+ Create New Order</button>
+                    <Link href="/create-order" className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors shadow">+ Create New Order</Link>
                 </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
@@ -113,7 +115,7 @@ export const Dashboard = ({ orders, navigateTo, viewOrder, allVendors, allSelect
                                 }`}>{order.status}</span>
                             )}
                         </td>
-                        <td className="px-4 py-3 text-center"><div className="flex items-center justify-center space-x-2"><button onClick={() => viewOrder(order)} className="p-1 text-slate-500 hover:text-orange-600"><ViewIcon /></button><button onClick={() => generatePdf(order, allSelectableItems, 'preview')} className="p-1 text-slate-500 hover:text-orange-600"><PdfIcon /></button><button onClick={() => setOrderForEmailModal(order)} className="p-1 text-slate-500 hover:text-orange-600"><EmailIcon /></button></div></td>
+                        <td className="px-4 py-3 text-center"><div className="flex items-center justify-center space-x-2"><Link href={`/orders/${order.id}`} className="p-1 text-slate-500 hover:text-orange-600"><ViewIcon /></Link><button onClick={() => generatePdf(order, allSelectableItems, 'preview')} className="p-1 text-slate-500 hover:text-orange-600"><PdfIcon /></button><button onClick={() => setOrderForEmailModal(order)} className="p-1 text-slate-500 hover:text-orange-600"><EmailIcon /></button></div></td>
                     </tr>))}</tbody>
                 </table></div>
             </div>
@@ -137,7 +139,7 @@ export const UnsavedChangesModal = ({ onCancel, onDelete, onSaveAndClose }: { on
     );
 };
 
-export const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allVendors, allSelectableItems, itemData, packageData, fetchAndUpdateVendors, setOrderForEmailModal }: { order?: OrderFormData, navigateTo: (page: string) => void, saveOrder: (order: any) => Promise<void>, deleteOrder: (orderId: string, deletePayload: any) => Promise<void>, allVendors: any[], allSelectableItems: any, itemData: any, packageData: any, fetchAndUpdateVendors: () => Promise<void>, setOrderForEmailModal: (order: any) => void }) => {
+export const OrderForm = ({ order, saveOrder, deleteOrder, allVendors, allSelectableItems, itemData, packageData, fetchAndUpdateVendors, setOrderForEmailModal }: { order?: OrderFormData, saveOrder: (order: any) => Promise<void>, deleteOrder: (orderId: string, deletePayload: any) => Promise<void>, allVendors: any[], allSelectableItems: any, itemData: any, packageData: any, fetchAndUpdateVendors: () => Promise<void>, setOrderForEmailModal: (order: any) => void }) => {
     const [isEditing, setIsEditing] = useState(!order || order.status === 'Draft');
     const [formData, setFormData] = useState<OrderFormData>(order ? {...order, estimatedShipping: order.estimatedShipping || '', scentOption: order.scentOption || 'Scented'} : { vendorInfo: { companyName: '', contactName: '', email: '', phone: '', billingAddress: '', billingCity: '', billingState: '', billingZipCode: '', shippingAddress: '', shippingCity: '', shippingState: '', shippingZipCode: '' }, lineItems: [], notes: "", estimatedShippingDate: '', estimatedShipping: '', scentOption: 'Scented', nameDrop: false, signatureDataUrl: null, statusHistory: [{ status: 'Draft', date: new Date().toISOString() }], status: 'Draft' });
     const [vendorSuggestions, setVendorSuggestions] = useState<any[]>([]);
@@ -151,13 +153,15 @@ export const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allVendor
     const [isVendorInputActive, setIsVendorInputActive] = useState(false);
     const hideSuggestionsTimeoutRef = useRef<any>(null);
 
+    const router = useRouter();
+
     const handleReturnToDashboard = () => {
         const isNewUnsavedDraft = !order && (formData.lineItems.length > 0 || (formData.vendorInfo && formData.vendorInfo.companyName));
 
         if (isNewUnsavedDraft) {
             setShowUnsavedChangesModal(true);
         } else {
-            navigateTo('dashboard');
+            router.push('/');
         }
     };
 
@@ -461,7 +465,7 @@ export const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allVendor
         const newOrder = createOrderObject('Draft');
         try {
             await saveOrder(newOrder);
-            navigateTo('dashboard');
+            router.push('/');
         } catch (error: any) {
             console.log(`Failed to save draft: ${error.message}`);
         }
@@ -485,7 +489,7 @@ export const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allVendor
     const handleOrderSent = async (updatedOrder: any) => {
         await saveOrder(updatedOrder);
         setOrderForEmailModal(null);
-        navigateTo('dashboard');
+        router.push('/');
     };
 
     const handlePreviewPdf = () => { const tempOrder = createOrderObject(); generatePdf(tempOrder, allSelectableItems, 'preview'); };
@@ -541,7 +545,7 @@ export const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allVendor
         
         try {
             await deleteOrder(orderId, deletePayload);
-            navigateTo('dashboard');
+            router.push('/');
         } catch (error: any) {
             console.error("Error during delete operation:", error);
             console.log(`Failed to delete order: ${error.message || 'Unknown error'}`);
@@ -636,7 +640,7 @@ export const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allVendor
                     onCancel={() => setShowUnsavedChangesModal(false)}
                     onDelete={() => {
                         setShowUnsavedChangesModal(false);
-                        navigateTo('dashboard');
+                        router.push('/');
                     }}
                     onSaveAndClose={() => {
                         setShowUnsavedChangesModal(false);

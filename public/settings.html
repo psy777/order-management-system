@@ -4,109 +4,74 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Settings - Order Manager</title>
-    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
-    <link rel="stylesheet" href="/assets/css/styles.css">
+    <script src="https://cdn.tailwindcss.com"></script>
     <link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png">
     <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32x32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon-16x16.png">
     <link rel="manifest" href="/assets/site.webmanifest">
 </head>
-<body>
-    <div class="container mt-4">
-        <a href="/" target="_top" class="back-to-dashboard-button">&larr; Back to Dashboard</a>
-        <h1>Settings</h1>
-        <hr>
-
-        <h2>General Settings</h2>
-        <div class="card">
-            <div class="card-body">
-                <form id="generalSettingsForm">
-                    <div class="form-group">
-                        <label for="companyName">Company Name</label>
-                        <input type="text" class="form-control" id="companyName" name="companyName">
+<body class="bg-slate-50 font-sans">
+    <div class="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
+        <h1 class="text-3xl font-bold text-slate-800">Settings</h1>
+        <div class="mt-6 space-y-8">
+            <div class="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
+                <h2 class="text-xl font-semibold text-slate-700 border-b border-slate-200 pb-3 mb-4">General Settings</h2>
+                <form id="generalSettingsForm" class="space-y-4">
+                    <div>
+                        <label for="companyName" class="block text-sm font-medium text-slate-600">Company Name</label>
+                        <input type="text" id="companyName" name="companyName" class="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm">
                     </div>
-                    <div class="form-group">
-                        <label for="shippingZipCode">Default Shipping Zip Code</label>
-                        <input type="text" class="form-control" id="shippingZipCode" name="shippingZipCode">
+                    <div>
+                        <label for="shippingZipCode" class="block text-sm font-medium text-slate-600">Default Shipping Zip Code</label>
+                        <input type="text" id="shippingZipCode" name="shippingZipCode" class="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm">
                     </div>
-                    <div class="form-group">
-                        <label for="defaultEmailBody">Default Email Body</label>
-                        <textarea class="form-control" id="defaultEmailBody" name="defaultEmailBody" rows="5"></textarea>
-                        <small class="form-text text-muted">
-                            Available placeholders: [vendorCompany], [orderID], [yourCompany]
-                        </small>
+                    <div>
+                        <label for="defaultEmailBody" class="block text-sm font-medium text-slate-600">Default Email Body</label>
+                        <textarea id="defaultEmailBody" name="defaultEmailBody" rows="5" class="mt-1 block w-full text-sm px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500"></textarea>
+                        <p class="mt-2 text-xs text-slate-500">
+                            Available placeholders: [customerName], [vendorCompanyName], [orderID], [yourCompany]
+                        </p>
                     </div>
-                    <button type="submit" class="btn btn-primary">Save General Settings</button>
+                    <div class="pt-2">
+                        <button type="submit" class="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors shadow">Save General Settings</button>
+                    </div>
                 </form>
             </div>
-        </div>
 
-        <hr class="mt-5">
-
-        <h2>Email Server Settings</h2>
-        <div class="card">
-            <div class="card-body">
-                <form id="emailSettingsForm">
-                    <div class="form-group">
-                        <label for="emailAddress">Email Address</label>
-                        <input type="email" class="form-control" id="emailAddress" name="emailAddress">
+            <div class="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
+                <h2 class="text-xl font-semibold text-slate-700 border-b border-slate-200 pb-3 mb-4">Email Server Settings</h2>
+                <form id="emailSettingsForm" class="space-y-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label for="emailAddress" class="block text-sm font-medium text-slate-600">Email Address</label>
+                            <input type="email" id="emailAddress" name="emailAddress" class="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm">
+                        </div>
+                        <div>
+                            <label for="appPassword" class="block text-sm font-medium text-slate-600">App Password</label>
+                            <input type="password" id="appPassword" name="appPassword" class="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm">
+                        </div>
                     </div>
-                    <div class="form-group">
-                        <label for="appPassword">App Password</label>
-                        <input type="password" class="form-control" id="appPassword" name="appPassword">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label for="emailCc" class="block text-sm font-medium text-slate-600">CC</label>
+                            <input type="email" id="emailCc" name="emailCc" class="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm">
+                            <small class="text-xs text-slate-500">Comma-separated list of emails to CC.</small>
+                        </div>
+                        <div>
+                            <label for="emailBcc" class="block text-sm font-medium text-slate-600">BCC</label>
+                            <input type="email" id="emailBcc" name="emailBcc" class="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm">
+                            <small class="text-xs text-slate-500">Comma-separated list of emails to BCC.</small>
+                        </div>
                     </div>
-                    <div class="form-group">
-                        <label for="emailCc">CC</label>
-                        <input type="email" class="form-control" id="emailCc" name="emailCc">
-                        <small class="form-text text-muted">Comma-separated list of emails to CC.</small>
+                    <div class="pt-2">
+                         <button type="submit" class="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors shadow">Save Email Settings</button>
                     </div>
-                    <div class="form-group">
-                        <label for="emailBcc">BCC</label>
-                        <input type="email" class="form-control" id="emailBcc" name="emailBcc">
-                        <small class="form-text text-muted">Comma-separated list of emails to BCC.</small>
-                    </div>
-                    <button type="submit" class="btn btn-primary">Save Email Settings</button>
                 </form>
-            </div>
-        </div>
-
-        <hr class="mt-5">
-
-        <h2>Data Management</h2>
-        <div class="row">
-            <div class="col-md-4">
-                <div class="card">
-                    <div class="card-body">
-                        <h5 class="card-title">Customer Records</h5>
-                        <p class="card-text">View and manage customer information.</p>
-                        <button class="btn btn-secondary" id="manageCustomers">Manage Customers</button>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-4">
-                <div class="card">
-                    <div class="card-body">
-                        <h5 class="card-title">Item Records</h5>
-                        <p class="card-text">View and manage item details.</p>
-                        <button class="btn btn-secondary" id="manageItems">Manage Items</button>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-4">
-                <div class="card">
-                    <div class="card-body">
-                        <h5 class="card-title">Package Records</h5>
-                        <p class="card-text">View and manage package information.</p>
-                        <button class="btn btn-secondary" id="managePackages">Manage Packages</button>
-                    </div>
-                </div>
             </div>
         </div>
     </div>
 
     <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.5.4/dist/umd/popper.min.js"></script>
-    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
     <script>
         $(document).ready(function() {
             // Load existing settings
@@ -126,20 +91,13 @@
                 const settingsData = {
                     company_name: $('#companyName').val(),
                     default_shipping_zip_code: $('#shippingZipCode').val(),
-                    default_email_body: $('#defaultEmailBody').val()
+                    default_email_body: $('#defaultEmailBody').val().replace(/\[vendorCompany\]/g, '[vendorCompanyName]') // Legacy placeholder correction
                 };
                 $.ajax({
-                    url: '/api/settings',
-                    type: 'POST',
-                    contentType: 'application/json',
+                    url: '/api/settings', type: 'POST', contentType: 'application/json',
                     data: JSON.stringify(settingsData),
-                    success: function(response) {
-                        alert('Settings saved successfully!');
-                    },
-                    error: function(error) {
-                        alert('Error saving settings.');
-                        console.error(error);
-                    }
+                    success: function() { alert('General settings saved successfully!'); },
+                    error: function() { alert('Error saving general settings.'); }
                 });
             });
 
@@ -147,37 +105,15 @@
             $('#emailSettingsForm').on('submit', function(event) {
                 event.preventDefault();
                 const emailData = {
-                    email_address: $('#emailAddress').val(),
-                    app_password: $('#appPassword').val(),
-                    email_cc: $('#emailCc').val(),
-                    email_bcc: $('#emailBcc').val()
+                    email_address: $('#emailAddress').val(), app_password: $('#appPassword').val(),
+                    email_cc: $('#emailCc').val(), email_bcc: $('#emailBcc').val()
                 };
                 $.ajax({
-                    url: '/api/settings/email',
-                    type: 'POST',
-                    contentType: 'application/json',
+                    url: '/api/settings/email', type: 'POST', contentType: 'application/json',
                     data: JSON.stringify(emailData),
-                    success: function(response) {
-                        alert('Email settings saved successfully!');
-                    },
-                    error: function(error) {
-                        alert('Error saving email settings.');
-                        console.error(error);
-                    }
+                    success: function() { alert('Email settings saved successfully!'); },
+                    error: function() { alert('Error saving email settings.'); }
                 });
-            });
-
-            // Redirect to dedicated management pages
-            $('#manageCustomers').on('click', function() {
-                window.location.href = '/manage/customers';
-            });
-
-            $('#manageItems').on('click', function() {
-                window.location.href = '/manage/items';
-            });
-
-            $('#managePackages').on('click', function() {
-                window.location.href = '/manage/packages';
             });
         });
     </script>

@@ -196,8 +196,6 @@ const generatePdf = (order, allItems, action = 'save') => {
         // If only Scent Option was printed, and then we moved to notes, finalY should be where Scent Option was.
         // However, the new logic places shipping cost before total, so this specific adjustment might need review.
         // Let's simplify: finalY is now the Y after Total. The lines after Total start from there.
-        // The `finalY = currentLineY - 5;` was for the block that printed date/shipping *after* total.
-        // Now that block is split, we need to ensure `finalY` correctly reflects the Y position *after* the Total.
         // The `finalY += 10;` after Total already correctly sets up for Scent Option.
         // The `currentLineY` logic for Est. Ship Date is fine as it starts from `finalY` (which is after Scent Option).
     }
@@ -817,6 +815,164 @@ const UnsavedChangesModal = ({ onCancel, onDelete, onSaveAndClose }) => {
                 </div>
             </div>
         </div>
+    );
+};
+
+const Settings = ({ navigateTo, appSettings, setAppSettings }) => {
+    const { useState, useEffect } = React;
+    const [generalSettings, setGeneralSettings] = useState({
+        company_name: '',
+        default_shipping_zip_code: '',
+        default_email_body: ''
+    });
+    const [emailSettings, setEmailSettings] = useState({
+        email_address: '',
+        app_password: '',
+        email_cc: '',
+        email_bcc: ''
+    });
+    const [isLoading, setIsLoading] = useState(true);
+
+    useEffect(() => {
+        // Fetch existing settings when the component mounts
+        const fetchSettings = async () => {
+            setIsLoading(true);
+            try {
+                const response = await fetch('/api/settings');
+                const data = await response.json();
+                setGeneralSettings({
+                    company_name: data.company_name || '',
+                    default_shipping_zip_code: data.default_shipping_zip_code || '',
+                    default_email_body: data.default_email_body || ''
+                });
+                setEmailSettings({
+                    email_address: data.email_address || '',
+                    app_password: data.app_password || '',
+                    email_cc: data.email_cc || '',
+                    email_bcc: data.email_bcc || ''
+                });
+            } catch (error) {
+                console.error("Failed to fetch settings:", error);
+                alert('Error loading settings.');
+            } finally {
+                setIsLoading(false);
+            }
+        };
+        fetchSettings();
+    }, []);
+
+    const handleGeneralSettingsChange = (e) => {
+        const { name, value } = e.target;
+        setGeneralSettings(prev => ({ ...prev, [name]: value }));
+    };
+
+    const handleEmailSettingsChange = (e) => {
+        const { name, value } = e.target;
+        setEmailSettings(prev => ({ ...prev, [name]: value }));
+    };
+
+    const handleGeneralSettingsSubmit = async (e) => {
+        e.preventDefault();
+        try {
+            const response = await fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(generalSettings)
+            });
+            if (!response.ok) throw new Error('Server responded with an error.');
+            const updatedSettings = await response.json();
+            setAppSettings(prev => ({...prev, ...updatedSettings})); // Update global app settings
+            alert('General settings saved successfully!');
+        } catch (error) {
+            console.error('Error saving general settings:', error);
+            alert('Error saving general settings.');
+        }
+    };
+
+    const handleEmailSettingsSubmit = async (e) => {
+        e.preventDefault();
+        try {
+            const response = await fetch('/api/settings/email', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(emailSettings)
+            });
+            if (!response.ok) throw new Error('Server responded with an error.');
+            alert('Email settings saved successfully!');
+        } catch (error) {
+            console.error('Error saving email settings:', error);
+            alert('Error saving email settings.');
+        }
+    };
+
+    if (isLoading) {
+        return <div className="text-center p-8">Loading Settings...</div>;
+    }
+
+    return (
+        <>
+            <div className="mb-6">
+                <button onClick={() => navigateTo('dashboard')} className="text-orange-600 hover:text-orange-800 font-semibold">&larr; Back to Dashboard</button>
+                <h1 className="text-3xl font-bold text-slate-800 mt-2">Settings</h1>
+            </div>
+
+            <div className="mt-6 space-y-8">
+                <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
+                    <h2 className="text-xl font-semibold text-slate-700 border-b border-slate-200 pb-3 mb-4">General Settings</h2>
+                    <form onSubmit={handleGeneralSettingsSubmit} className="space-y-4">
+                        <div>
+                            <label htmlFor="companyName" className="block text-sm font-medium text-slate-600">Company Name</label>
+                            <input type="text" id="companyName" name="company_name" value={generalSettings.company_name} onChange={handleGeneralSettingsChange} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm" />
+                        </div>
+                        <div>
+                            <label htmlFor="shippingZipCode" className="block text-sm font-medium text-slate-600">Default Shipping Zip Code</label>
+                            <input type="text" id="shippingZipCode" name="default_shipping_zip_code" value={generalSettings.default_shipping_zip_code} onChange={handleGeneralSettingsChange} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm" />
+                        </div>
+                        <div>
+                            <label htmlFor="defaultEmailBody" className="block text-sm font-medium text-slate-600">Default Email Body</label>
+                            <textarea id="defaultEmailBody" name="default_email_body" value={generalSettings.default_email_body} onChange={handleGeneralSettingsChange} rows="5" className="mt-1 block w-full text-sm px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500"></textarea>
+                            <p className="mt-2 text-xs text-slate-500">
+                                Available placeholders: [customerName], [vendorCompanyName], [orderID], [yourCompany]
+                            </p>
+                        </div>
+                        <div className="pt-2">
+                            <button type="submit" className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors shadow">Save General Settings</button>
+                        </div>
+                    </form>
+                </div>
+
+                <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
+                    <h2 className="text-xl font-semibold text-slate-700 border-b border-slate-200 pb-3 mb-4">Email Server Settings</h2>
+                    <form onSubmit={handleEmailSettingsSubmit} className="space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label htmlFor="emailAddress" className="block text-sm font-medium text-slate-600">Email Address</label>
+                                <input type="email" id="emailAddress" name="email_address" value={emailSettings.email_address} onChange={handleEmailSettingsChange} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm" />
+                            </div>
+                            <div>
+                                <label htmlFor="appPassword" className="block text-sm font-medium text-slate-600">App Password</label>
+                                <input type="password" id="appPassword" name="app_password" value={emailSettings.app_password} onChange={handleEmailSettingsChange} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm" />
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label htmlFor="emailCc" className="block text-sm font-medium text-slate-600">CC</label>
+                                <input type="email" id="emailCc" name="email_cc" value={emailSettings.email_cc} onChange={handleEmailSettingsChange} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm" />
+                                <small className="text-xs text-slate-500">Comma-separated list of emails to CC.</small>
+                            </div>
+                            <div>
+                                <label htmlFor="emailBcc" className="block text-sm font-medium text-slate-600">BCC</label>
+                                <input type="email" id="emailBcc" name="email_bcc" value={emailSettings.email_bcc} onChange={handleEmailSettingsChange} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm" />
+                                <small className="text-xs text-slate-500">Comma-separated list of emails to BCC.</small>
+                            </div>
+                        </div>
+                        <div className="pt-2">
+                             <button type="submit" className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors shadow">Save Email Settings</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </>
     );
 };
 
@@ -1684,7 +1840,7 @@ const App = () => {
         switch(page) {
             case 'createOrder': return <OrderForm navigateTo={navigateTo} saveOrder={saveOrder} allVendors={allVendors} allSelectableItems={allSelectableItems} itemData={itemData} packageData={packageData} fetchAndUpdateVendors={fetchAndUpdateVendors} setOrderForEmailModal={setOrderForEmailModal} />;
             case 'viewOrder': return <OrderForm order={activeOrder} navigateTo={navigateTo} saveOrder={saveOrder} deleteOrder={deleteOrder} allVendors={allVendors} allSelectableItems={allSelectableItems} itemData={itemData} packageData={packageData} fetchAndUpdateVendors={fetchAndUpdateVendors} setOrderForEmailModal={setOrderForEmailModal} />;
-            case 'settings': return <iframe src="/settings" style={{ width: '100%', height: 'calc(100vh - 100px)', border: 'none' }}></iframe>;
+            case 'settings': return <Settings navigateTo={navigateTo} appSettings={appSettings} setAppSettings={setAppSettings} />;
             case 'dashboard': default: return <Dashboard orders={orders} navigateTo={navigateTo} viewOrder={viewOrder} allVendors={allVendors} allSelectableItems={allSelectableItems} setOrderForEmailModal={setOrderForEmailModal} />;
         }
     }
