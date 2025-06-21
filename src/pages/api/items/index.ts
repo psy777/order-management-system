@@ -51,12 +51,7 @@ const postItem = (req: NextApiRequest, res: NextApiResponse) => {
         return res.status(409).json({ message: `Item ${item_code} exists.` });
     }
 
-    let price_cents;
-    try {
-        price_cents = Math.round(parseFloat(price || 0.0) * 100);
-    } catch (e) {
-        return res.status(400).json({ message: "Invalid price." });
-    }
+    const price_cents = price;
 
     const transaction = db.transaction(() => {
         const insertItemStmt = db.prepare("INSERT INTO items (item_code, name, type, price_cents, weight_oz) VALUES (?, ?, ?, ?, ?)");

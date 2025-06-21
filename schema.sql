@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS items (
     item_code TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     type TEXT,
-    price_cents INTEGER,
+    price REAL,
     weight_oz REAL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS order_line_items (
     item_code TEXT NOT NULL,
     package_code INTEGER,
     quantity INTEGER NOT NULL,
-    price_per_unit_cents INTEGER,
+    price_per_unit REAL,
     style_chosen TEXT,
     item_type TEXT,
     FOREIGN KEY (order_id) REFERENCES orders (order_id) ON DELETE CASCADE,

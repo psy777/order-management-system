@@ -23,14 +23,7 @@ const updateItem = (req: NextApiRequest, res: NextApiResponse) => {
         }
     }
 
-    let price_cents = null;
-    if (price !== undefined) {
-        try {
-            price_cents = Math.round(parseFloat(price) * 100);
-        } catch (e) {
-            return res.status(400).json({ message: "Invalid price." });
-        }
-    }
+    const price_cents = price;
 
     const transaction = db.transaction(() => {
         let current_code_for_styles = item_code_url as string;
@@ -62,7 +55,7 @@ const updateItem = (req: NextApiRequest, res: NextApiResponse) => {
             const vals: any[] = [];
             if (name !== undefined) { updates.push("name = ?"); vals.push(name); }
             if (type !== undefined) { updates.push("type = ?"); vals.push(type); }
-            if (price_cents !== null) { updates.push("price_cents = ?"); vals.push(price_cents); }
+            if (price_cents !== undefined) { updates.push("price_cents = ?"); vals.push(price_cents); }
             if ('weight_oz' in payload) { updates.push("weight_oz = ?"); vals.push(weight_oz === "" ? null : weight_oz); }
 
             if (updates.length > 0) {
