@@ -183,54 +183,23 @@ export const SignaturePad = ({ onSave, initialDataUrl, disabled = false }: { onS
     );
 };
 
-export const EmailModal = ({ order, onClose, allItems, onEmailClientOpened, appSettings, saveOrder, onOrderUpdatedAfterEmail }: { order: any, onClose: () => void, allItems: any, onEmailClientOpened: () => void, appSettings: any, saveOrder: (order: any) => Promise<void>, onOrderUpdatedAfterEmail: (order: any) => void }) => {
+export const EmailModal = ({ order, onClose, allItems, onOrderSent, appSettings }: { order: any, onClose: () => void, allItems: any, onOrderSent: (order: any) => void, appSettings: any }) => {
     const fileInputRef = useRef<HTMLInputElement>(null);
-    const [attachments, setAttachments] = useState<{ original: string, unique: string, isMatch: boolean }[]>([]);
+    const [attachments, setAttachments] = useState<File[]>([]);
     const [isSending, setIsSending] = useState(false);
     const [emailSent, setEmailSent] = useState(false);
-    const [isUploading, setIsUploading] = useState(false);
     const [editableBody, setEditableBody] = useState('');
 
     const hiddenFileInputStyle: React.CSSProperties = { display: 'none' };
 
-    const handleFileSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const handleFileSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
         const files = Array.from(event.target.files || []);
-        if (files.length === 0) return;
-
-        setIsUploading(true);
-        const uploadPromises = files.map(file => {
-            const formData = new FormData();
-            formData.append('file', file);
-            return fetch('/api/upload-attachment', {
-                method: 'POST',
-                body: formData,
-            }).then(response => response.json());
-        });
-
-        try {
-            const results = await Promise.all(uploadPromises);
-            const newAttachments = results.map((result, index) => {
-                if (result.status === 'success') {
-                    const expectedPoName = `PO_${order.id}.pdf`;
-                    return {
-                        original: result.originalFilename,
-                        unique: result.uniqueFilename,
-                        isMatch: result.originalFilename === expectedPoName,
-                    };
-                } else {
-                    alert(`Failed to upload ${files[index].name}: ${result.message}`);
-                    return null;
-                }
-            }).filter((item): item is { original: string, unique: string, isMatch: boolean } => item !== null);
-
-            setAttachments(prev => [...prev, ...newAttachments]);
-        } catch (error: any) {
-            alert(`Error during file upload: ${error.message}`);
-        } finally {
-            setIsUploading(false);
-            if(fileInputRef.current) {
-                fileInputRef.current.value = "";
-            }
+        if (files.length > 0) {
+            setAttachments(prev => [...prev, ...files]);
+        }
+        // Reset file input so the same file can be selected again
+        if (fileInputRef.current) {
+            fileInputRef.current.value = "";
         }
     };
 
@@ -315,29 +284,33 @@ ${fallbackYourCompanyName}`
                         />
                         <button
                             onClick={() => fileInputRef.current && fileInputRef.current.click()}
-                            className={`w-full flex items-center justify-center bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold px-4 py-3 rounded-md shadow-sm transition-colors text-sm ${isUploading ? 'opacity-50 cursor-not-allowed' : ''}`}
-                            disabled={isUploading}
+                            className={`w-full flex items-center justify-center bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold px-4 py-3 rounded-md shadow-sm transition-colors text-sm ${isSending ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            disabled={isSending}
                         >
                             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
                                 <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clipRule="evenodd" />
                             </svg>
-                            {isUploading ? 'Uploading...' : 'Upload Attachments'}
+                            {isSending ? 'Processing...' : 'Upload Attachments'}
                         </button>
                         {attachments.length > 0 && (
                             <div className="mt-3 space-y-2">
                                 <p className="text-sm font-medium text-slate-700">Attached Files:</p>
                                 <ul className="list-disc list-inside bg-slate-50 p-3 rounded-md border border-slate-200">
-                                    {attachments.map((att, index) => (
-                                        <li key={index} className="text-xs flex justify-between items-center">
-                                            <span className={att.isMatch ? 'text-green-600 font-semibold' : 'text-slate-600'}>
-                                                {att.original}
-                                                {att.isMatch && <span className="ml-1">✔ Matches Order</span>}
-                                            </span>
-                                            <button onClick={() => setAttachments(attachments.filter((_, i) => i !== index))} className="text-red-500 hover:text-red-700 p-1">
-                                                <TrashIcon />
-                                            </button>
-                                        </li>
-                                    ))}
+                                    {attachments.map((file, index) => {
+                                        const expectedPoName = `PO_${order.id}.pdf`;
+                                        const isMatch = file.name === expectedPoName;
+                                        return (
+                                            <li key={index} className="text-xs flex justify-between items-center">
+                                                <span className={isMatch ? 'text-green-600 font-semibold' : 'text-slate-600'}>
+                                                    {file.name}
+                                                    {isMatch && <span className="ml-1">✔ Matches Order</span>}
+                                                </span>
+                                                <button onClick={() => setAttachments(attachments.filter((_, i) => i !== index))} className="text-red-500 hover:text-red-700 p-1">
+                                                    <TrashIcon />
+                                                </button>
+                                            </li>
+                                        );
+                                    })}
                                 </ul>
                             </div>
                         )}
@@ -352,9 +325,9 @@ ${fallbackYourCompanyName}`
                     </button>
                     <button
                         onClick={async () => {
-                            if (isSending || isUploading) return;
+                            if (isSending) return;
 
-                            const hasMismatchedPo = attachments.some(att => !att.isMatch);
+                            const hasMismatchedPo = attachments.some(file => file.name !== `PO_${order.id}.pdf`);
                             if (attachments.length === 0) {
                                 if (!window.confirm("No files are attached. Send email without attachments?")) return;
                             } else if (hasMismatchedPo) {
@@ -363,37 +336,33 @@ ${fallbackYourCompanyName}`
                             }
                             
                             setIsSending(true);
-                            const emailPayload = {
-                                order: order,
-                                recipientEmail: order.vendorInfo.email,
-                                subject: subjectText,
-                                body: editableBody,
-                                attachments: attachments.map(a => ({ original: a.original, unique: a.unique })),
-                            };
+                            
+                            const formData = new FormData();
+                            formData.append('order', JSON.stringify(order));
+                            formData.append('recipientEmail', order.vendorInfo.email);
+                            formData.append('subject', subjectText);
+                            formData.append('body', editableBody);
+                            attachments.forEach(file => {
+                                formData.append('attachments', file);
+                            });
 
                             try {
                                 const response = await fetch('/api/send-order-email', {
                                     method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify(emailPayload)
+                                    body: formData,
                                 });
+                                
                                 const result = await response.json();
                                 if (response.ok) {
                                     setEmailSent(true);
                                     
                                     const newStatusHistory = [...order.statusHistory, { status: 'Sent', date: new Date().toISOString() }];
                                     const updatedOrderForStatusChange = { ...order, status: 'Sent', statusHistory: newStatusHistory };
-
-                                    try {
-                                        await saveOrder(updatedOrderForStatusChange);
-                                    } catch (saveError: any) {
-                                        alert(`Email was sent successfully, but there was an error updating the order status: ${saveError.message}`);
-                                    }
+                                    
+                                    onOrderSent(updatedOrderForStatusChange);
 
                                     setTimeout(() => {
-                                        if (onEmailClientOpened) {
-                                            onEmailClientOpened();
-                                        }
+                                        onClose();
                                     }, 1000);
                                 } else {
                                     alert(`Failed to send email: ${result.message || 'Server error'}`);
@@ -404,8 +373,8 @@ ${fallbackYourCompanyName}`
                                 setIsSending(false);
                             }
                         }}
-                        className={`px-6 py-2 bg-green-600 text-white font-semibold rounded-md hover:bg-green-700 transition-colors ${isSending || isUploading || emailSent ? 'opacity-50 cursor-not-allowed' : ''}`}
-                        disabled={isSending || isUploading || emailSent}
+                        className={`px-6 py-2 bg-green-600 text-white font-semibold rounded-md hover:bg-green-700 transition-colors ${isSending || emailSent ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        disabled={isSending || emailSent}
                     >
                         {emailSent ? 'Sent!' : isSending ? 'Sending...' : 'Send via Server'}
                     </button>

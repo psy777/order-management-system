@@ -161,7 +161,7 @@ const postOrder = (req: NextApiRequest, res: NextApiResponse) => {
       existing_order_row = stmt.get(order_id_from_payload) as { status: string; vendor_id: string | null } | undefined;
     }
 
-    let current_order_id_for_db_ops = order_id_from_payload && existing_order_row ? order_id_from_payload : null;
+    let current_order_id_for_db_ops = order_id_from_payload;
     
     const is_attempting_delete = new_order_payload.status === "Deleted";
 
@@ -210,15 +210,18 @@ const postOrder = (req: NextApiRequest, res: NextApiResponse) => {
     const final_total_dollars = parseFloat(((subtotal_cents + name_drop_surcharge_cents + estimated_shipping_cents) / 100.0).toFixed(2));
     new_order_payload.total = final_total_dollars;
 
-    if (current_order_id_for_db_ops) {
+    if (existing_order_row) {
+      // This is an UPDATE
       const updateStmt = db.prepare("UPDATE orders SET vendor_id=?, order_date=?, status=?, notes=?, estimated_shipping_date=?, shipping_address=?, shipping_city=?, shipping_state=?, shipping_zip_code=?, estimated_shipping_cost=?, scent_option=?, name_drop=?, signature_data_url=?, total_amount=?, updated_at=CURRENT_TIMESTAMP WHERE order_id=?");
       updateStmt.run(db_processed_vendor_id, new_order_payload.date || new Date().toISOString(), new_order_payload.status || 'Draft', new_order_payload.notes, new_order_payload.estimatedShippingDate, new_order_payload.shippingAddress, new_order_payload.shippingCity, new_order_payload.shippingState, new_order_payload.shippingZipCode, estimated_shipping_cost_dollars, new_order_payload.scentOption, new_order_payload.nameDrop ? 1 : 0, new_order_payload.signatureDataUrl, final_total_dollars, current_order_id_for_db_ops);
       db.prepare("DELETE FROM order_line_items WHERE order_id = ?").run(current_order_id_for_db_ops);
       db.prepare("DELETE FROM order_status_history WHERE order_id = ?").run(current_order_id_for_db_ops);
     } else {
-      const timestamp_ms = Date.now();
-      current_order_id_for_db_ops = `PO-${timestamp_ms}`;
-      new_order_payload.id = current_order_id_for_db_ops;
+      // This is an INSERT
+      if (!current_order_id_for_db_ops) {
+        current_order_id_for_db_ops = `PO-${Date.now()}`;
+        new_order_payload.id = current_order_id_for_db_ops;
+      }
       const insertStmt = db.prepare("INSERT INTO orders (order_id, vendor_id, order_date, status, notes, estimated_shipping_date, shipping_address, shipping_city, shipping_state, shipping_zip_code, estimated_shipping_cost, scent_option, name_drop, signature_data_url, total_amount) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
       insertStmt.run(current_order_id_for_db_ops, db_processed_vendor_id, new_order_payload.date || new Date().toISOString(), new_order_payload.status || 'Draft', new_order_payload.notes, new_order_payload.estimatedShippingDate, new_order_payload.shippingAddress, new_order_payload.shippingCity, new_order_payload.shippingState, new_order_payload.shippingZipCode, estimated_shipping_cost_dollars, new_order_payload.scentOption, new_order_payload.nameDrop ? 1 : 0, new_order_payload.signatureDataUrl, final_total_dollars);
     }

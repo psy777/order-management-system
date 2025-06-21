@@ -1,33 +1,31 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import nodemailer from 'nodemailer';
+import formidable from 'formidable';
 import fs from 'fs';
 import path from 'path';
 
+export const config = {
+    api: {
+        bodyParser: false,
+    },
+};
+
 const SETTINGS_FILE = path.resolve(process.cwd(), 'data/settings.json');
-const UPLOAD_FOLDER = path.resolve(process.cwd(), 'uploads');
 
 const readSettings = () => {
     try {
         const data = fs.readFileSync(SETTINGS_FILE, 'utf-8');
         return JSON.parse(data);
     } catch (error) {
+        console.error("Failed to read settings file:", error);
         return {};
     }
 };
 
-export default async function handler(
-    req: NextApiRequest,
-    res: NextApiResponse
-) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (req.method !== 'POST') {
         res.setHeader('Allow', ['POST']);
         return res.status(405).end(`Method ${req.method} Not Allowed`);
-    }
-
-    const { order, recipientEmail, subject, body, attachments = [] } = req.body;
-
-    if (!order || !recipientEmail || !subject || !body) {
-        return res.status(400).json({ message: "Missing required email data." });
     }
 
     const settings = readSettings();
@@ -37,61 +35,67 @@ export default async function handler(
         return res.status(500).json({ message: "Email service is not configured." });
     }
 
-    const transporter = nodemailer.createTransport({
-        service: 'gmail',
-        auth: {
-            user: from_email,
-            pass: from_pass,
-        },
-    });
+    const form = formidable({ multiples: true });
 
-    const mailOptions: nodemailer.SendMailOptions = {
-        from: from_email,
-        to: recipientEmail,
-        subject: subject,
-        text: body,
-        attachments: [],
-    };
-
-    if (email_cc) mailOptions.cc = email_cc;
-    if (email_bcc) mailOptions.bcc = email_bcc;
-
-    const attachment_paths_to_delete: string[] = [];
-
-    if (Array.isArray(attachments)) {
-        for (const attachment_info of attachments) {
-            const { unique: unique_fn, original: original_fn } = attachment_info;
-            if (!unique_fn || !original_fn) continue;
-
-            const attachment_path = path.join(UPLOAD_FOLDER, unique_fn);
-            if (fs.existsSync(attachment_path)) {
-                (mailOptions.attachments as any[]).push({
-                    filename: original_fn,
-                    path: attachment_path,
-                });
-                attachment_paths_to_delete.push(attachment_path);
-            } else {
-                console.warn(`Attachment file not found on server: ${unique_fn}`);
-            }
+    form.parse(req, async (err, fields, files) => {
+        if (err) {
+            console.error('Error parsing form data:', err);
+            return res.status(500).json({ message: 'Error processing request' });
         }
-    }
 
-    try {
-        await transporter.sendMail(mailOptions);
-        res.status(200).json({ message: "Email sent." });
-    } catch (error) {
-        console.error(`Failed to send email for order ${order.id}:`, error);
-        res.status(500).json({ message: `Failed to send email: ${error}` });
-    } finally {
-        for (const path of attachment_paths_to_delete) {
-            if (fs.existsSync(path)) {
-                try {
-                    fs.unlinkSync(path);
-                    console.log(`Successfully deleted attachment: ${path}`);
-                } catch (e_del) {
-                    console.error(`Error deleting attachment ${path}:`, e_del);
+        try {
+            const { order: orderStr, recipientEmail, subject, body } = fields;
+            
+            if (!orderStr || !recipientEmail || !subject || !body) {
+                return res.status(400).json({ message: "Missing required email data." });
+            }
+            
+            const order = JSON.parse(Array.isArray(orderStr) ? orderStr[0] : orderStr);
+
+            const transporter = nodemailer.createTransport({
+                service: 'gmail',
+                auth: { user: from_email, pass: from_pass },
+            });
+
+            const mailOptions: nodemailer.SendMailOptions = {
+                from: from_email,
+                to: Array.isArray(recipientEmail) ? recipientEmail[0] : recipientEmail,
+                subject: Array.isArray(subject) ? subject[0] : subject,
+                text: Array.isArray(body) ? body[0] : body,
+                attachments: [],
+            };
+
+            if (email_cc) mailOptions.cc = email_cc;
+            if (email_bcc) mailOptions.bcc = email_bcc;
+
+            const attachments = files.attachments;
+            if (attachments) {
+                const attachmentArray = Array.isArray(attachments) ? attachments : [attachments];
+                for (const file of attachmentArray) {
+                    (mailOptions.attachments as any[]).push({
+                        filename: file.originalFilename || 'attachment',
+                        path: file.filepath,
+                    });
                 }
             }
+
+            await transporter.sendMail(mailOptions);
+            
+            // Clean up temporary files
+            if (attachments) {
+                const attachmentArray = Array.isArray(attachments) ? attachments : [attachments];
+                for (const file of attachmentArray) {
+                    fs.unlink(file.filepath, (unlinkErr) => {
+                        if (unlinkErr) console.error(`Failed to delete temp file: ${file.filepath}`, unlinkErr);
+                    });
+                }
+            }
+
+            res.status(200).json({ message: "Email sent." });
+
+        } catch (error) {
+            console.error(`Failed to send email:`, error);
+            res.status(500).json({ message: `Failed to send email: ${error}` });
         }
-    }
+    });
 }

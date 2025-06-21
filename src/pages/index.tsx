@@ -17,16 +17,10 @@ const App = () => {
     const [showSettingsMenu, setShowSettingsMenu] = useState(false);
     const [appSettings, setAppSettings] = useState({ company_name: "Your Company", default_email_body: "" });
 
-    const handleOrderUpdate = (updatedOrderFromServer: OrderFormData) => {
-        setOrders(prevOrders => {
-            const index = prevOrders.findIndex(o => o.id === updatedOrderFromServer.id);
-            if (index !== -1) {
-                const newOrders = [...prevOrders];
-                newOrders[index] = updatedOrderFromServer;
-                return newOrders;
-            }
-            return [...prevOrders.filter(o => o.id !== updatedOrderFromServer.id), updatedOrderFromServer];
-        });
+    const handleOrderSent = (updatedOrder: OrderFormData) => {
+        saveOrder(updatedOrder);
+        setOrderForEmailModal(null);
+        navigateTo('dashboard');
     };
 
     const fetchAndUpdateVendors = async () => {
@@ -190,13 +184,8 @@ const App = () => {
                     order={orderForEmailModal}
                     allItems={allSelectableItems}
                     appSettings={appSettings}
-                    saveOrder={saveOrder}
                     onClose={() => setOrderForEmailModal(null)}
-                    onOrderUpdatedAfterEmail={handleOrderUpdate}
-                    onEmailClientOpened={() => {
-                        setOrderForEmailModal(null);
-                        navigateTo('dashboard'); 
-                    }}
+                    onOrderSent={handleOrderSent}
                 />
             )}
             <div className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">

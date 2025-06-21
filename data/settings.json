@@ -1,9 +1,0 @@
-{
-    "company_name": "Comfort Cross",
-    "default_shipping_zip_code": "63366",
-    "default_email_body": "Dear [vendorCompany],\n\nPlease find attached the purchase order [orderID] for your records.\n\nWe appreciate your business!\n\nThank you,\n[yourCompany]",
-    "email_address": "",
-    "app_password": "",
-    "email_cc": "",
-    "email_bcc": ""
-}

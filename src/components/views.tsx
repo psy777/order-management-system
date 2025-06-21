@@ -468,10 +468,24 @@ export const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allVendor
     };
     
     const handleSaveAndSend = async () => {
-        if (!formData.vendorInfo.companyName || !formData.vendorInfo.email) { console.log("Order save failed: Please select a vendor with a valid email address."); return; }
-        const newOrder = createOrderObject('Sent');
-        await saveOrder(newOrder);
-        setOrderForEmailModal(newOrder); 
+        if (!formData.vendorInfo.companyName || !formData.vendorInfo.email) {
+            console.log("Order save failed: Please select a vendor with a valid email address.");
+            return;
+        }
+        const orderToSave = createOrderObject('Draft');
+        try {
+            await saveOrder(orderToSave);
+            setFormData(orderToSave); // Update local state to ensure ID is set
+            setOrderForEmailModal(orderToSave);
+        } catch (error: any) {
+            console.log(`Failed to save draft: ${error.message}`);
+        }
+    };
+
+    const handleOrderSent = async (updatedOrder: any) => {
+        await saveOrder(updatedOrder);
+        setOrderForEmailModal(null);
+        navigateTo('dashboard');
     };
 
     const handlePreviewPdf = () => { const tempOrder = createOrderObject(); generatePdf(tempOrder, allSelectableItems, 'preview'); };
