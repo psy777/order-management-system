@@ -6,9 +6,9 @@ import '../styles/globals.css';
 import Layout from '../components/Layout';
 import React, { useState, useEffect } from 'react';
 import { OrderFormData } from '../components/views';
-import { SessionProvider } from 'next-auth/react';
+import { ClerkProvider } from '@clerk/nextjs';
 
-function MyApp({ Component, pageProps: { session, ...pageProps } }: AppProps) {
+function MyApp({ Component, pageProps }: AppProps) {
     const [orders, setOrders] = useState<OrderFormData[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [allVendors, setAllVendors] = useState<any[]>([]);
@@ -16,7 +16,7 @@ function MyApp({ Component, pageProps: { session, ...pageProps } }: AppProps) {
     const [itemData, setItemData] = useState<any>({});
     const [packageData, setPackageData] = useState<any>({});
     const [orderForEmailModal, setOrderForEmailModal] = useState<OrderFormData | null>(null);
-    const [appSettings, setAppSettings] = useState<any>({ company_name: "Your Company", default_email_body: "" });
+    const [appSettings, setAppSettings] = useState<any>({ company_name: "", default_email_body: "" });
 
     const handleOrderSent = (updatedOrder: OrderFormData) => {
         saveOrder(updatedOrder);
@@ -156,7 +156,7 @@ function MyApp({ Component, pageProps: { session, ...pageProps } }: AppProps) {
       <Script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" strategy="beforeInteractive"></Script>
       <Script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.23/jspdf.plugin.autotable.min.js" strategy="beforeInteractive"></Script>
       <Script src="https://cdn.jsdelivr.net/npm/chart.js" strategy="beforeInteractive"></Script>
-      <SessionProvider session={session}>
+      <ClerkProvider {...pageProps}>
         <Layout
           appSettings={appSettings}
           orderForEmailModal={orderForEmailModal}
@@ -178,7 +178,7 @@ function MyApp({ Component, pageProps: { session, ...pageProps } }: AppProps) {
             isLoading={isLoading}
         />
         </Layout>
-      </SessionProvider>
+      </ClerkProvider>
     </>
   );
 }

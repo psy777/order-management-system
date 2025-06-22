@@ -135,3 +135,13 @@ CREATE TABLE IF NOT EXISTS user_action_log (
     FOREIGN KEY (action_id) REFERENCES user_actions (id),
     FOREIGN KEY (user_id) REFERENCES users (id)
 );
+
+CREATE TABLE IF NOT EXISTS clerk_users (
+    id TEXT PRIMARY KEY,
+    first_name TEXT,
+    last_name TEXT,
+    email TEXT NOT NULL UNIQUE,
+    profile_image_url TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

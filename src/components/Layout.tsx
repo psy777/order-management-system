@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { MenuIcon } from './ui';
+import { SignInButton, SignUpButton, SignedIn, SignedOut, UserButton } from '@clerk/nextjs';
 import { EmailModal } from './features';
 import { OrderFormData } from './views';
 
@@ -45,7 +46,7 @@ const Layout: React.FC<LayoutProps> = ({ children, appSettings, orderForEmailMod
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                     <div className="flex justify-between items-center h-16">
                         <div className="flex items-center relative" ref={settingsMenuRef}>
-                            <div className="w-8 h-8 bg-slate-300 rounded-full mr-4"></div>
+                            <UserButton />
                             <button
                                 onClick={() => setShowSettingsMenu(!showSettingsMenu)}
                                 className="p-2 rounded-md text-slate-500 hover:text-slate-700 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-orange-500"
@@ -80,6 +81,8 @@ const Layout: React.FC<LayoutProps> = ({ children, appSettings, orderForEmailMod
                                     </Link>
                                 </div>
                             )}
+                        </div>
+                        <div className="flex items-center">
                         </div>
                     </div>
                 </div>

@@ -10,6 +10,7 @@
     "db:init": "node scripts/init-db.mjs"
   },
   "dependencies": {
+    "@clerk/nextjs": "^6.22.0",
     "@types/react-dom": "^19",
     "better-sqlite3": "^11.10.0",
     "chart.js": "^4.5.0",
@@ -19,7 +20,6 @@
     "jspdf": "^3.0.1",
     "jspdf-autotable": "^5.0.2",
     "next": "15.3.4",
-    "next-auth": "^4.24.11",
     "nodemailer": "^6.10.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
