@@ -6,8 +6,9 @@ import '../styles/globals.css';
 import Layout from '../components/Layout';
 import React, { useState, useEffect } from 'react';
 import { OrderFormData } from '../components/views';
+import { SessionProvider } from 'next-auth/react';
 
-function MyApp({ Component, pageProps, appSettings: initialAppSettings }: AppProps & { appSettings: any }) {
+function MyApp({ Component, pageProps: { session, ...pageProps } }: AppProps) {
     const [orders, setOrders] = useState<OrderFormData[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [allVendors, setAllVendors] = useState<any[]>([]);
@@ -15,7 +16,7 @@ function MyApp({ Component, pageProps, appSettings: initialAppSettings }: AppPro
     const [itemData, setItemData] = useState<any>({});
     const [packageData, setPackageData] = useState<any>({});
     const [orderForEmailModal, setOrderForEmailModal] = useState<OrderFormData | null>(null);
-    const [appSettings, setAppSettings] = useState(initialAppSettings);
+    const [appSettings, setAppSettings] = useState<any>({ company_name: "Your Company", default_email_body: "" });
 
     const handleOrderSent = (updatedOrder: OrderFormData) => {
         saveOrder(updatedOrder);
@@ -33,9 +34,22 @@ function MyApp({ Component, pageProps, appSettings: initialAppSettings }: AppPro
     };
 
     useEffect(() => {
+        const fetchAppSettings = async () => {
+            try {
+                const settingsRes = await fetch('/api/settings');
+                if (settingsRes.ok) {
+                    const settings = await settingsRes.json();
+                    setAppSettings(settings);
+                }
+            } catch (error) {
+                console.error("Failed to fetch settings:", error);
+            }
+        };
+
         const fetchData = async () => {
             setIsLoading(true);
             try {
+                await fetchAppSettings();
                 const [ordersRes, vendorsRes, itemsRes, packagesRes] = await Promise.all([
                     fetch('/api/orders'),
                     fetch('/api/vendors'),
@@ -142,9 +156,10 @@ function MyApp({ Component, pageProps, appSettings: initialAppSettings }: AppPro
       <Script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" strategy="beforeInteractive"></Script>
       <Script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.23/jspdf.plugin.autotable.min.js" strategy="beforeInteractive"></Script>
       <Script src="https://cdn.jsdelivr.net/npm/chart.js" strategy="beforeInteractive"></Script>
-      <Layout
-        appSettings={appSettings}
-        orderForEmailModal={orderForEmailModal}
+      <SessionProvider session={session}>
+        <Layout
+          appSettings={appSettings}
+          orderForEmailModal={orderForEmailModal}
         allSelectableItems={allSelectableItems}
         handleOrderSent={handleOrderSent}
         setOrderForEmailModal={setOrderForEmailModal}
@@ -162,29 +177,10 @@ function MyApp({ Component, pageProps, appSettings: initialAppSettings }: AppPro
             fetchAndUpdateVendors={fetchAndUpdateVendors}
             isLoading={isLoading}
         />
-      </Layout>
+        </Layout>
+      </SessionProvider>
     </>
   );
 }
-
-MyApp.getInitialProps = async (
-    context: AppContext
-): Promise<AppInitialProps & { appSettings: any }> => {
-    const ctx = await App.getInitialProps(context);
-
-    let appSettings = { company_name: "Your Company", default_email_body: "" };
-    try {
-        const isServer = typeof window === 'undefined';
-        const baseUrl = isServer ? (process.env.NEXT_PUBLIC_VERCEL_URL ? `https://${process.env.NEXT_PUBLIC_VERCEL_URL}` : 'http://localhost:3000') : '';
-        const settingsRes = await fetch(`${baseUrl}/api/settings`);
-        if (settingsRes.ok) {
-            appSettings = await settingsRes.json();
-        }
-    } catch (error) {
-        console.error("Failed to fetch settings in getInitialProps:", error);
-    }
-
-    return { ...ctx, appSettings };
-};
 
 export default MyApp;

@@ -2,34 +2,18 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import nodemailer from 'nodemailer';
 import formidable from 'formidable';
 import { google } from 'googleapis';
-import db from '../../lib/db';
+import { getSettings } from '../../lib/db';
+import { Settings, User } from '../../lib/types';
 import fs from 'fs';
 import path from 'path';
-
-interface Settings {
-    email_address: string;
-    app_password: string;
-    email_cc: string;
-    email_bcc: string;
-    GMAIL_CLIENT_ID: string;
-    GMAIL_CLIENT_SECRET: string;
-    GMAIL_REFRESH_TOKEN: string;
-}
+import { unstable_getServerSession } from 'next-auth/next';
+import { authOptions } from './auth/[...nextauth]';
+import db from '../../lib/db';
 
 export const config = {
     api: {
         bodyParser: false,
     },
-};
-
-const readSettings = () => {
-    try {
-        const row = db.prepare('SELECT * FROM settings WHERE id = 1').get();
-        return row || {};
-    } catch (error) {
-        console.error("Failed to read settings from database:", error);
-        return {};
-    }
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -38,10 +22,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(405).end(`Method ${req.method} Not Allowed`);
     }
 
-    const settings = readSettings() as Settings;
-    const { email_address: from_email, app_password: from_pass, email_cc, email_bcc, GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN } = settings;
+    const session = await unstable_getServerSession(req, res, authOptions);
 
-    if (!from_email || !from_pass || !GMAIL_CLIENT_ID || !GMAIL_CLIENT_SECRET || !GMAIL_REFRESH_TOKEN) {
+    if (!session || !session.user) {
+        return res.status(401).json({ message: 'You must be logged in.' });
+    }
+
+    const userStmt = db.prepare('SELECT * FROM users WHERE email = ?');
+    const user = userStmt.get(session.user.email) as User;
+
+    if (!user || !user.GMAIL_REFRESH_TOKEN) {
+        return res.status(500).json({ message: 'Email service is not configured for this user.' });
+    }
+
+    const settings = getSettings() as Settings;
+    const { email_address: from_email, email_cc, email_bcc, GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET } = settings;
+
+    if (!from_email || !GMAIL_CLIENT_ID || !GMAIL_CLIENT_SECRET) {
         return res.status(500).json({ message: "Email service is not configured." });
     }
 
@@ -70,7 +67,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             );
 
             oauth2Client.setCredentials({
-                refresh_token: GMAIL_REFRESH_TOKEN
+                refresh_token: user.GMAIL_REFRESH_TOKEN
             });
 
             const accessToken = await oauth2Client.getAccessToken();
@@ -84,7 +81,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                     user: from_email,
                     clientId: GMAIL_CLIENT_ID,
                     clientSecret: GMAIL_CLIENT_SECRET,
-                    refreshToken: GMAIL_REFRESH_TOKEN,
+                    refreshToken: user.GMAIL_REFRESH_TOKEN,
                     accessToken: accessToken.token,
                 },
             } as any);

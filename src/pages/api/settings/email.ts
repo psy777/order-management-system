@@ -11,10 +11,10 @@ export default function handler(
             return res.status(400).json({ message: "Request must be JSON" });
         }
 
-        const { email_address, app_password, email_cc = '', email_bcc = '', GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN } = email_settings_payload;
+        const { email_address, email_cc = '', email_bcc = '', GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET } = email_settings_payload;
 
-        if (!email_address || !app_password || !GMAIL_CLIENT_ID || !GMAIL_CLIENT_SECRET || !GMAIL_REFRESH_TOKEN) {
-            return res.status(400).json({ message: "Email address, App Password, and all Gmail API credentials are required." });
+        if (!email_address || !GMAIL_CLIENT_ID || !GMAIL_CLIENT_SECRET) {
+            return res.status(400).json({ message: "Email address and Gmail API credentials are required." });
         }
 
         const validateEmails = (emails: string) => {
@@ -29,18 +29,16 @@ export default function handler(
 
         try {
             const stmt = db.prepare(`
-                INSERT INTO settings (id, email_address, app_password, email_cc, email_bcc, GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN)
-                VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO settings (id, email_address, email_cc, email_bcc, GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET)
+                VALUES (1, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                 email_address = excluded.email_address,
-                app_password = excluded.app_password,
                 email_cc = excluded.email_cc,
                 email_bcc = excluded.email_bcc,
                 GMAIL_CLIENT_ID = excluded.GMAIL_CLIENT_ID,
-                GMAIL_CLIENT_SECRET = excluded.GMAIL_CLIENT_SECRET,
-                GMAIL_REFRESH_TOKEN = excluded.GMAIL_REFRESH_TOKEN;
+                GMAIL_CLIENT_SECRET = excluded.GMAIL_CLIENT_SECRET;
             `);
-            stmt.run(email_address, app_password, email_cc, email_bcc, GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN);
+            stmt.run(email_address, email_cc, email_bcc, GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET);
             res.status(200).json({ message: "Email settings updated successfully." });
         } catch (error) {
             console.error("Failed to update settings:", error);

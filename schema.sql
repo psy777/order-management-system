@@ -104,12 +104,10 @@ CREATE TABLE IF NOT EXISTS settings (
     default_shipping_zip_code TEXT,
     default_email_body TEXT,
     email_address TEXT,
-    app_password TEXT,
     email_cc TEXT,
     email_bcc TEXT,
     GMAIL_CLIENT_ID TEXT,
-    GMAIL_CLIENT_SECRET TEXT,
-    GMAIL_REFRESH_TOKEN TEXT
+    GMAIL_CLIENT_SECRET TEXT
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -117,6 +115,7 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     email TEXT NOT NULL UNIQUE,
+    GMAIL_REFRESH_TOKEN TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
