@@ -1,3 +1,13 @@
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    first_name TEXT,
+    last_name TEXT,
+    email TEXT NOT NULL UNIQUE,
+    profile_image_url TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS vendors (
     id TEXT PRIMARY KEY,
     company_name TEXT NOT NULL,
@@ -12,8 +22,10 @@ CREATE TABLE IF NOT EXISTS vendors (
     shipping_city TEXT,
     shipping_state TEXT,
     shipping_zip_code TEXT,
+    user_id TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users (id)
 );
 
 CREATE TABLE IF NOT EXISTS orders (
@@ -32,9 +44,11 @@ CREATE TABLE IF NOT EXISTS orders (
     name_drop INTEGER,
     signature_data_url TEXT,
     total_amount REAL,
+    user_id TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (vendor_id) REFERENCES vendors (id)
+    FOREIGN KEY (vendor_id) REFERENCES vendors (id),
+    FOREIGN KEY (user_id) REFERENCES users (id)
 );
 
 CREATE TABLE IF NOT EXISTS items (
@@ -43,8 +57,10 @@ CREATE TABLE IF NOT EXISTS items (
     type TEXT,
     price REAL,
     weight_oz REAL,
+    user_id TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users (id)
 );
 
 CREATE TABLE IF NOT EXISTS styles (
@@ -85,8 +101,10 @@ CREATE TABLE IF NOT EXISTS packages (
     package_id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
     type TEXT,
+    user_id TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users (id)
 );
 
 CREATE TABLE IF NOT EXISTS package_items (
@@ -110,16 +128,6 @@ CREATE TABLE IF NOT EXISTS settings (
     GMAIL_CLIENT_SECRET TEXT
 );
 
-CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    username TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
-    email TEXT NOT NULL UNIQUE,
-    GMAIL_REFRESH_TOKEN TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
 CREATE TABLE IF NOT EXISTS user_actions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     action_name TEXT NOT NULL UNIQUE
@@ -134,14 +142,4 @@ CREATE TABLE IF NOT EXISTS user_action_log (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (action_id) REFERENCES user_actions (id),
     FOREIGN KEY (user_id) REFERENCES users (id)
-);
-
-CREATE TABLE IF NOT EXISTS clerk_users (
-    id TEXT PRIMARY KEY,
-    first_name TEXT,
-    last_name TEXT,
-    email TEXT NOT NULL UNIQUE,
-    profile_image_url TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

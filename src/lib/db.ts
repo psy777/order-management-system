@@ -29,4 +29,29 @@ const db = new Database(dbPath);
 // Enable WAL mode for better concurrency
 db.pragma('journal_mode = WAL');
 
+export function getSettings() {
+    try {
+        let settings = db.prepare('SELECT * FROM settings WHERE id = 1').get();
+        if (!settings) {
+            settings = {
+                id: 1,
+                company_name: '',
+                default_shipping_zip_code: '',
+                default_email_body: '',
+                email_address: '',
+                app_password: '',
+                email_cc: '',
+                email_bcc: '',
+                GMAIL_CLIENT_ID: '',
+                GMAIL_CLIENT_SECRET: '',
+                GMAIL_REFRESH_TOKEN: ''
+            };
+        }
+        return settings;
+    } catch (error) {
+        console.error("Failed to get settings:", error);
+        throw new Error("Failed to get settings.");
+    }
+}
+
 export default db;

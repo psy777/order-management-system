@@ -56,7 +56,8 @@ export interface OrderFormData {
 }
 
 // --- COMPONENTS ---
-export const Dashboard = ({ orders, viewOrder, allVendors, allSelectableItems, setOrderForEmailModal }: { orders: any[], viewOrder: (order: any) => void, allVendors: any[], allSelectableItems: any, setOrderForEmailModal: (order: any) => void }) => {
+export const Dashboard = ({ orders, allVendors, allSelectableItems, setOrderForEmailModal }: { orders: any[], allVendors: any[], allSelectableItems: any, setOrderForEmailModal: (order: any) => void }) => {
+    const router = useRouter();
     const [filteredOrders, setFilteredOrders] = useState(orders);
     const [dashboardStats, setDashboardStats] = useState({ totalRevenue: 0, averageOrderRevenue: 0, totalOrders: 0 });
 
@@ -101,7 +102,7 @@ export const Dashboard = ({ orders, viewOrder, allVendors, allSelectableItems, s
             <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
                 <h2 className="text-xl font-semibold text-slate-700 mb-4">All Orders</h2>
                 <div className="overflow-x-auto"><table className="w-full text-sm text-left text-slate-500"><thead className="text-xs text-slate-700 uppercase bg-slate-100"><tr><th className="px-4 py-3">Order ID</th><th className="px-4 py-3">Customer</th><th className="px-4 py-3">Date</th><th className="px-4 py-3">Total</th><th className="px-4 py-3">Status</th><th className="px-4 py-3 text-center">Actions</th></tr></thead>
-                    <tbody>{filteredOrders.map(order => (<tr key={order.id} className="bg-white border-b hover:bg-slate-50">
+                    <tbody>{filteredOrders.map(order => (<tr key={order.id} onClick={() => router.push(`/orders/${order.id}`)} className="bg-white border-b hover:bg-slate-50 cursor-pointer">
                         <td className="px-4 py-3 font-medium text-slate-800">{order.id}</td><td className="px-4 py-3">{order.vendorInfo.companyName}</td>
                         <td className="px-4 py-3">{new Date(order.date).toLocaleDateString()}</td><td className="px-4 py-3">${parseFloat(order.total || 0).toFixed(2)}</td>
                         <td className="px-4 py-3">
@@ -115,7 +116,7 @@ export const Dashboard = ({ orders, viewOrder, allVendors, allSelectableItems, s
                                 }`}>{order.status}</span>
                             )}
                         </td>
-                        <td className="px-4 py-3 text-center"><div className="flex items-center justify-center space-x-2"><Link href={`/orders/${order.id}`} className="p-1 text-slate-500 hover:text-orange-600"><ViewIcon /></Link><button onClick={() => generatePdf(order, allSelectableItems, 'preview')} className="p-1 text-slate-500 hover:text-orange-600"><PdfIcon /></button><button onClick={() => setOrderForEmailModal(order)} className="p-1 text-slate-500 hover:text-orange-600"><EmailIcon /></button></div></td>
+                        <td className="px-4 py-3 text-center"><div className="flex items-center justify-center space-x-2"><Link href={`/orders/${order.id}`} className="p-1 text-slate-500 hover:text-orange-600"><ViewIcon /></Link><button className="p-1 text-slate-500 hover:text-orange-600"><PdfIcon /></button><button className="p-1 text-slate-500 hover:text-orange-600"><EmailIcon /></button></div></td>
                     </tr>))}</tbody>
                 </table></div>
             </div>

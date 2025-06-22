@@ -1,10 +1,16 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import db from '../../../lib/db';
+import { getAuth } from '@clerk/nextjs/server';
 
 const getVendors = (req: NextApiRequest, res: NextApiResponse) => {
+    const { userId } = getAuth(req);
+    if (!userId) {
+        return res.status(401).json({ error: "Unauthorized" });
+    }
+
     try {
-        const vendorsQuery = db.prepare("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code FROM vendors ORDER BY company_name COLLATE NOCASE ASC");
-        const vendors_list = vendorsQuery.all().map((v: any) => ({
+        const vendorsQuery = db.prepare("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code FROM vendors WHERE user_id = ? ORDER BY company_name COLLATE NOCASE ASC");
+        const vendors_list = vendorsQuery.all(userId).map((v: any) => ({
             id: v.id,
             companyName: v.company_name,
             contactName: v.contact_name,
@@ -27,13 +33,18 @@ const getVendors = (req: NextApiRequest, res: NextApiResponse) => {
 };
 
 const postVendor = (req: NextApiRequest, res: NextApiResponse) => {
+    const { userId } = getAuth(req);
+    if (!userId) {
+        return res.status(401).json({ error: "Unauthorized" });
+    }
+
     const payload = req.body;
     if (!payload || !payload.companyName) {
         return res.status(400).json({ message: "Missing companyName." });
     }
 
     try {
-        const vendor_id = update_or_create_vendor(payload);
+        const vendor_id = update_or_create_vendor(payload, userId);
         if (!vendor_id) {
             return res.status(500).json({ message: "Failed to process vendor." });
         }
@@ -49,7 +60,7 @@ const postVendor = (req: NextApiRequest, res: NextApiResponse) => {
     }
 };
 
-const update_or_create_vendor = (vendor_info_payload: any) => {
+const update_or_create_vendor = (vendor_info_payload: any, userId: string) => {
     if (!vendor_info_payload || !vendor_info_payload.companyName) {
         return vendor_info_payload ? vendor_info_payload.id : null;
     }
@@ -76,13 +87,13 @@ const update_or_create_vendor = (vendor_info_payload: any) => {
         const result = updateStmt.run(company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, provided_id);
         if (result.changes === 0) {
             final_vendor_id = Math.random().toString(36).substr(2, 9);
-            const insertStmt = db.prepare("INSERT INTO vendors (id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-            insertStmt.run(final_vendor_id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code);
+            const insertStmt = db.prepare("INSERT INTO vendors (id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            insertStmt.run(final_vendor_id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, userId);
         }
     } else {
         final_vendor_id = Math.random().toString(36).substr(2, 9);
-        const insertStmt = db.prepare("INSERT INTO vendors (id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-        insertStmt.run(final_vendor_id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code);
+        const insertStmt = db.prepare("INSERT INTO vendors (id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        insertStmt.run(final_vendor_id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, userId);
     }
     return final_vendor_id;
 };

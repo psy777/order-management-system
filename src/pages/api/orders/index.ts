@@ -46,7 +46,14 @@ type StatusHistory = {
   status_date: string;
 };
 
+import { getAuth } from '@clerk/nextjs/server';
+
 const getOrders = (req: NextApiRequest, res: NextApiResponse) => {
+  const { userId } = getAuth(req);
+  if (!userId) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
   try {
     const ordersQuery = db.prepare(`
       SELECT 
@@ -65,14 +72,14 @@ const getOrders = (req: NextApiRequest, res: NextApiResponse) => {
         v.shipping_zip_code as vendor_shipping_zip_code 
       FROM orders o 
       LEFT JOIN vendors v ON o.vendor_id = v.id 
-      WHERE o.status != 'Deleted' 
+      WHERE o.status != 'Deleted' AND o.user_id = ?
       ORDER BY o.order_date DESC, o.order_id DESC
     `);
 
     const lineItemsQuery: Statement = db.prepare("SELECT item_code, package_code, quantity, price_per_unit_cents, style_chosen, item_type FROM order_line_items WHERE order_id = ?");
     const statusHistoryQuery: Statement = db.prepare("SELECT status, status_date FROM order_status_history WHERE order_id = ? ORDER BY status_date ASC");
 
-    const ordersFromDb: Order[] = ordersQuery.all() as Order[];
+    const ordersFromDb: Order[] = ordersQuery.all(userId) as Order[];
     
     const active_orders_response = ordersFromDb.map(order_row => {
       const lineItemsFromDb = lineItemsQuery.all(order_row.order_id) as LineItem[];
@@ -145,6 +152,11 @@ const getOrders = (req: NextApiRequest, res: NextApiResponse) => {
 };
 
 const postOrder = (req: NextApiRequest, res: NextApiResponse) => {
+  const { userId } = getAuth(req);
+  if (!userId) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
   const new_order_payload = req.body;
   if (!new_order_payload) {
     return res.status(400).json({ status: "error", message: "Request must be JSON" });
@@ -194,8 +206,8 @@ const postOrder = (req: NextApiRequest, res: NextApiResponse) => {
         current_order_id_for_db_ops = `PO-${Date.now()}`;
         new_order_payload.id = current_order_id_for_db_ops;
       }
-      const insertStmt = db.prepare("INSERT INTO orders (order_id, vendor_id, order_date, status, notes, estimated_shipping_date, shipping_address, shipping_city, shipping_state, shipping_zip_code, estimated_shipping_cost, scent_option, name_drop, signature_data_url, total_amount) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
-      insertStmt.run(current_order_id_for_db_ops, db_processed_vendor_id, new_order_payload.date || new Date().toISOString(), new_order_payload.status || 'Draft', new_order_payload.notes, new_order_payload.estimatedShippingDate, new_order_payload.shippingAddress, new_order_payload.shippingCity, new_order_payload.shippingState, new_order_payload.shippingZipCode, estimated_shipping_cost_dollars, new_order_payload.scentOption, new_order_payload.nameDrop ? 1 : 0, new_order_payload.signatureDataUrl, final_total_dollars);
+      const insertStmt = db.prepare("INSERT INTO orders (order_id, vendor_id, order_date, status, notes, estimated_shipping_date, shipping_address, shipping_city, shipping_state, shipping_zip_code, estimated_shipping_cost, scent_option, name_drop, signature_data_url, total_amount, user_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+      insertStmt.run(current_order_id_for_db_ops, db_processed_vendor_id, new_order_payload.date || new Date().toISOString(), new_order_payload.status || 'Draft', new_order_payload.notes, new_order_payload.estimatedShippingDate, new_order_payload.shippingAddress, new_order_payload.shippingCity, new_order_payload.shippingState, new_order_payload.shippingZipCode, estimated_shipping_cost_dollars, new_order_payload.scentOption, new_order_payload.nameDrop ? 1 : 0, new_order_payload.signatureDataUrl, final_total_dollars, userId);
     }
 
     const insertLineItemStmt = db.prepare("INSERT INTO order_line_items (order_id, item_code, package_code, quantity, price_per_unit_cents, style_chosen, item_type) VALUES (?,?,?,?,?,?,?)");

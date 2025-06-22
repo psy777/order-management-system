@@ -1,14 +1,12 @@
-import App, { AppContext, AppInitialProps } from 'next/app';
-import type { AppProps } from 'next/app';
-import Head from 'next/head';
-import Script from 'next/script';
-import '../styles/globals.css';
-import Layout from '../components/Layout';
-import React, { useState, useEffect } from 'react';
-import { OrderFormData } from '../components/views';
-import { ClerkProvider } from '@clerk/nextjs';
+'use client';
 
-function MyApp({ Component, pageProps }: AppProps) {
+import React, { useState, useEffect } from 'react';
+import Layout from './Layout';
+import { Dashboard } from './views';
+import { OrderFormData } from './views';
+import { useAuth } from '@clerk/nextjs';
+
+export default function AppPage() {
     const [orders, setOrders] = useState<OrderFormData[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [allVendors, setAllVendors] = useState<any[]>([]);
@@ -17,6 +15,7 @@ function MyApp({ Component, pageProps }: AppProps) {
     const [packageData, setPackageData] = useState<any>({});
     const [orderForEmailModal, setOrderForEmailModal] = useState<OrderFormData | null>(null);
     const [appSettings, setAppSettings] = useState<any>({ company_name: "", default_email_body: "" });
+    const { isSignedIn } = useAuth();
 
     const handleOrderSent = (updatedOrder: OrderFormData) => {
         saveOrder(updatedOrder);
@@ -51,16 +50,33 @@ function MyApp({ Component, pageProps }: AppProps) {
             try {
                 await fetchAppSettings();
                 const [ordersRes, vendorsRes, itemsRes, packagesRes] = await Promise.all([
-                    fetch('/api/orders'),
-                    fetch('/api/vendors'),
-                    fetch('/api/items'),
-                    fetch('/api/packages'),
+                    fetch(`/api/orders`),
+                    fetch(`/api/vendors`),
+                    fetch(`/api/items`),
+                    fetch(`/api/packages`),
                 ]);
+
+                if (!itemsRes.ok) {
+                    console.error("Failed to fetch items, status:", itemsRes.status);
+                    setOrders([]);
+                    setAllVendors([]);
+                    setAllSelectableItems({});
+                    setItemData({});
+                    setPackageData({});
+                    setIsLoading(false);
+                    return;
+                }
 
                 const ordersData = await ordersRes.json();
                 const vendorsData = await vendorsRes.json();
                 const itemsDataArray = await itemsRes.json();
                 const packagesData = await packagesRes.json();
+
+                if (!Array.isArray(itemsDataArray)) {
+                    console.error("Items data is not an array:", itemsDataArray);
+                    setIsLoading(false);
+                    return;
+                }
 
                 const itemsDataById = itemsDataArray.reduce((acc: any, item: any) => {
                     acc[item.item_code] = item;
@@ -71,9 +87,9 @@ function MyApp({ Component, pageProps }: AppProps) {
                 setAllVendors(vendorsData);
                 const combinedSelectableItems = { ...itemsDataById };
                 for (const pkgId in packagesData) {
-                    combinedSelectableItems[pkgId] = { 
-                        name: packagesData[pkgId].name, 
-                        type: packagesData[pkgId].type, 
+                    combinedSelectableItems[pkgId] = {
+                        name: packagesData[pkgId].name,
+                        type: packagesData[pkgId].type,
                         styles: []
                     };
                 }
@@ -86,8 +102,11 @@ function MyApp({ Component, pageProps }: AppProps) {
                 setIsLoading(false);
             }
         };
-        fetchData();
-    }, []);
+
+        if (isSignedIn) {
+            fetchData();
+        }
+    }, [isSignedIn]);
 
     const saveOrder = async (orderToSave: OrderFormData) => {
         try {
@@ -137,50 +156,24 @@ function MyApp({ Component, pageProps }: AppProps) {
         }
     };
 
-  return (
-    <>
-      <Head>
-        <meta charSet="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Order Management System</title>
-        <link rel="icon" href="/assets/favicon.ico" sizes="any" />
-        <link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon-16x16.png" />
-        <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32x32.png" />
-        <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png" />
-        <link rel="manifest" href="/assets/site.webmanifest" />
-      </Head>
-      <Script src="https://unpkg.com/react@18/umd/react.development.js" strategy="beforeInteractive"></Script>
-      <Script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" strategy="beforeInteractive"></Script>
-      <Script src="https://unpkg.com/@babel/standalone/babel.min.js" strategy="beforeInteractive"></Script>
-      <Script src="https://cdn.tailwindcss.com" strategy="beforeInteractive"></Script>
-      <Script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" strategy="beforeInteractive"></Script>
-      <Script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.23/jspdf.plugin.autotable.min.js" strategy="beforeInteractive"></Script>
-      <Script src="https://cdn.jsdelivr.net/npm/chart.js" strategy="beforeInteractive"></Script>
-      <ClerkProvider {...pageProps}>
-        <Layout
-          appSettings={appSettings}
-          orderForEmailModal={orderForEmailModal}
-        allSelectableItems={allSelectableItems}
-        handleOrderSent={handleOrderSent}
-        setOrderForEmailModal={setOrderForEmailModal}
-      >
-        <Component {...pageProps}
-            appSettings={appSettings}
-            orders={orders}
-            allVendors={allVendors}
-            allSelectableItems={allSelectableItems}
-            itemData={itemData}
-            packageData={packageData}
-            setOrderForEmailModal={setOrderForEmailModal}
-            saveOrder={saveOrder}
-            deleteOrder={deleteOrder}
-            fetchAndUpdateVendors={fetchAndUpdateVendors}
-            isLoading={isLoading}
-        />
-        </Layout>
-      </ClerkProvider>
-    </>
-  );
-}
+    if (isLoading) {
+        return <div className="text-center p-8">Loading...</div>;
+    }
 
-export default MyApp;
+    return (
+        <Layout
+            appSettings={appSettings}
+            orderForEmailModal={orderForEmailModal}
+            allSelectableItems={allSelectableItems}
+            handleOrderSent={handleOrderSent}
+            setOrderForEmailModal={setOrderForEmailModal}
+        >
+            <Dashboard
+                orders={orders}
+                allVendors={allVendors}
+                allSelectableItems={allSelectableItems}
+                setOrderForEmailModal={setOrderForEmailModal}
+            />
+        </Layout>
+    );
+}

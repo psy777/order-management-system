@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import db from '../../../lib/db';
 import { Statement } from 'better-sqlite3';
+import { getAuth } from '@clerk/nextjs/server';
 
 type Item = {
     item_code: string;
@@ -11,11 +12,16 @@ type Item = {
 };
 
 const getItems = (req: NextApiRequest, res: NextApiResponse) => {
+    const { userId } = getAuth(req);
+    if (!userId) {
+        return res.status(401).json({ error: "Unauthorized" });
+    }
+
     try {
-        const itemsQuery = db.prepare("SELECT item_code, name, type, price_cents, weight_oz FROM items ORDER BY name COLLATE NOCASE ASC");
+        const itemsQuery = db.prepare("SELECT item_code, name, type, price_cents, weight_oz FROM items WHERE user_id = ? ORDER BY name COLLATE NOCASE ASC");
         const stylesQuery: Statement = db.prepare("SELECT s.style_name FROM styles s JOIN item_styles ist ON s.id = ist.style_id WHERE ist.item_code = ? ORDER BY s.style_name COLLATE NOCASE ASC");
 
-        const itemsFromDb: Item[] = itemsQuery.all() as Item[];
+        const itemsFromDb: Item[] = itemsQuery.all(userId) as Item[];
 
         const items_list = itemsFromDb.map(item_row => {
             const styles = stylesQuery.all(item_row.item_code).map((s: any) => s.style_name);
@@ -35,6 +41,11 @@ const getItems = (req: NextApiRequest, res: NextApiResponse) => {
 };
 
 const postItem = (req: NextApiRequest, res: NextApiResponse) => {
+    const { userId } = getAuth(req);
+    if (!userId) {
+        return res.status(401).json({ error: "Unauthorized" });
+    }
+
     const payload = req.body;
     if (!payload) {
         return res.status(400).json({ message: "Request must be JSON" });
@@ -54,8 +65,8 @@ const postItem = (req: NextApiRequest, res: NextApiResponse) => {
     const price_cents = price;
 
     const transaction = db.transaction(() => {
-        const insertItemStmt = db.prepare("INSERT INTO items (item_code, name, type, price_cents, weight_oz) VALUES (?, ?, ?, ?, ?)");
-        insertItemStmt.run(item_code, name, type, price_cents, weight_oz);
+        const insertItemStmt = db.prepare("INSERT INTO items (item_code, name, type, price_cents, weight_oz, user_id) VALUES (?, ?, ?, ?, ?, ?)");
+        insertItemStmt.run(item_code, name, type, price_cents, weight_oz, userId);
 
         const insertStyleStmt = db.prepare("INSERT OR IGNORE INTO styles (style_name) VALUES (?)");
         const selectStyleStmt = db.prepare("SELECT id FROM styles WHERE style_name = ?");

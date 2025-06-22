@@ -1,9 +1,15 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import db from '../../../lib/db';
+import { getAuth } from '@clerk/nextjs/server';
 
 const getPackages = (req: NextApiRequest, res: NextApiResponse) => {
+    const { userId } = getAuth(req);
+    if (!userId) {
+        return res.status(401).json({ error: "Unauthorized" });
+    }
+
     try {
-        const pkgs_db = db.prepare("SELECT package_id, name, type FROM packages ORDER BY name COLLATE NOCASE ASC").all();
+        const pkgs_db = db.prepare("SELECT package_id, name, type FROM packages WHERE user_id = ? ORDER BY name COLLATE NOCASE ASC").all(userId);
         const transformed_pkgs: { [key: string]: any } = {};
 
         const contents_stmt = db.prepare("SELECT item_code, quantity FROM package_items WHERE package_id = ?");
@@ -28,6 +34,11 @@ const getPackages = (req: NextApiRequest, res: NextApiResponse) => {
 };
 
 const addPackage = (req: NextApiRequest, res: NextApiResponse) => {
+    const { userId } = getAuth(req);
+    if (!userId) {
+        return res.status(401).json({ error: "Unauthorized" });
+    }
+
     const payload = req.body;
     if (!payload) {
         return res.status(400).json({ message: "Request must be JSON" });
@@ -52,8 +63,8 @@ const addPackage = (req: NextApiRequest, res: NextApiResponse) => {
             throw new Error(`Package ${pkg_name} or ID ${pkg_id} exists.`);
         }
 
-        const insertPkgStmt = db.prepare("INSERT INTO packages (package_id, name, type) VALUES (?, ?, ?)");
-        insertPkgStmt.run(pkg_id, pkg_name, pkg_type);
+        const insertPkgStmt = db.prepare("INSERT INTO packages (package_id, name, type, user_id) VALUES (?, ?, ?, ?)");
+        insertPkgStmt.run(pkg_id, pkg_name, pkg_type, userId);
 
         const parsed_contents_resp: any[] = [];
         if (contents_raw) {
