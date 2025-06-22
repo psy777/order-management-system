@@ -1,84 +1,60 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import fs from 'fs';
-import path from 'path';
-
-const SETTINGS_FILE = path.resolve(process.cwd(), 'data/settings.json');
-
-const readSettings = () => {
-    if (!fs.existsSync(SETTINGS_FILE) || fs.statSync(SETTINGS_FILE).size === 0) {
-        return {};
-    }
-    try {
-        const data = fs.readFileSync(SETTINGS_FILE, 'utf-8');
-        return JSON.parse(data);
-    } catch (error) {
-        console.error("Error reading settings file:", error);
-        return {};
-    }
-};
-
-const writeSettings = (data: any) => {
-    try {
-        fs.writeFileSync(SETTINGS_FILE, JSON.stringify(data, null, 4));
-    } catch (error) {
-        console.error("Error writing settings file:", error);
-    }
-};
+import db from '../../../lib/db';
 
 const getSettings = (req: NextApiRequest, res: NextApiResponse) => {
-    let settings = readSettings();
-    
-    let updated = false;
-    if (!settings.company_name) {
-        settings.company_name = "Your Company Name";
-        updated = true;
+    try {
+        let settings = db.prepare('SELECT * FROM settings WHERE id = 1').get();
+        if (!settings) {
+            settings = {
+                id: 1,
+                company_name: '',
+                default_shipping_zip_code: '',
+                default_email_body: '',
+                email_address: '',
+                app_password: '',
+                email_cc: '',
+                email_bcc: '',
+                GMAIL_CLIENT_ID: '',
+                GMAIL_CLIENT_SECRET: '',
+                GMAIL_REFRESH_TOKEN: ''
+            };
+        }
+        res.status(200).json(settings);
+    } catch (error) {
+        console.error("Failed to get settings:", error);
+        res.status(500).json({ message: "Failed to get settings." });
     }
-    if (!settings.default_shipping_zip_code) {
-        settings.default_shipping_zip_code = "00000";
-        updated = true;
-    }
-    if (!settings.default_email_body) {
-        settings.default_email_body = "Dear [vendorCompany],\n\nPlease find attached the purchase order [orderID] for your records.\n\nWe appreciate your business!\n\nThank you,\n[yourCompany]";
-        updated = true;
-    }
-    if (!settings.email_address) {
-        settings.email_address = "";
-        updated = true;
-    }
-    if (!settings.app_password) {
-        settings.app_password = "";
-        updated = true;
-    }
-    if (!settings.email_cc) {
-        settings.email_cc = "";
-        updated = true;
-    }
-    if (!settings.email_bcc) {
-        settings.email_bcc = "";
-        updated = true;
-    }
-
-    if (updated) {
-        writeSettings(settings);
-    }
-
-    res.status(200).json(settings);
 };
 
 const updateSettings = (req: NextApiRequest, res: NextApiResponse) => {
-    const new_settings_payload = req.body;
-    if (!new_settings_payload) {
-        return res.status(400).json({ message: "Request must be JSON" });
+    const { company_name, default_shipping_zip_code, default_email_body } = req.body;
+    if (company_name === undefined || default_shipping_zip_code === undefined || default_email_body === undefined) {
+        return res.status(400).json({ message: "Request body must contain company_name, default_shipping_zip_code, and default_email_body" });
     }
 
-    let existing_settings = readSettings();
+    try {
+        const settingsExist = db.prepare('SELECT id FROM settings WHERE id = 1').get();
 
-    existing_settings.company_name = new_settings_payload.company_name ?? existing_settings.company_name;
-    existing_settings.default_shipping_zip_code = new_settings_payload.default_shipping_zip_code ?? existing_settings.default_shipping_zip_code;
-    existing_settings.default_email_body = new_settings_payload.default_email_body ?? existing_settings.default_email_body;
-
-    writeSettings(existing_settings);
-    res.status(200).json({ message: "Settings updated." });
+        if (settingsExist) {
+            const stmt = db.prepare(`
+                UPDATE settings
+                SET company_name = ?, default_shipping_zip_code = ?, default_email_body = ?
+                WHERE id = 1
+            `);
+            stmt.run(company_name, default_shipping_zip_code, default_email_body);
+        } else {
+            const stmt = db.prepare(`
+                INSERT INTO settings (id, company_name, default_shipping_zip_code, default_email_body)
+                VALUES (1, ?, ?, ?)
+            `);
+            stmt.run(company_name, default_shipping_zip_code, default_email_body);
+        }
+        
+        res.status(200).json({ message: "Settings updated." });
+    } catch (error) {
+        console.error("Failed to update settings:", error);
+        res.status(500).json({ message: "Failed to update settings." });
+    }
 };
 
 export default function handler(

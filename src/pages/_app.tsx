@@ -1,3 +1,4 @@
+import App, { AppContext, AppInitialProps } from 'next/app';
 import type { AppProps } from 'next/app';
 import Head from 'next/head';
 import Script from 'next/script';
@@ -6,7 +7,7 @@ import Layout from '../components/Layout';
 import React, { useState, useEffect } from 'react';
 import { OrderFormData } from '../components/views';
 
-function MyApp({ Component, pageProps }: AppProps) {
+function MyApp({ Component, pageProps, appSettings: initialAppSettings }: AppProps & { appSettings: any }) {
     const [orders, setOrders] = useState<OrderFormData[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [allVendors, setAllVendors] = useState<any[]>([]);
@@ -14,7 +15,7 @@ function MyApp({ Component, pageProps }: AppProps) {
     const [itemData, setItemData] = useState<any>({});
     const [packageData, setPackageData] = useState<any>({});
     const [orderForEmailModal, setOrderForEmailModal] = useState<OrderFormData | null>(null);
-    const [appSettings, setAppSettings] = useState({ company_name: "Your Company", default_email_body: "" });
+    const [appSettings, setAppSettings] = useState(initialAppSettings);
 
     const handleOrderSent = (updatedOrder: OrderFormData) => {
         saveOrder(updatedOrder);
@@ -35,17 +36,14 @@ function MyApp({ Component, pageProps }: AppProps) {
         const fetchData = async () => {
             setIsLoading(true);
             try {
-                const [ordersRes, vendorsRes, itemsRes, packagesRes, settingsRes] = await Promise.all([
+                const [ordersRes, vendorsRes, itemsRes, packagesRes] = await Promise.all([
                     fetch('/api/orders'),
                     fetch('/api/vendors'),
                     fetch('/api/items'),
                     fetch('/api/packages'),
-                    fetch('/api/settings')
                 ]);
 
                 const ordersData = await ordersRes.json();
-                const settingsData = await settingsRes.json();
-                setAppSettings(settingsData);
                 const vendorsData = await vendorsRes.json();
                 const itemsDataArray = await itemsRes.json();
                 const packagesData = await packagesRes.json();
@@ -107,6 +105,24 @@ function MyApp({ Component, pageProps }: AppProps) {
         }
     };
 
+    const deleteOrder = async (orderId: string) => {
+        try {
+            const response = await fetch(`/api/orders/${orderId}`, {
+                method: 'DELETE',
+            });
+            const result = await response.json();
+            if (result.status === 'success') {
+                setOrders(prevOrders => prevOrders.filter(o => o.id !== orderId));
+            } else {
+                console.error("Failed to delete order - server response:", result.message || "Unknown server error");
+                throw new Error(result.message || "Failed to delete order on server.");
+            }
+        } catch (error) {
+            console.error("Failed to delete order - network/fetch error:", error);
+            throw error;
+        }
+    };
+
   return (
     <>
       <Head>
@@ -133,7 +149,8 @@ function MyApp({ Component, pageProps }: AppProps) {
         handleOrderSent={handleOrderSent}
         setOrderForEmailModal={setOrderForEmailModal}
       >
-        <Component {...pageProps} 
+        <Component {...pageProps}
+            appSettings={appSettings}
             orders={orders}
             allVendors={allVendors}
             allSelectableItems={allSelectableItems}
@@ -141,6 +158,7 @@ function MyApp({ Component, pageProps }: AppProps) {
             packageData={packageData}
             setOrderForEmailModal={setOrderForEmailModal}
             saveOrder={saveOrder}
+            deleteOrder={deleteOrder}
             fetchAndUpdateVendors={fetchAndUpdateVendors}
             isLoading={isLoading}
         />
@@ -148,5 +166,25 @@ function MyApp({ Component, pageProps }: AppProps) {
     </>
   );
 }
+
+MyApp.getInitialProps = async (
+    context: AppContext
+): Promise<AppInitialProps & { appSettings: any }> => {
+    const ctx = await App.getInitialProps(context);
+
+    let appSettings = { company_name: "Your Company", default_email_body: "" };
+    try {
+        const isServer = typeof window === 'undefined';
+        const baseUrl = isServer ? (process.env.NEXT_PUBLIC_VERCEL_URL ? `https://${process.env.NEXT_PUBLIC_VERCEL_URL}` : 'http://localhost:3000') : '';
+        const settingsRes = await fetch(`${baseUrl}/api/settings`);
+        if (settingsRes.ok) {
+            appSettings = await settingsRes.json();
+        }
+    } catch (error) {
+        console.error("Failed to fetch settings in getInitialProps:", error);
+    }
+
+    return { ...ctx, appSettings };
+};
 
 export default MyApp;

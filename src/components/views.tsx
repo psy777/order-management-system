@@ -144,6 +144,8 @@ export const OrderForm = ({ order, saveOrder, deleteOrder, allVendors, allSelect
     const [formData, setFormData] = useState<OrderFormData>(order ? {...order, estimatedShipping: order.estimatedShipping || '', scentOption: order.scentOption || 'Scented'} : { vendorInfo: { companyName: '', contactName: '', email: '', phone: '', billingAddress: '', billingCity: '', billingState: '', billingZipCode: '', shippingAddress: '', shippingCity: '', shippingState: '', shippingZipCode: '' }, lineItems: [], notes: "", estimatedShippingDate: '', estimatedShipping: '', scentOption: 'Scented', nameDrop: false, signatureDataUrl: null, statusHistory: [{ status: 'Draft', date: new Date().toISOString() }], status: 'Draft' });
     const [vendorSuggestions, setVendorSuggestions] = useState<any[]>([]);
     const [showUnsavedChangesModal, setShowUnsavedChangesModal] = useState(false);
+    const [nextRoute, setNextRoute] = useState<string | null>(null);
+    const isNavigating = useRef(false);
     const scanInputRef = useRef<HTMLInputElement>(null);
     const [scanInput, setScanInput] = useState('');
     const [sameAsShipping, setSameAsShipping] = useState(true);
@@ -156,14 +158,29 @@ export const OrderForm = ({ order, saveOrder, deleteOrder, allVendors, allSelect
     const router = useRouter();
 
     const handleReturnToDashboard = () => {
-        const isNewUnsavedDraft = !order && (formData.lineItems.length > 0 || (formData.vendorInfo && formData.vendorInfo.companyName));
-
-        if (isNewUnsavedDraft) {
-            setShowUnsavedChangesModal(true);
-        } else {
-            router.push('/');
-        }
+        router.push('/');
     };
+
+    useEffect(() => {
+        const handleRouteChange = (url: string) => {
+            if (isNavigating.current) {
+                return;
+            }
+            const isNewUnsavedDraft = !order && (formData.lineItems.length > 0 || (formData.vendorInfo && formData.vendorInfo.companyName));
+            if (isNewUnsavedDraft && !showUnsavedChangesModal) {
+                setNextRoute(url);
+                setShowUnsavedChangesModal(true);
+                router.events.emit('routeChangeError');
+                throw 'routeChange aborted.';
+            }
+        };
+
+        router.events.on('routeChangeStart', handleRouteChange);
+
+        return () => {
+            router.events.off('routeChangeStart', handleRouteChange);
+        };
+    }, [formData, order, router.events, showUnsavedChangesModal]);
 
     useEffect(() => {
         const debounce = (func: Function, delay: number) => {
@@ -457,7 +474,7 @@ export const OrderForm = ({ order, saveOrder, deleteOrder, allVendors, allSelect
         return { ...formData, id: formData.id || `PO-${Date.now()}`, date: formData.date || new Date().toISOString(), status: finalStatus, statusHistory: newStatusHistory, total: orderTotals.total, signatureDataUrl: formData.signatureDataUrl };
     };
 
-    const handleSaveDraft = async () => {
+    const handleSaveDraft = async (suppressRedirect = false) => {
         if (!formData.vendorInfo.companyName) {
             console.log("Order save failed: Please select a vendor.");
             return;
@@ -465,7 +482,9 @@ export const OrderForm = ({ order, saveOrder, deleteOrder, allVendors, allSelect
         const newOrder = createOrderObject('Draft');
         try {
             await saveOrder(newOrder);
-            router.push('/');
+            if (!suppressRedirect) {
+                router.push('/');
+            }
         } catch (error: any) {
             console.log(`Failed to save draft: ${error.message}`);
         }
@@ -512,39 +531,35 @@ export const OrderForm = ({ order, saveOrder, deleteOrder, allVendors, allSelect
             orderIdDigitsForConfirmation = cleanedOrderId;
         }
 
-        let confirmationMessage = "Are you sure you want to delete this order? This action cannot be undone.";
-        let requiresSpecialConfirmation = false;
-        let expectedConfirmationPhrase = "";
-
-        if (orderStatus !== 'Draft') {
-            requiresSpecialConfirmation = true;
+        if (orderStatus === 'Draft') {
+            const isConfirmed = window.confirm("Are you sure you want to delete this draft? This action cannot be undone.");
+            if (!isConfirmed) {
+                return;
+            }
+        } else {
+            let requiresSpecialConfirmation = true;
+            let expectedConfirmationPhrase = "";
             if (!companyName || !orderIdDigitsForConfirmation) {
                  console.log("Cannot proceed with deletion: Company name or Order ID is missing/invalid for confirmation string generation.");
                  return;
             }
             expectedConfirmationPhrase = `delete ${companyName} order ${orderIdDigitsForConfirmation}`;
-            confirmationMessage = `To delete this order, please type the following exactly:\n\n"${expectedConfirmationPhrase}"`;
-        }
+            const confirmationMessage = `To delete this order, please type the following exactly:\n\n"${expectedConfirmationPhrase}"`;
 
-        const userInput = window.prompt(confirmationMessage);
+            const userInput = window.prompt(confirmationMessage);
 
-        if (userInput === null) {
-            return;
-        }
+            if (userInput === null) {
+                return;
+            }
 
-        let deletePayload: OrderFormData = { ...formData, status: "Deleted" };
-
-        if (requiresSpecialConfirmation) {
-            if (userInput === expectedConfirmationPhrase) {
-                deletePayload.deleteConfirmation = userInput;
-            } else {
+            if (userInput !== expectedConfirmationPhrase) {
                 console.log("Deletion cancelled: The confirmation phrase was incorrect.");
                 return;
             }
         }
         
         try {
-            await deleteOrder(orderId, deletePayload);
+            await (deleteOrder as (orderId: string) => Promise<void>)(orderId);
             router.push('/');
         } catch (error: any) {
             console.error("Error during delete operation:", error);
@@ -637,14 +652,28 @@ export const OrderForm = ({ order, saveOrder, deleteOrder, allVendors, allSelect
         <>
             {showUnsavedChangesModal && (
                 <UnsavedChangesModal
-                    onCancel={() => setShowUnsavedChangesModal(false)}
+                    onCancel={() => {
+                        setShowUnsavedChangesModal(false);
+                        setNextRoute(null);
+                    }}
                     onDelete={() => {
                         setShowUnsavedChangesModal(false);
-                        router.push('/');
+                        isNavigating.current = true;
+                        if (nextRoute) {
+                            router.push(nextRoute);
+                        } else {
+                            router.push('/');
+                        }
                     }}
-                    onSaveAndClose={() => {
+                    onSaveAndClose={async () => {
+                        await handleSaveDraft(true);
                         setShowUnsavedChangesModal(false);
-                        handleSaveDraft();
+                        isNavigating.current = true;
+                        if (nextRoute) {
+                            router.push(nextRoute);
+                        } else {
+                            router.push('/');
+                        }
                     }}
                 />
             )}
@@ -714,7 +743,22 @@ export const OrderForm = ({ order, saveOrder, deleteOrder, allVendors, allSelect
                 </div>
                 <div className="lg:col-span-1 space-y-6">
                     <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200"><h2 className="text-xl font-semibold text-slate-700 border-b pb-3 mb-4">Order Metadata</h2><div className="space-y-4"><Input label="Estimated Shipping Date" type="date" value={formData.estimatedShippingDate} onChange={e => setFormData(p=>({...p, estimatedShippingDate: e.target.value}))} disabled={!canEdit} /><ScentToggle value={formData.scentOption} onChange={val => setFormData(p=>({...p, scentOption: val}))} disabled={!canEdit} /><NameDropToggle value={formData.nameDrop} onChange={val => setFormData(p=>({...p, nameDrop: val}))} disabled={!canEdit} /></div></div>
-                    {!isDraft && (<div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200"><h2 className="text-xl font-semibold text-slate-700 mb-4">Update Status</h2><div className="space-y-2"><button onClick={() => handleStatusChange('Paid')} disabled={formData.status !== 'Sent'} className="w-full text-center px-4 py-2 bg-blue-500 text-white font-semibold rounded-md hover:bg-blue-600 disabled:bg-slate-300 disabled:cursor-not-allowed">Mark as Paid</button><button onClick={() => handleStatusChange('Shipped')} disabled={formData.status !== 'Paid'} className="w-full text-center px-4 py-2 bg-green-500 text-white font-semibold rounded-md hover:bg-green-600 disabled:bg-slate-300 disabled:cursor-not-allowed">Mark as Shipped</button></div></div>)}
+                    <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
+                        <h2 className="text-xl font-semibold text-slate-700 mb-4">Update Status</h2>
+                        <div className="space-y-2">
+                            {isDraft && (
+                                <button onClick={() => handleStatusChange('Sent')} className="w-full text-center px-4 py-2 bg-yellow-500 text-white font-semibold rounded-md hover:bg-yellow-600">
+                                    Mark as Sent
+                                </button>
+                            )}
+                            <button onClick={() => handleStatusChange('Paid')} disabled={formData.status !== 'Sent'} className="w-full text-center px-4 py-2 bg-blue-500 text-white font-semibold rounded-md hover:bg-blue-600 disabled:bg-slate-300 disabled:cursor-not-allowed">
+                                Mark as Paid
+                            </button>
+                            <button onClick={() => handleStatusChange('Shipped')} disabled={formData.status !== 'Paid'} className="w-full text-center px-4 py-2 bg-green-500 text-white font-semibold rounded-md hover:bg-green-600 disabled:bg-slate-300 disabled:cursor-not-allowed">
+                                Mark as Shipped
+                            </button>
+                        </div>
+                    </div>
                     <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
                         <h2 className="text-xl font-semibold text-slate-700 mb-3 border-b pb-3">Signature</h2>
                         <SignaturePad 
@@ -746,7 +790,7 @@ export const OrderForm = ({ order, saveOrder, deleteOrder, allVendors, allSelect
                     <div className="space-y-3">
                         {isDraft && <button onClick={handleSaveAndSend} className="w-full text-center px-6 py-3 bg-orange-600 text-white font-bold rounded-md hover:bg-orange-700">Save and Send</button>}
                         {!isDraft && !isEditing && <button onClick={() => setOrderForEmailModal(formData)} className="w-full text-center px-6 py-3 bg-orange-600 text-white font-bold rounded-md hover:bg-orange-700">Resend Email</button>}
-                        {isDraft && <button onClick={handleSaveDraft} className="w-full text-center px-6 py-3 bg-slate-600 text-white font-bold rounded-md hover:bg-slate-700">Save as Draft</button>}
+                        {isDraft && <button onClick={() => handleSaveDraft()} className="w-full text-center px-6 py-3 bg-slate-600 text-white font-bold rounded-md hover:bg-slate-700">Save as Draft</button>}
                         {isEditing && !isDraft && <button onClick={() => {saveOrder(createOrderObject()); setIsEditing(false);}} className="w-full text-center px-6 py-3 bg-slate-600 text-white font-bold rounded-md hover:bg-slate-700">Save Changes</button>}
                         <button onClick={handlePreviewPdf} className="w-full text-center px-6 py-3 bg-white text-slate-700 font-bold rounded-md hover:bg-slate-100 border border-slate-300">Preview PDF</button>
                         {!isDraft && !isEditing && <button onClick={() => setIsEditing(true)} className="w-full text-center px-6 py-3 bg-blue-100 text-blue-700 font-bold rounded-md hover:bg-blue-200">Edit Order</button>}

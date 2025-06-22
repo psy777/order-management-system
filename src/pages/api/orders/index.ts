@@ -163,34 +163,6 @@ const postOrder = (req: NextApiRequest, res: NextApiResponse) => {
 
     let current_order_id_for_db_ops = order_id_from_payload;
     
-    const is_attempting_delete = new_order_payload.status === "Deleted";
-
-    if (order_id_from_payload && is_attempting_delete) {
-      if (existing_order_row) {
-        if (existing_order_row.status !== "Draft") {
-          const vendor_id_for_confirm = existing_order_row.vendor_id;
-          let company_name_for_confirm = "";
-          if (vendor_id_for_confirm) {
-            const vendorStmt = db.prepare("SELECT company_name FROM vendors WHERE id = ?");
-            const vendor_row = vendorStmt.get(vendor_id_for_confirm) as { company_name: string } | undefined;
-            if (vendor_row) company_name_for_confirm = vendor_row.company_name;
-          }
-          const order_id_str = order_id_from_payload.replace("PO-", "");
-          const order_id_last_4 = order_id_str.length >= 4 ? order_id_str.slice(-4) : order_id_str;
-          if (!company_name_for_confirm || !order_id_last_4) {
-            throw new Error("Cannot perform deletion: Missing data.");
-          }
-          const expected_confirmation = `delete ${company_name_for_confirm} order ${order_id_last_4}`;
-          if (new_order_payload.deleteConfirmation !== expected_confirmation) {
-            throw new Error("Deletion confirmation failed.");
-          }
-        }
-        delete new_order_payload.deleteConfirmation;
-      } else {
-        throw new Error(`Order ID ${order_id_from_payload} not found.`);
-      }
-    }
-
     let db_processed_vendor_id: string | null | undefined = null;
     if (new_order_payload.vendorInfo) {
       db_processed_vendor_id = update_or_create_vendor(new_order_payload.vendorInfo);

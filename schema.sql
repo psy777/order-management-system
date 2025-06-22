@@ -106,5 +106,33 @@ CREATE TABLE IF NOT EXISTS settings (
     email_address TEXT,
     app_password TEXT,
     email_cc TEXT,
-    email_bcc TEXT
+    email_bcc TEXT,
+    GMAIL_CLIENT_ID TEXT,
+    GMAIL_CLIENT_SECRET TEXT,
+    GMAIL_REFRESH_TOKEN TEXT
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    email TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS user_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action_name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS user_action_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action_id INTEGER NOT NULL,
+    user_id TEXT,
+    session_id TEXT,
+    details TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (action_id) REFERENCES user_actions (id),
+    FOREIGN KEY (user_id) REFERENCES users (id)
 );

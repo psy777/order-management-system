@@ -1,8 +1,20 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import nodemailer from 'nodemailer';
 import formidable from 'formidable';
+import { google } from 'googleapis';
+import db from '../../lib/db';
 import fs from 'fs';
 import path from 'path';
+
+interface Settings {
+    email_address: string;
+    app_password: string;
+    email_cc: string;
+    email_bcc: string;
+    GMAIL_CLIENT_ID: string;
+    GMAIL_CLIENT_SECRET: string;
+    GMAIL_REFRESH_TOKEN: string;
+}
 
 export const config = {
     api: {
@@ -10,14 +22,12 @@ export const config = {
     },
 };
 
-const SETTINGS_FILE = path.resolve(process.cwd(), 'data/settings.json');
-
 const readSettings = () => {
     try {
-        const data = fs.readFileSync(SETTINGS_FILE, 'utf-8');
-        return JSON.parse(data);
+        const row = db.prepare('SELECT * FROM settings WHERE id = 1').get();
+        return row || {};
     } catch (error) {
-        console.error("Failed to read settings file:", error);
+        console.error("Failed to read settings from database:", error);
         return {};
     }
 };
@@ -28,10 +38,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(405).end(`Method ${req.method} Not Allowed`);
     }
 
-    const settings = readSettings();
-    const { email_address: from_email, app_password: from_pass, email_cc, email_bcc } = settings;
+    const settings = readSettings() as Settings;
+    const { email_address: from_email, app_password: from_pass, email_cc, email_bcc, GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN } = settings;
 
-    if (!from_email || !from_pass) {
+    if (!from_email || !from_pass || !GMAIL_CLIENT_ID || !GMAIL_CLIENT_SECRET || !GMAIL_REFRESH_TOKEN) {
         return res.status(500).json({ message: "Email service is not configured." });
     }
 
@@ -52,10 +62,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             
             const order = JSON.parse(Array.isArray(orderStr) ? orderStr[0] : orderStr);
 
-            const transporter = nodemailer.createTransport({
-                service: 'gmail',
-                auth: { user: from_email, pass: from_pass },
+            const OAuth2 = google.auth.OAuth2;
+            const oauth2Client = new OAuth2(
+                GMAIL_CLIENT_ID,
+                GMAIL_CLIENT_SECRET,
+                "https" // Redirect URL
+            );
+
+            oauth2Client.setCredentials({
+                refresh_token: GMAIL_REFRESH_TOKEN
             });
+
+            const accessToken = await oauth2Client.getAccessToken();
+
+            const transporter = nodemailer.createTransport({
+                host: 'smtp.gmail.com',
+                port: 465,
+                secure: true,
+                auth: {
+                    type: 'OAuth2',
+                    user: from_email,
+                    clientId: GMAIL_CLIENT_ID,
+                    clientSecret: GMAIL_CLIENT_SECRET,
+                    refreshToken: GMAIL_REFRESH_TOKEN,
+                    accessToken: accessToken.token,
+                },
+            } as any);
 
             const mailOptions: nodemailer.SendMailOptions = {
                 from: from_email,

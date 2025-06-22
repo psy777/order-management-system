@@ -1,29 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import fs from 'fs';
-import path from 'path';
-
-const SETTINGS_FILE = path.resolve(process.cwd(), 'data/settings.json');
-
-const readSettings = () => {
-    if (!fs.existsSync(SETTINGS_FILE) || fs.statSync(SETTINGS_FILE).size === 0) {
-        return {};
-    }
-    try {
-        const data = fs.readFileSync(SETTINGS_FILE, 'utf-8');
-        return JSON.parse(data);
-    } catch (error) {
-        console.error("Error reading settings file:", error);
-        return {};
-    }
-};
-
-const writeSettings = (data: any) => {
-    try {
-        fs.writeFileSync(SETTINGS_FILE, JSON.stringify(data, null, 4));
-    } catch (error) {
-        console.error("Error writing settings file:", error);
-    }
-};
+import db from '../../../lib/db';
 
 export default function handler(
     req: NextApiRequest,
@@ -35,22 +11,41 @@ export default function handler(
             return res.status(400).json({ message: "Request must be JSON" });
         }
 
-        const { email_address, app_password, email_cc = '', email_bcc = '' } = email_settings_payload;
+        const { email_address, app_password, email_cc = '', email_bcc = '', GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN } = email_settings_payload;
 
-        if (!email_address || !app_password) {
-            return res.status(400).json({ message: "Email address and App Password are required." });
+        if (!email_address || !app_password || !GMAIL_CLIENT_ID || !GMAIL_CLIENT_SECRET || !GMAIL_REFRESH_TOKEN) {
+            return res.status(400).json({ message: "Email address, App Password, and all Gmail API credentials are required." });
         }
 
-        let existing_settings = readSettings();
+        const validateEmails = (emails: string) => {
+            if (!emails) return true;
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            return emails.split(',').every(email => emailRegex.test(email.trim()));
+        };
 
-        existing_settings.email_address = email_address;
-        existing_settings.app_password = app_password;
-        existing_settings.email_cc = email_cc;
-        existing_settings.email_bcc = email_bcc;
+        if (!validateEmails(email_cc) || !validateEmails(email_bcc)) {
+            return res.status(400).json({ message: "Invalid email format in CC or BCC fields." });
+        }
 
-        writeSettings(existing_settings);
-
-        res.status(200).json({ message: "Email settings updated successfully." });
+        try {
+            const stmt = db.prepare(`
+                INSERT INTO settings (id, email_address, app_password, email_cc, email_bcc, GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN)
+                VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                email_address = excluded.email_address,
+                app_password = excluded.app_password,
+                email_cc = excluded.email_cc,
+                email_bcc = excluded.email_bcc,
+                GMAIL_CLIENT_ID = excluded.GMAIL_CLIENT_ID,
+                GMAIL_CLIENT_SECRET = excluded.GMAIL_CLIENT_SECRET,
+                GMAIL_REFRESH_TOKEN = excluded.GMAIL_REFRESH_TOKEN;
+            `);
+            stmt.run(email_address, app_password, email_cc, email_bcc, GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN);
+            res.status(200).json({ message: "Email settings updated successfully." });
+        } catch (error) {
+            console.error("Failed to update settings:", error);
+            res.status(500).json({ message: "Failed to update settings." });
+        }
     } else {
         res.setHeader('Allow', ['POST']);
         res.status(405).end(`Method ${req.method} Not Allowed`);
