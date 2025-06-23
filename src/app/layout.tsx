@@ -1,14 +1,8 @@
-import type { Metadata } from "next";
-import {
-  ClerkProvider,
-} from "@clerk/nextjs";
-import "../styles/globals.css";
-import React from "react";
-
-export const metadata: Metadata = {
-  title: "Order Management System",
-  description: "Order Management System",
-};
+import { ClerkProvider } from '@clerk/nextjs';
+import '../styles/globals.css';
+import React from 'react';
+import Layout from '../components/Layout';
+import { AppProvider } from '../context/AppContext';
 
 export default function RootLayout({
   children,
@@ -17,11 +11,15 @@ export default function RootLayout({
 }) {
   return (
     <ClerkProvider>
-      <html lang="en">
-        <body>
-            {children}
-        </body>
-      </html>
+      <AppProvider>
+        <html lang="en">
+          <body>
+            <Layout>
+              {children}
+            </Layout>
+          </body>
+        </html>
+      </AppProvider>
     </ClerkProvider>
   );
 }

@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/router';
+import { useRouter } from 'next/navigation';
 import { Card, Input, Select, Textarea, TrashIcon, DollarSignIcon, DocumentTextIcon, ChartBarIcon, ViewIcon, PdfIcon, EmailIcon, TrendingUpIcon, CogIcon } from './ui';
 import { PriceInput, ScentToggle, NameDropToggle, StatusBar } from './shared';
 import { SalesChart, SignaturePad, EmailModal, ShippedStatusBadge } from './features';
@@ -163,25 +163,20 @@ export const OrderForm = ({ order, saveOrder, deleteOrder, allVendors, allSelect
     };
 
     useEffect(() => {
-        const handleRouteChange = (url: string) => {
-            if (isNavigating.current) {
-                return;
-            }
+        const handleBeforeUnload = (e: BeforeUnloadEvent) => {
             const isNewUnsavedDraft = !order && (formData.lineItems.length > 0 || (formData.vendorInfo && formData.vendorInfo.companyName));
-            if (isNewUnsavedDraft && !showUnsavedChangesModal) {
-                setNextRoute(url);
-                setShowUnsavedChangesModal(true);
-                router.events.emit('routeChangeError');
-                throw 'routeChange aborted.';
+            if (isNewUnsavedDraft) {
+                e.preventDefault();
+                e.returnValue = '';
             }
         };
 
-        router.events.on('routeChangeStart', handleRouteChange);
+        window.addEventListener('beforeunload', handleBeforeUnload);
 
         return () => {
-            router.events.off('routeChangeStart', handleRouteChange);
+            window.removeEventListener('beforeunload', handleBeforeUnload);
         };
-    }, [formData, order, router.events, showUnsavedChangesModal]);
+    }, [formData, order]);
 
     useEffect(() => {
         const debounce = (func: Function, delay: number) => {

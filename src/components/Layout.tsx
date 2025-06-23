@@ -1,20 +1,19 @@
+"use client";
 import React, { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { MenuIcon } from './ui';
-import { SignInButton, SignUpButton, SignedIn, SignedOut, UserButton } from '@clerk/nextjs';
+import { UserButton } from '@clerk/nextjs';
 import { EmailModal } from './features';
-import { OrderFormData } from './views';
+import { useAppContext } from '../context/AppContext';
 
-interface LayoutProps {
-    children: React.ReactNode;
-    appSettings: { company_name: string; default_email_body: string };
-    orderForEmailModal: OrderFormData | null;
-    allSelectableItems: any;
-    handleOrderSent: (updatedOrder: OrderFormData) => void;
-    setOrderForEmailModal: (order: OrderFormData | null) => void;
-}
-
-const Layout: React.FC<LayoutProps> = ({ children, appSettings, orderForEmailModal, allSelectableItems, handleOrderSent, setOrderForEmailModal }) => {
+const Layout = ({ children }: { children: React.ReactNode }) => {
+    const {
+        appSettings,
+        orderForEmailModal,
+        allSelectableItems,
+        handleOrderSent,
+        setOrderForEmailModal,
+    } = useAppContext();
     const [showSettingsMenu, setShowSettingsMenu] = useState(false);
     const settingsMenuRef = useRef<HTMLDivElement>(null);
 
@@ -56,7 +55,7 @@ const Layout: React.FC<LayoutProps> = ({ children, appSettings, orderForEmailMod
                             </button>
                             <Link href="/" className="text-xl font-bold text-slate-800 ml-4">{appSettings.company_name}</Link>
                             {showSettingsMenu && (
-                                <div 
+                                <div
                                     className="absolute top-full mt-2 w-56 bg-white rounded-md shadow-xl py-1 ring-1 ring-black ring-opacity-5 focus:outline-none transition ease-out duration-100"
                                     role="menu"
                                     aria-orientation="vertical"
