@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Order Logs</title>
+    <link rel="stylesheet" href="/assets/css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Order Logs for {{ order_id }}</h1>
+        <table id="logs-table">
+            <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>User</th>
+                    <th>Action</th>
+                    <th>Details</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- Log entries will be populated by JavaScript -->
+            </tbody>
+        </table>
+        <a href="/">Back to Orders</a>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const orderId = '{{ order_id }}';
+            fetch(`/api/orders/${orderId}/logs`)
+                .then(response => response.json())
+                .then(logs => {
+                    const tbody = document.querySelector('#logs-table tbody');
+                    logs.forEach(log => {
+                        const tr = document.createElement('tr');
+                        tr.innerHTML = `
+                            <td>${new Date(log.timestamp).toLocaleString()}</td>
+                            <td>${log.user}</td>
+                            <td>${log.action}</td>
+                            <td>${log.details}</td>
+                        `;
+                        tbody.appendChild(tr);
+                    });
+                });
+        });
+    </script>
+</body>
+</html>

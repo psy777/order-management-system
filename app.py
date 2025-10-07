@@ -151,6 +151,15 @@ def get_orders():
     conn.close()
     return jsonify(active_orders_response)
 
+@app.route('/api/orders/<string:order_id>/logs', methods=['GET'])
+def get_order_logs(order_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT log_id, timestamp, user, action, details FROM order_logs WHERE order_id = ? ORDER BY timestamp DESC", (order_id,))
+    logs = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify(logs)
+
 @app.route('/api/dashboard-stats', methods=['GET'])
 def get_dashboard_stats():
     conn = get_db_connection()
@@ -252,6 +261,13 @@ def save_order():
             cursor.execute("INSERT INTO order_status_history (order_id, status, status_date) VALUES (?,?,?)", (processed_order_id, hist.get('status'), hist.get('date')))
         if not any(h['status'] == new_order_payload.get('status') for h in new_order_payload.get('statusHistory',[])):
             cursor.execute("INSERT INTO order_status_history (order_id, status, status_date) VALUES (?,?,?)", (processed_order_id, new_order_payload.get('status'), datetime.now(timezone.utc).isoformat()+"Z"))
+        
+        if existing_order_row:
+            cursor.execute("INSERT INTO order_logs (order_id, user, action, details) VALUES (?, ?, ?, ?)",
+                           (current_order_id_for_db_ops, "system", "Order Updated", f"Order {current_order_id_for_db_ops} was updated."))
+        else:
+            cursor.execute("INSERT INTO order_logs (order_id, user, action, details) VALUES (?, ?, ?, ?)",
+                           (processed_order_id, "system", "Order Created", f"Order {processed_order_id} was created."))
 
         conn_main.commit()
         app.logger.info(f"Order {processed_order_id} committed successfully.")
@@ -1000,6 +1016,10 @@ def manage_items_page(): return render_template('manage_items.html')
 def manage_packages_page(): return render_template('manage_packages.html')
 @app.route('/settings')
 def settings_page(): return render_template('settings.html')
+
+@app.route('/order-logs/<string:order_id>')
+def order_logs_page(order_id):
+    return render_template('order_logs.html', order_id=order_id)
 
 @app.route('/favicon.ico')
 def favicon(): return send_from_directory(os.path.join(app.root_path,'assets'),'favicon.ico',mimetype='image/vnd.microsoft.icon')
