@@ -9,6 +9,24 @@
 <body>
     <div class="container">
         <h1>Order Logs for {{ order_id }}</h1>
+
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">Add New Log Entry</h5>
+                <form id="add-log-form" action="/api/orders/{{ order_id }}/logs" method="post" enctype="multipart/form-data">
+                    <div class="mb-3">
+                        <label for="note" class="form-label">Note</label>
+                        <textarea class="form-control" id="note" name="note" rows="3"></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label for="attachment" class="form-label">Attachment</label>
+                        <input class="form-control" type="file" id="attachment" name="attachment">
+                    </div>
+                    <button type="submit" class="btn btn-primary">Add Log</button>
+                </form>
+            </div>
+        </div>
+
         <table id="logs-table">
             <thead>
                 <tr>
@@ -16,6 +34,8 @@
                     <th>User</th>
                     <th>Action</th>
                     <th>Details</th>
+                    <th>Note</th>
+                    <th>Attachment</th>
                 </tr>
             </thead>
             <tbody>
@@ -28,21 +48,53 @@
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             const orderId = '{{ order_id }}';
-            fetch(`/api/orders/${orderId}/logs`)
-                .then(response => response.json())
-                .then(logs => {
-                    const tbody = document.querySelector('#logs-table tbody');
-                    logs.forEach(log => {
-                        const tr = document.createElement('tr');
-                        tr.innerHTML = `
-                            <td>${new Date(log.timestamp).toLocaleString()}</td>
-                            <td>${log.user}</td>
-                            <td>${log.action}</td>
-                            <td>${log.details}</td>
-                        `;
-                        tbody.appendChild(tr);
+            const logForm = document.getElementById('add-log-form');
+
+            function fetchLogs() {
+                fetch(`/api/orders/${orderId}/logs`)
+                    .then(response => response.json())
+                    .then(logs => {
+                        const tbody = document.querySelector('#logs-table tbody');
+                        tbody.innerHTML = ''; // Clear existing logs
+                        logs.forEach(log => {
+                            const tr = document.createElement('tr');
+                            tr.innerHTML = `
+                                <td>${new Date(log.timestamp).toLocaleString()}</td>
+                                <td>${log.user || ''}</td>
+                                <td>${log.action}</td>
+                                <td>${log.details || ''}</td>
+                                <td>${log.note || ''}</td>
+                                <td>${log.attachment_path ? `<a href="/data/${log.attachment_path}" target="_blank">View File</a>` : ''}</td>
+                            `;
+                            tbody.appendChild(tr);
+                        });
                     });
+            }
+
+            logForm.addEventListener('submit', function(event) {
+                event.preventDefault();
+                const formData = new FormData(logForm);
+
+                fetch(`/api/orders/${orderId}/logs`, {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(result => {
+                    if (result.status === 'success') {
+                        logForm.reset();
+                        fetchLogs();
+                    } else {
+                        alert('Failed to add log entry: ' + result.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error adding log entry:', error);
+                    alert('An error occurred while adding the log entry.');
                 });
+            });
+
+            fetchLogs();
         });
     </script>
 </body>

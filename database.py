@@ -43,7 +43,7 @@ def init_db():
     cursor.execute("CREATE TRIGGER IF NOT EXISTS update_orders_updated_at AFTER UPDATE ON orders FOR EACH ROW BEGIN UPDATE orders SET updated_at = CURRENT_TIMESTAMP WHERE order_id = OLD.order_id; END;")
     cursor.execute("CREATE TABLE IF NOT EXISTS order_line_items (line_item_id INTEGER PRIMARY KEY AUTOINCREMENT, order_id TEXT NOT NULL, item_code TEXT NOT NULL, package_code TEXT, quantity INTEGER NOT NULL, price_per_unit_cents INTEGER NOT NULL, style_chosen TEXT, item_type TEXT, FOREIGN KEY (order_id) REFERENCES orders (order_id) ON DELETE CASCADE, FOREIGN KEY (item_code) REFERENCES items (item_code) ON DELETE RESTRICT);")
     cursor.execute("CREATE TABLE IF NOT EXISTS order_status_history (history_id INTEGER PRIMARY KEY AUTOINCREMENT, order_id TEXT NOT NULL, status TEXT NOT NULL, status_date TEXT NOT NULL, FOREIGN KEY (order_id) REFERENCES orders (order_id) ON DELETE CASCADE);")
-    cursor.execute("CREATE TABLE IF NOT EXISTS order_logs (log_id INTEGER PRIMARY KEY AUTOINCREMENT, order_id TEXT NOT NULL, timestamp TEXT DEFAULT CURRENT_TIMESTAMP, user TEXT, action TEXT NOT NULL, details TEXT, FOREIGN KEY (order_id) REFERENCES orders (order_id) ON DELETE CASCADE);")
+    cursor.execute("CREATE TABLE IF NOT EXISTS order_logs (log_id INTEGER PRIMARY KEY AUTOINCREMENT, order_id TEXT NOT NULL, timestamp TEXT DEFAULT CURRENT_TIMESTAMP, user TEXT, action TEXT NOT NULL, details TEXT, note TEXT, attachment_path TEXT, FOREIGN KEY (order_id) REFERENCES orders (order_id) ON DELETE CASCADE);")
     conn.commit()
     conn.close()
     logger.info("Database initialized.")

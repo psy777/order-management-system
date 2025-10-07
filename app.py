@@ -33,7 +33,7 @@ app.secret_key = os.urandom(24)
 DATA_DIR = 'data'
 SETTINGS_FILE = os.path.join(DATA_DIR, 'settings.json')
 
-UPLOAD_FOLDER = 'uploads'
+UPLOAD_FOLDER = os.path.join(os.path.dirname(app.root_path), 'data')
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -151,11 +151,32 @@ def get_orders():
     conn.close()
     return jsonify(active_orders_response)
 
-@app.route('/api/orders/<string:order_id>/logs', methods=['GET'])
-def get_order_logs(order_id):
+@app.route('/api/orders/<string:order_id>/logs', methods=['GET', 'POST'])
+def handle_order_logs(order_id):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT log_id, timestamp, user, action, details FROM order_logs WHERE order_id = ? ORDER BY timestamp DESC", (order_id,))
+
+    if request.method == 'POST':
+        note = request.form.get('note')
+        file = request.files.get('attachment')
+        attachment_path = None
+
+        if file and file.filename:
+            filename = secure_filename(file.filename)
+            unique_filename = f"{uuid.uuid4().hex[:8]}_{filename}"
+            attachment_path = unique_filename
+            file.save(os.path.join(app.config['UPLOAD_FOLDER'], unique_filename))
+
+        cursor.execute(
+            "INSERT INTO order_logs (order_id, user, action, note, attachment_path) VALUES (?, ?, ?, ?, ?)",
+            (order_id, "system", "Custom Log", note, attachment_path)
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "success", "message": "Log entry added."})
+
+    # GET request
+    cursor.execute("SELECT log_id, timestamp, user, action, details, note, attachment_path FROM order_logs WHERE order_id = ? ORDER BY timestamp DESC", (order_id,))
     logs = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return jsonify(logs)
@@ -1023,6 +1044,10 @@ def order_logs_page(order_id):
 
 @app.route('/favicon.ico')
 def favicon(): return send_from_directory(os.path.join(app.root_path,'assets'),'favicon.ico',mimetype='image/vnd.microsoft.icon')
+@app.route('/data/<path:filename>')
+def serve_uploads(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
 @app.route('/assets/<path:filename>')
 def serve_assets(filename): return send_from_directory(os.path.join(app.root_path,'assets'),filename)
 @app.route('/')
