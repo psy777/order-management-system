@@ -181,6 +181,134 @@ def handle_order_logs(order_id):
     conn.close()
     return jsonify(logs)
 
+@app.route('/api/search-orders', methods=['GET'])
+def search_orders():
+    query = request.args.get('query', '').strip()
+    if not query:
+        return jsonify([])
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    base_query = "SELECT DISTINCT o.order_id FROM orders o "
+    joins = []
+    conditions = []
+    params = []
+
+    # Regex to find key:value pairs, including operators like >=, <=
+    structured_pattern = re.compile(r'(\b\w+\b:)(>=|<=|<>|!=|=|<|>|)?("[^"]+"|\S+)')
+    
+    # General search terms are what's left after removing structured terms
+    general_terms = structured_pattern.sub('', query).split()
+
+    # --- Structured Search ---
+    for key, op, value in structured_pattern.findall(query):
+        key = key[:-1].lower() # remove colon
+        value = value.strip('"')
+        
+        # Set default operator if not present
+        if not op: op = '='
+
+        if key in ['from', 'vendor', 'customer']:
+            if 'v' not in joins: joins.append("LEFT JOIN vendors v ON o.vendor_id = v.id")
+            conditions.append("(v.company_name LIKE ? OR v.contact_name LIKE ? OR v.email LIKE ?)")
+            params.extend([f'%{value}%', f'%{value}%', f'%{value}%'])
+        elif key == 'status':
+            conditions.append("o.status LIKE ?")
+            params.append(f'%{value}%')
+        elif key == 'item':
+            if 'oli' not in joins: joins.append("LEFT JOIN order_line_items oli ON o.order_id = oli.order_id")
+            if 'i' not in joins: joins.append("LEFT JOIN items i ON oli.item_code = i.item_code")
+            conditions.append("(i.name LIKE ? OR oli.style_chosen LIKE ?)")
+            params.extend([f'%{value}%', f'%{value}%'])
+        elif key == 'note':
+            conditions.append("o.notes LIKE ?")
+            params.append(f'%{value}%')
+        elif key == 'log':
+            if 'ol' not in joins: joins.append("LEFT JOIN order_logs ol ON o.order_id = ol.order_id")
+            conditions.append("(ol.details LIKE ? OR ol.note LIKE ?)")
+            params.extend([f'%{value}%', f'%{value}%'])
+        elif key == 'date':
+            conditions.append(f"o.order_date {op} ?")
+            params.append(value)
+        elif key == 'total':
+            # Use the correct operator from the query
+            conditions.append(f"o.total_amount {op} ?")
+            try:
+                params.append(float(value))
+            except ValueError:
+                # Ignore if total value is not a valid number
+                pass
+    
+    # --- General Fallback Search (if no structured criteria were matched or general terms exist) ---
+    if general_terms:
+        # Ensures joins are present for general search
+        if 'v' not in joins: joins.append("LEFT JOIN vendors v ON o.vendor_id = v.id")
+        if 'oli' not in joins: joins.append("LEFT JOIN order_line_items oli ON o.order_id = oli.order_id")
+        if 'i' not in joins: joins.append("LEFT JOIN items i ON oli.item_code = i.item_code")
+        if 'ol' not in joins: joins.append("LEFT JOIN order_logs ol ON o.order_id = ol.order_id")
+        
+        general_conditions = []
+        for term in general_terms:
+            term_param = f'%{term}%'
+            general_conditions.append("(o.order_id LIKE ? OR o.status LIKE ? OR o.notes LIKE ? OR v.company_name LIKE ? OR v.contact_name LIKE ? OR i.name LIKE ? OR ol.details LIKE ? OR ol.note LIKE ?)")
+            params.extend([term_param] * 8)
+        
+        if general_conditions:
+            conditions.append("(" + " OR ".join(general_conditions) + ")")
+
+    if not conditions:
+        return jsonify([])
+
+    final_query = base_query + " ".join(joins) + " WHERE " + " AND ".join(conditions)
+    
+    try:
+        cursor.execute(final_query, tuple(params))
+        order_ids = [row['order_id'] for row in cursor.fetchall()]
+
+        if not order_ids:
+            return jsonify([])
+
+        # Now fetch full order details for the located IDs
+        placeholders = ','.join('?' for _ in order_ids)
+        sql_fetch_orders = f"""
+            SELECT o.*, v.company_name as vendor_company_name, v.contact_name as vendor_contact_name, v.email as vendor_email, v.phone as vendor_phone, v.billing_address as vendor_billing_address, v.billing_city as vendor_billing_city, v.billing_state as vendor_billing_state, v.billing_zip_code as vendor_billing_zip_code, v.shipping_address as vendor_shipping_address, v.shipping_city as vendor_shipping_city, v.shipping_state as vendor_shipping_state, v.shipping_zip_code as vendor_shipping_zip_code 
+            FROM orders o 
+            LEFT JOIN vendors v ON o.vendor_id = v.id 
+            WHERE o.order_id IN ({placeholders}) 
+            ORDER BY o.order_date DESC, o.order_id DESC
+        """
+        
+        cursor.execute(sql_fetch_orders, tuple(order_ids))
+        orders_from_db = cursor.fetchall()
+        
+        active_orders_response = []
+        for order_row in orders_from_db:
+            order_dict = dict(order_row)
+            order_dict['vendorInfo'] = {
+                "id": order_dict.pop('vendor_id'),
+                "companyName": order_dict.pop('vendor_company_name') or "[Vendor Not Found]",
+                "contactName": order_dict.pop('vendor_contact_name'),
+                'email': order_dict.pop('vendor_email'), 'phone': order_dict.pop('vendor_phone'),
+                'billingAddress': order_dict.pop('vendor_billing_address'), 'billingCity': order_dict.pop('vendor_billing_city'), 'billingState': order_dict.pop('vendor_billing_state'), 'billingZipCode': order_dict.pop('vendor_billing_zip_code'),
+                'shippingAddress': order_dict.pop('vendor_shipping_address'), 'shippingCity': order_dict.pop('vendor_shipping_city'), 'shippingState': order_dict.pop('vendor_shipping_state'), 'shippingZipCode': order_dict.pop('vendor_shipping_zip_code')
+            }
+            cursor.execute("SELECT item_code, package_code, quantity, price_per_unit_cents, style_chosen, item_type FROM order_line_items WHERE order_id = ?", (order_dict['order_id'],))
+            order_dict['lineItems'] = [{'item': li['item_code'], 'packageCode': li['package_code'], 'price': li['price_per_unit_cents'], 'quantity': li['quantity'], 'style': li['style_chosen'], 'type': li['item_type']} for li in cursor.fetchall()]
+            cursor.execute("SELECT status, status_date FROM order_status_history WHERE order_id = ? ORDER BY status_date ASC", (order_dict['order_id'],))
+            order_dict['statusHistory'] = [{'status': h['status'], 'date': h['status_date']} for h in cursor.fetchall()]
+            order_dict['id'] = order_dict.pop('order_id'); order_dict['date'] = order_dict.pop('order_date'); order_dict['total'] = order_dict.pop('total_amount'); order_dict['estimatedShipping'] = order_dict.pop('estimated_shipping_cost')
+            order_dict['nameDrop'] = bool(order_dict.pop('name_drop', 0))
+            active_orders_response.append(order_dict)
+            
+        return jsonify(active_orders_response)
+
+    except sqlite3.Error as e:
+        app.logger.error(f"Database error during search: {e}\nQuery: {final_query}\nParams: {params}")
+        return jsonify({"status": "error", "message": "Database search error"}), 500
+    finally:
+        conn.close()
+
 @app.route('/api/dashboard-stats', methods=['GET'])
 def get_dashboard_stats():
     conn = get_db_connection()
