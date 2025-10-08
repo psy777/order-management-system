@@ -15,6 +15,16 @@
     
     {% raw %}
     <script type="text/babel">
+        const formatInTimeZone = (dateString, timeZone, options = {}) => {
+            try {
+                const date = new Date(dateString);
+                return date.toLocaleString('en-US', { ...options, timeZone });
+            } catch (e) {
+                console.error("Error formatting date:", e);
+                return "Invalid Date";
+            }
+        };
+
         const ViewOrderPage = ({ orderId }) => {
             const { useState, useEffect } = React;
             const [order, setOrder] = useState(null);
@@ -133,7 +143,7 @@
                                 <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
                                      <h2 className="text-xl font-semibold text-slate-700 border-b pb-3 mb-4">Order Metadata</h2>
                                     <div className="space-y-4">
-                                        <div><p className="text-sm font-medium text-slate-500">Est. Shipping Date</p><p>{order.estimatedShippingDate ? new Date(order.estimatedShippingDate + 'T00:00:00').toLocaleDateString() : 'Not set'}</p></div>
+                                        <div><p className="text-sm font-medium text-slate-500">Est. Shipping Date</p><p>{order.estimatedShippingDate ? formatInTimeZone(order.estimatedShippingDate, "America/Chicago", { year: 'numeric', month: 'long', day: 'numeric' }) : 'Not set'}</p></div>
                                         <div><p className="text-sm font-medium text-slate-500">Scent Option</p><p>{order.scentOption}</p></div>
                                         <div><p className="text-sm font-medium text-slate-500">Name Drop</p><p>{order.nameDrop ? 'Yes' : 'No'}</p></div>
                                     </div>

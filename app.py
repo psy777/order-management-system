@@ -1119,14 +1119,6 @@ def send_order_email_route():
         app.logger.error(f"Failed to send email for order {order_data.get('id', 'N/A')}: {e}")
         app.logger.error(traceback.format_exc())
         return jsonify({"message": f"Failed to send email: {str(e)}"}), 500
-    finally:
-        for path in attachment_paths_to_delete:
-            if os.path.exists(path):
-                try:
-                    os.remove(path)
-                    app.logger.info(f"Successfully deleted attachment: {os.path.basename(path)}")
-                except Exception as e_del:
-                    app.logger.error(f"Error deleting attachment {os.path.basename(path)}: {e_del}")
 
 @app.route('/api/settings', methods=['GET'])
 def get_settings():

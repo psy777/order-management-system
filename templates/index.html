@@ -22,6 +22,17 @@
     <div id="root"></div>
     {% raw %}
     <script type="text/babel">
+// --- FORMATTERS ---
+const formatInTimeZone = (dateString, timeZone, options = {}) => {
+    try {
+        const date = new Date(dateString);
+        return date.toLocaleString('en-US', { ...options, timeZone });
+    } catch (e) {
+        console.error("Error formatting date:", e);
+        return "Invalid Date";
+    }
+};
+
 // --- SHARED HELPER COMPONENTS & ICONS ---
 const Input = ({ label, placeholder, value, onChange, type = "text", disabled = false, onFocus, onBlur }) => (
     <div><label className="block text-sm font-medium text-slate-600">{label}</label><input type={type} placeholder={placeholder} value={value} onChange={onChange} disabled={disabled} onFocus={onFocus} onBlur={onBlur} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm disabled:bg-slate-100 disabled:text-slate-500" /></div>
@@ -75,15 +86,20 @@ const NameDropToggle = ({ value, onChange, disabled = false }) => {
 const StatusBar = ({ status, statusHistory }) => {
     const statuses = ['Draft', 'Sent', 'Paid', 'Shipped'];
     const currentStatusIndex = statuses.indexOf(status);
-    return (<div className="w-full my-6"><div className="flex items-center">{statuses.map((s, index) => (<React.Fragment key={s}><div className="relative group flex flex-col items-center"><div className={`w-8 h-8 rounded-full flex items-center justify-center text-white font-bold ${index <= currentStatusIndex ? 'bg-orange-600' : 'bg-slate-300'}`}>{index <= currentStatusIndex ? '✓' : '●'}</div><p className={`mt-2 text-xs text-center ${index <= currentStatusIndex ? 'text-orange-600 font-semibold' : 'text-slate-500'}`}>{s}</p>{statusHistory.find(h => h.status === s) && (<div className="absolute bottom-full mb-2 w-max px-2 py-1 bg-slate-800 text-white text-xs rounded-md opacity-0 group-hover:opacity-100 transition-opacity duration-300">{new Date(statusHistory.find(h => h.status === s).date).toLocaleString()}</div>)}</div>{index < statuses.length - 1 && (<div className={`flex-auto border-t-4 mx-2 ${index < currentStatusIndex ? 'border-orange-600' : 'border-slate-300'}`}></div>)}</React.Fragment>))}</div></div>);
+    const timeZone = "America/Chicago";
+    const statusDateOptions = { year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true };
+
+    return (<div className="w-full my-6"><div className="flex items-center">{statuses.map((s, index) => (<React.Fragment key={s}><div className="relative group flex flex-col items-center"><div className={`w-8 h-8 rounded-full flex items-center justify-center text-white font-bold ${index <= currentStatusIndex ? 'bg-orange-600' : 'bg-slate-300'}`}>{index <= currentStatusIndex ? '✓' : '●'}</div><p className={`mt-2 text-xs text-center ${index <= currentStatusIndex ? 'text-orange-600 font-semibold' : 'text-slate-500'}`}>{s}</p>{statusHistory.find(h => h.status === s) && (<div className="absolute bottom-full mb-2 w-max px-2 py-1 bg-slate-800 text-white text-xs rounded-md opacity-0 group-hover:opacity-100 transition-opacity duration-300">{formatInTimeZone(statusHistory.find(h => h.status === s).date, timeZone, statusDateOptions)}</div>)}</div>{index < statuses.length - 1 && (<div className={`flex-auto border-t-4 mx-2 ${index < currentStatusIndex ? 'border-orange-600' : 'border-slate-300'}`}></div>)}</React.Fragment>))}</div></div>);
 };
 
 const generatePdf = (order, allItems, action = 'save') => {
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF();
     const { vendorInfo, lineItems, notes, total, id, date, scentOption, estimatedShippingDate, estimatedShipping, nameDrop, signatureDataUrl } = order; // Added signatureDataUrl and estimatedShipping
+    const timeZone = "America/Chicago";
+    const dateOptions = { year: 'numeric', month: 'long', day: 'numeric' };
     doc.setFontSize(20); doc.text("Purchase Order", 14, 22);
-    doc.setFontSize(12); doc.text(`PO #: ${id}`, 14, 30); doc.text(`Date: ${new Date(date).toLocaleDateString()}`, 14, 36);
+    doc.setFontSize(12); doc.text(`PO #: ${id}`, 14, 30); doc.text(`Date: ${formatInTimeZone(date, timeZone, dateOptions)}`, 14, 36);
     
     let leftColumnY = 50;
     let rightColumnY = 50;
@@ -176,7 +192,7 @@ const generatePdf = (order, allItems, action = 'save') => {
     let currentLineY = finalY + 5; // Y position for the next line of text
 
     if(estimatedShippingDate) {
-        doc.text(`Est. Ship Date: ${new Date(estimatedShippingDate + 'T00:00:00').toLocaleDateString()}`, 14, currentLineY);
+        doc.text(`Est. Ship Date: ${formatInTimeZone(estimatedShippingDate, timeZone, dateOptions)}`, 14, currentLineY);
         currentLineY += 5; // Increment Y for the next line
     }
     
@@ -926,9 +942,12 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allVendors, allSelectableIte
                     </div>
                 </div>
                 <div className="overflow-x-auto"><table className="w-full text-sm text-left text-slate-500"><thead className="text-xs text-slate-700 uppercase bg-slate-100"><tr><th className="px-4 py-3">Order ID</th><th className="px-4 py-3">Customer</th><th className="px-4 py-3">Date</th><th className="px-4 py-3">Total</th><th className="px-4 py-3">Status</th><th className="px-4 py-3 text-center">Actions</th></tr></thead>
-                    <tbody>{filteredOrders.map(order => (<tr key={order.id} onClick={() => viewOrder(order)} className="bg-white border-b hover:bg-slate-50 cursor-pointer">
+                    <tbody>{filteredOrders.map(order => {
+                        const timeZone = "America/Chicago";
+                        const dateOptions = { year: 'numeric', month: 'long', day: 'numeric' };
+                        return (<tr key={order.id} onClick={() => viewOrder(order)} className="bg-white border-b hover:bg-slate-50 cursor-pointer">
                         <td className="px-4 py-3 font-medium text-slate-800">{order.id}</td><td className="px-4 py-3">{order.vendorInfo.companyName}</td>
-                        <td className="px-4 py-3">{new Date(order.date).toLocaleDateString()}</td><td className="px-4 py-3">${parseFloat(order.total || 0).toFixed(2)}</td>
+                        <td className="px-4 py-3">{formatInTimeZone(order.date, timeZone, dateOptions)}</td><td className="px-4 py-3">${parseFloat(order.total || 0).toFixed(2)}</td>
                         <td className="px-4 py-3">
                             {order.status === 'Shipped' ? (
                                 <ShippedStatusBadge statusText={order.status} />
@@ -951,7 +970,7 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allVendors, allSelectableIte
                                 </a>
                             </div>
                         </td>
-                    </tr>))}</tbody>
+                    </tr>)})}</tbody>
                 </table></div>
             </div>
         </React.Fragment>
