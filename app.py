@@ -154,6 +154,48 @@ def get_orders():
     conn.close()
     return jsonify(active_orders_response)
 
+@app.route('/api/orders/<string:order_id>', methods=['GET'])
+def get_order(order_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT o.*, v.company_name as vendor_company_name, v.contact_name as vendor_contact_name, v.email as vendor_email, v.phone as vendor_phone, v.billing_address as vendor_billing_address, v.billing_city as vendor_billing_city, v.billing_state as vendor_billing_state, v.billing_zip_code as vendor_billing_zip_code, v.shipping_address as vendor_shipping_address, v.shipping_city as vendor_shipping_city, v.shipping_state as vendor_shipping_state, v.shipping_zip_code as vendor_shipping_zip_code FROM orders o LEFT JOIN vendors v ON o.vendor_id = v.id WHERE o.order_id = ?", (order_id,))
+    order_row = cursor.fetchone()
+    if not order_row:
+        conn.close()
+        return jsonify({"status": "error", "message": "Order not found"}), 404
+
+    order_dict = dict(order_row)
+    order_dict['vendorInfo'] = {
+        "id": order_dict.pop('vendor_id'),
+        "companyName": order_dict.pop('vendor_company_name') or "[Vendor Not Found]",
+        "contactName": order_dict.pop('vendor_contact_name'),
+        "email": order_dict.pop('vendor_email'),
+        "phone": order_dict.pop('vendor_phone'),
+        "billingAddress": order_dict.pop('vendor_billing_address'),
+        "billingCity": order_dict.pop('vendor_billing_city'),
+        "billingState": order_dict.pop('vendor_billing_state'),
+        "billingZipCode": order_dict.pop('vendor_billing_zip_code'),
+        "shippingAddress": order_dict.pop('vendor_shipping_address'),
+        "shippingCity": order_dict.pop('vendor_shipping_city'),
+        "shippingState": order_dict.pop('vendor_shipping_state'),
+        "shippingZipCode": order_dict.pop('vendor_shipping_zip_code')
+    }
+    if not order_dict['vendorInfo']['id']:
+        order_dict['vendorInfo'] = {
+            "id": None, "companyName": "[Vendor Not Found]", "contactName": "", "email": "", "phone": "",
+            "billingAddress": "", "billingCity": "", "billingState": "", "billingZipCode": "",
+            "shippingAddress": "", "shippingCity": "", "shippingState": "", "shippingZipCode": ""
+        }
+    cursor.execute("SELECT item_code, package_code, quantity, price_per_unit_cents, style_chosen, item_type FROM order_line_items WHERE order_id = ?", (order_dict['order_id'],))
+    order_dict['lineItems'] = [{'item': li['item_code'], 'packageCode': li['package_code'], 'price': li['price_per_unit_cents'], 'quantity': li['quantity'], 'style': li['style_chosen'], 'type': li['item_type']} for li in cursor.fetchall()]
+    cursor.execute("SELECT status, status_date FROM order_status_history WHERE order_id = ? ORDER BY status_date ASC", (order_dict['order_id'],))
+    order_dict['statusHistory'] = [{'status': h['status'], 'date': h['status_date']} for h in cursor.fetchall()]
+    order_dict['id'] = order_dict.pop('order_id'); order_dict['date'] = order_dict.pop('order_date'); order_dict['total'] = order_dict.pop('total_amount'); order_dict['estimatedShipping'] = order_dict.pop('estimated_shipping_cost')
+    order_dict['nameDrop'] = True if order_dict.pop('name_drop', 0) == 1 else False
+    
+    conn.close()
+    return jsonify(order_dict)
+
 @app.route('/api/orders/<string:order_id>/logs', methods=['GET', 'POST'])
 def handle_order_logs(order_id):
     conn = get_db_connection()
@@ -1283,6 +1325,10 @@ def import_data():
 @app.route('/order-logs/<string:order_id>')
 def order_logs_page(order_id):
     return render_template('order_logs.html', order_id=order_id)
+
+@app.route('/order/<string:order_id>')
+def view_order_page(order_id):
+    return render_template('view_order.html', order_id=order_id)
 
 @app.route('/favicon.ico')
 def favicon(): return send_from_directory(os.path.join(app.root_path,'assets'),'favicon.ico',mimetype='image/vnd.microsoft.icon')
