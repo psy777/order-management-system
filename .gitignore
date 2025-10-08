@@ -29,4 +29,7 @@ Thumbs.db
 /uploads
 /data
 
+# Distribution directory
+/dist
+
 todo.txt
