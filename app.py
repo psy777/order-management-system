@@ -17,6 +17,8 @@ import traceback
 import time
 import json
 import csv
+import shutil
+import zipfile
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request, send_from_directory, redirect, flash
@@ -1173,6 +1175,106 @@ def manage_items_page(): return render_template('manage_items.html')
 def manage_packages_page(): return render_template('manage_packages.html')
 @app.route('/settings')
 def settings_page(): return render_template('settings.html')
+
+@app.route('/api/export-data', methods=['GET'])
+def export_data():
+    """Creates a zip archive of the entire /data directory."""
+    try:
+        # It's good practice to ensure the app is not writing to the DB during backup.
+        # For this app's scale, a direct copy is likely fine, but for larger systems,
+        # you might implement a read-only mode or a brief service pause.
+        
+        data_dir = os.path.join(os.path.dirname(app.root_path), 'data')
+        if not os.path.isdir(data_dir):
+            return jsonify({"status": "error", "message": "Data directory not found."}), 404
+
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        # Create the archive in a temporary location to avoid including the archive in itself
+        temp_dir = os.path.join(os.path.dirname(app.root_path), 'temp_backups')
+        os.makedirs(temp_dir, exist_ok=True)
+        
+        archive_name = f'backup_{timestamp}'
+        archive_path_base = os.path.join(temp_dir, archive_name)
+        
+        # Create the zip file from the 'data' directory
+        shutil.make_archive(archive_path_base, 'zip', data_dir)
+        
+        archive_path_zip = f"{archive_path_base}.zip"
+
+        # Send the file and clean up afterwards
+        response = send_from_directory(directory=temp_dir, path=f"{archive_name}.zip", as_attachment=True)
+
+        @response.call_on_close
+        def cleanup():
+            try:
+                os.remove(archive_path_zip)
+                # If the temp dir is empty, remove it too
+                if not os.listdir(temp_dir):
+                    os.rmdir(temp_dir)
+            except Exception as e:
+                app.logger.error(f"Error cleaning up backup file: {e}")
+
+        return response
+
+    except Exception as e:
+        app.logger.error(f"Error creating data backup: {e}")
+        app.logger.error(traceback.format_exc())
+        return jsonify({"status": "error", "message": "Failed to create backup."}), 500
+
+@app.route('/api/import-data', methods=['POST'])
+def import_data():
+    """Restores the /data directory from a zip archive."""
+    if 'file' not in request.files:
+        return jsonify({"status": "error", "message": "No file part"}), 400
+    
+    file = request.files['file']
+    if file.filename == '' or not file.filename.endswith('.zip'):
+        return jsonify({"status": "error", "message": "Invalid file. Please upload a .zip backup file."}), 400
+
+    data_dir = os.path.join(os.path.dirname(app.root_path), 'data')
+    
+    try:
+        # Before replacing, create a temporary backup of the current data directory
+        temp_backup_dir = os.path.join(os.path.dirname(app.root_path), 'data_temp_backup')
+        if os.path.exists(temp_backup_dir):
+            shutil.rmtree(temp_backup_dir) # remove old temp backup if it exists
+        if os.path.exists(data_dir):
+            shutil.copytree(data_dir, temp_backup_dir)
+
+        # Clear the existing data directory
+        if os.path.exists(data_dir):
+            shutil.rmtree(data_dir)
+        os.makedirs(data_dir)
+
+        # Extract the new data from the uploaded zip file
+        with zipfile.ZipFile(file.stream, 'r') as zip_ref:
+            zip_ref.extractall(data_dir)
+        
+        # Restore completed, can now remove the temporary backup
+        if os.path.exists(temp_backup_dir):
+            shutil.rmtree(temp_backup_dir)
+
+        # Re-initialize DB connection to ensure schema and pragmas are set if db was replaced
+        # A full app restart might be safer, but re-running init_db can cover schema changes.
+        init_db()
+
+        return jsonify({"status": "success", "message": "Data restored successfully. The application should be restarted to ensure all services use the new data."}), 200
+
+    except Exception as e:
+        app.logger.error(f"Error restoring data: {e}")
+        app.logger.error(traceback.format_exc())
+        
+        # Attempt to restore from the temporary backup
+        try:
+            if os.path.exists(temp_backup_dir):
+                if os.path.exists(data_dir):
+                    shutil.rmtree(data_dir)
+                shutil.move(temp_backup_dir, data_dir)
+                app.logger.info("Successfully restored data from temporary backup after import failure.")
+        except Exception as e_restore:
+            app.logger.error(f"CRITICAL: Failed to restore data from temporary backup: {e_restore}")
+
+        return jsonify({"status": "error", "message": "An error occurred during the restore process. The original data has been restored."}), 500
 
 @app.route('/order-logs/<string:order_id>')
 def order_logs_page(order_id):
