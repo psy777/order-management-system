@@ -11,7 +11,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 from werkzeug.utils import secure_filename
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from dateutil.parser import parse as dateutil_parse
 import traceback
 import time
 import json
@@ -185,91 +186,114 @@ def handle_order_logs(order_id):
 def search_orders():
     query = request.args.get('query', '').strip()
     if not query:
-        return jsonify([])
+        return get_orders()
 
     conn = get_db_connection()
     cursor = conn.cursor()
     
     base_query = "SELECT DISTINCT o.order_id FROM orders o "
-    joins = []
+    joins = set()
     conditions = []
     params = []
 
-    # Regex to find key:value pairs, including operators like >=, <=
-    structured_pattern = re.compile(r'(\b\w+\b:)(>=|<=|<>|!=|=|<|>|)?("[^"]+"|\S+)')
+    pattern = re.compile(r'(\b\w+\b):("([^"]+)"|(\S+))|(\btotal\s*(?:>=|<=|<>|!=|=|<|>)\s*\d+\.?\d*)')
     
-    # General search terms are what's left after removing structured terms
-    general_terms = structured_pattern.sub('', query).split()
+    structured_queries = pattern.findall(query)
+    text_search_parts = pattern.sub('', query).split()
 
-    # --- Structured Search ---
-    for key, op, value in structured_pattern.findall(query):
-        key = key[:-1].lower() # remove colon
-        value = value.strip('"')
-        
-        # Set default operator if not present
-        if not op: op = '='
+    for key, _, quoted_val, unquoted_val, total_val in structured_queries:
+        if total_val:
+            match = re.match(r'total\s*(>=|<=|<>|!=|=|<|>)\s*(\d+\.?\d*)', total_val.strip())
+            if match:
+                op, value_str = match.groups()
+                conditions.append(f"o.total_amount {op} ?")
+                params.append(float(value_str))
+            continue
 
-        if key in ['from', 'vendor', 'customer']:
-            if 'v' not in joins: joins.append("LEFT JOIN vendors v ON o.vendor_id = v.id")
-            conditions.append("(v.company_name LIKE ? OR v.contact_name LIKE ? OR v.email LIKE ?)")
-            params.extend([f'%{value}%', f'%{value}%', f'%{value}%'])
-        elif key == 'status':
-            conditions.append("o.status LIKE ?")
-            params.append(f'%{value}%')
-        elif key == 'item':
-            if 'oli' not in joins: joins.append("LEFT JOIN order_line_items oli ON o.order_id = oli.order_id")
-            if 'i' not in joins: joins.append("LEFT JOIN items i ON oli.item_code = i.item_code")
-            conditions.append("(i.name LIKE ? OR oli.style_chosen LIKE ?)")
-            params.extend([f'%{value}%', f'%{value}%'])
-        elif key == 'note':
-            conditions.append("o.notes LIKE ?")
-            params.append(f'%{value}%')
-        elif key == 'log':
-            if 'ol' not in joins: joins.append("LEFT JOIN order_logs ol ON o.order_id = ol.order_id")
-            conditions.append("(ol.details LIKE ? OR ol.note LIKE ?)")
-            params.extend([f'%{value}%', f'%{value}%'])
-        elif key == 'date':
-            conditions.append(f"o.order_date {op} ?")
-            params.append(value)
-        elif key == 'total':
-            # Use the correct operator from the query
-            conditions.append(f"o.total_amount {op} ?")
+        key = key.lower()
+        value = quoted_val if quoted_val else unquoted_val
+
+        if key in ['before', 'after', 'during']:
             try:
-                params.append(float(value))
-            except ValueError:
-                # Ignore if total value is not a valid number
-                pass
+                # Use fuzzy parsing to handle a wide variety of date formats
+                parsed_date = dateutil_parse(value, fuzzy=True)
+                
+                if key == 'before':
+                    # strictly less than the beginning of the parsed day
+                    conditions.append("o.order_date < ?")
+                    params.append(parsed_date.strftime('%Y-%m-%d'))
+                elif key == 'after':
+                    # an entire day after the one provided
+                    end_of_day = parsed_date + timedelta(days=1)
+                    conditions.append("o.order_date >= ?")
+                    params.append(end_of_day.strftime('%Y-%m-%d'))
+                elif key == 'during':
+                    # The entire day of the date provided
+                    next_day = parsed_date + timedelta(days=1)
+                    conditions.append("o.order_date >= ? AND o.order_date < ?")
+                    params.append(parsed_date.strftime('%Y-%m-%d'))
+                    params.append(next_day.strftime('%Y-%m-%d'))
+
+            except (ValueError, TypeError) as e:
+                # If parsing fails, skip this condition
+                app.logger.warning(f"Could not parse date for '{key}:{value}'. Error: {e}")
+                continue # Move to the next query part
+        
+        else:
+          # Keep the existing logic for non-date fields
+          field_map = {
+              'from': {'join': "LEFT JOIN vendors v ON o.vendor_id = v.id", 'condition': "(v.company_name LIKE ? OR v.contact_name LIKE ?)", 'params': [f'%{value}%', f'%{value}%']},
+              'vendor': {'join': "LEFT JOIN vendors v ON o.vendor_id = v.id", 'condition': "(v.company_name LIKE ? OR v.contact_name LIKE ?)", 'params': [f'%{value}%', f'%{value}%']},
+              'customer': {'join': "LEFT JOIN vendors v ON o.vendor_id = v.id", 'condition': "(v.company_name LIKE ? OR v.contact_name LIKE ?)", 'params': [f'%{value}%', f'%{value}%']},
+              'status': {'condition': "o.status LIKE ?", 'params': [f'%{value}%']},
+              'item': {'join': "LEFT JOIN order_line_items oli ON o.order_id = oli.order_id LEFT JOIN items i ON oli.item_code = i.item_code", 'condition': "(i.name LIKE ? OR oli.style_chosen LIKE ?)", 'params': [f'%{value}%', f'%{value}%']},
+              'note': {'condition': "o.notes LIKE ?", 'params': [f'%{value}%']},
+              'log': {'join': "LEFT JOIN order_logs ol ON o.order_id = ol.order_id", 'condition': "(ol.details LIKE ? OR ol.note LIKE ?)", 'params': [f'%{value}%', f'%{value}%']},
+          }
+
+          if key in field_map:
+              rule = field_map[key]
+              if 'join' in rule:
+                  joins.add(rule['join'])
+              conditions.append(rule['condition'])
+              params.extend(rule['params'])
+
+    join_order = [
+      "LEFT JOIN vendors v ON o.vendor_id = v.id",
+      "LEFT JOIN order_logs ol ON o.order_id = ol.order_id",
+      "LEFT JOIN order_line_items oli ON o.order_id = oli.order_id",
+      "LEFT JOIN items i ON oli.item_code = i.item_code"
+    ]
     
-    # --- General Fallback Search (if no structured criteria were matched or general terms exist) ---
-    if general_terms:
-        # Ensures joins are present for general search
-        if 'v' not in joins: joins.append("LEFT JOIN vendors v ON o.vendor_id = v.id")
-        if 'oli' not in joins: joins.append("LEFT JOIN order_line_items oli ON o.order_id = oli.order_id")
-        if 'i' not in joins: joins.append("LEFT JOIN items i ON oli.item_code = i.item_code")
-        if 'ol' not in joins: joins.append("LEFT JOIN order_logs ol ON o.order_id = ol.order_id")
-        
-        general_conditions = []
-        for term in general_terms:
-            term_param = f'%{term}%'
-            general_conditions.append("(o.order_id LIKE ? OR o.status LIKE ? OR o.notes LIKE ? OR v.company_name LIKE ? OR v.contact_name LIKE ? OR i.name LIKE ? OR ol.details LIKE ? OR ol.note LIKE ?)")
-            params.extend([term_param] * 8)
-        
-        if general_conditions:
-            conditions.append("(" + " OR ".join(general_conditions) + ")")
+    if text_search_parts:
+        for join_sql in join_order:
+            joins.add(join_sql)
+
+        for term in text_search_parts:
+            if term:
+                term_param = f'%{term}%'
+                text_conditions = [
+                    "o.order_id LIKE ?", "o.status LIKE ?", "o.notes LIKE ?",
+                    "v.company_name LIKE ?", "v.contact_name LIKE ?", "i.name LIKE ?", "oli.style_chosen LIKE ?",
+                    "ol.details LIKE ?", "ol.note LIKE ?"
+                ]
+                conditions.append(f"({' OR '.join(text_conditions)})")
+                params.extend([term_param] * len(text_conditions))
 
     if not conditions:
         return jsonify([])
 
-    final_query = base_query + " ".join(joins) + " WHERE " + " AND ".join(conditions)
+    # Ensure joins are added in a valid order
+    final_joins = [j for j in join_order if j in joins]
+    final_query = base_query + " ".join(final_joins) + " WHERE " + " AND ".join(conditions)
     
     try:
         cursor.execute(final_query, tuple(params))
-        order_ids = [row['order_id'] for row in cursor.fetchall()]
+        order_ids = [row[0] for row in cursor.fetchall()]
 
         if not order_ids:
             return jsonify([])
 
-        # Now fetch full order details for the located IDs
         placeholders = ','.join('?' for _ in order_ids)
         sql_fetch_orders = f"""
             SELECT o.*, v.company_name as vendor_company_name, v.contact_name as vendor_contact_name, v.email as vendor_email, v.phone as vendor_phone, v.billing_address as vendor_billing_address, v.billing_city as vendor_billing_city, v.billing_state as vendor_billing_state, v.billing_zip_code as vendor_billing_zip_code, v.shipping_address as vendor_shipping_address, v.shipping_city as vendor_shipping_city, v.shipping_state as vendor_shipping_state, v.shipping_zip_code as vendor_shipping_zip_code 
@@ -288,8 +312,7 @@ def search_orders():
             order_dict['vendorInfo'] = {
                 "id": order_dict.pop('vendor_id'),
                 "companyName": order_dict.pop('vendor_company_name') or "[Vendor Not Found]",
-                "contactName": order_dict.pop('vendor_contact_name'),
-                'email': order_dict.pop('vendor_email'), 'phone': order_dict.pop('vendor_phone'),
+                "contactName": order_dict.pop('vendor_contact_name'), 'email': order_dict.pop('vendor_email'), 'phone': order_dict.pop('vendor_phone'),
                 'billingAddress': order_dict.pop('vendor_billing_address'), 'billingCity': order_dict.pop('vendor_billing_city'), 'billingState': order_dict.pop('vendor_billing_state'), 'billingZipCode': order_dict.pop('vendor_billing_zip_code'),
                 'shippingAddress': order_dict.pop('vendor_shipping_address'), 'shippingCity': order_dict.pop('vendor_shipping_city'), 'shippingState': order_dict.pop('vendor_shipping_state'), 'shippingZipCode': order_dict.pop('vendor_shipping_zip_code')
             }
@@ -421,13 +444,9 @@ def save_order():
         conn_main.commit()
         app.logger.info(f"Order {processed_order_id} committed successfully.")
 
-        # The re-fetch was causing issues with SQLite's WAL mode.
-        # Instead, we'll construct the response from the processed payload,
-        # which has already been updated with the new ID and calculated fields.
         if 'id' in new_order_payload:
             new_order_payload['id'] = new_order_payload.pop('id')
-        
-        # Ensure the status history in the payload is up-to-date for the response
+
         current_status = new_order_payload.get('status', 'Draft')
         status_history = new_order_payload.get('statusHistory', [])
         if not any(h['status'] == current_status for h in status_history):
@@ -437,7 +456,6 @@ def save_order():
             })
         new_order_payload['statusHistory'] = status_history
 
-        # The payload is now the source of truth for the response.
         final_order_response = new_order_payload
         
         app.logger.info(f"Order {processed_order_id} processed and response prepared successfully.")
@@ -474,7 +492,6 @@ def save_order():
     app.logger.error(f"Reached unexpected end of save_order for order ID '{processed_order_id}'. This indicates a logic flow issue.")
     return jsonify({"status": "error", "message": "An unexpected server error occurred."}), 500
 
-# ... (rest of the API endpoints: /api/items, /api/vendors, etc. as they were in the 1:28:04 AM version) ...
 @app.route('/api/items', methods=['GET'])
 def get_items():
     conn = get_db_connection()
@@ -805,7 +822,6 @@ def import_customers_csv():
             csv_reader = csv.reader(csv_file.splitlines())
             header = [h.lower().strip() for h in next(csv_reader)]
             
-            # Map CSV headers to database columns
             header_map = {
                 'company name': 'company_name',
                 'contact name': 'contact_name',
@@ -821,7 +837,6 @@ def import_customers_csv():
                 'shipping zip code': 'shipping_zip_code'
             }
             
-            # Get the indices of the columns we care about
             column_indices = {db_col: header.index(csv_col) for csv_col, db_col in header_map.items() if csv_col in header}
 
             if not column_indices:
@@ -1055,9 +1070,6 @@ def send_order_email_route():
         
         app.logger.info(f"Email with {len(attachment_paths_to_delete)} attachment(s) sent for order {order_id_log}")
         
-        # The responsibility of updating the order status is now moved to the frontend.
-        # The frontend will make a separate call to the save_order endpoint after this returns successfully.
-        
         return jsonify({"message": "Email sent."}), 200
     except Exception as e:
         app.logger.error(f"Failed to send email for order {order_data.get('id', 'N/A')}: {e}")
@@ -1078,7 +1090,6 @@ def get_settings():
     if not isinstance(settings, dict):
         settings = {}
     
-    # Ensure default values are present if the file is empty or new
     if not settings:
         settings = {
             "company_name": "Your Company Name",
@@ -1089,7 +1100,6 @@ def get_settings():
         }
         write_json_file(SETTINGS_FILE, settings)
     else:
-        # Add email fields if they don't exist for backward compatibility
         updated = False
         if 'email_address' not in settings:
             settings['email_address'] = ""
@@ -1117,12 +1127,10 @@ def update_settings():
     if not new_settings_payload:
         return jsonify({"message": "Request must be JSON"}), 400
     
-    # Read existing settings to preserve fields not in the payload
     existing_settings = read_json_file(SETTINGS_FILE)
     if not isinstance(existing_settings, dict):
         existing_settings = {}
 
-    # Update only the fields present in the general settings form
     existing_settings['company_name'] = new_settings_payload.get('company_name', existing_settings.get('company_name'))
     existing_settings['default_shipping_zip_code'] = new_settings_payload.get('default_shipping_zip_code', existing_settings.get('default_shipping_zip_code'))
     existing_settings['default_email_body'] = new_settings_payload.get('default_email_body', existing_settings.get('default_email_body'))

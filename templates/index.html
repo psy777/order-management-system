@@ -663,6 +663,36 @@ ${fallbackYourCompanyName}`
     );
 };
 
+const Calendar = ({ onSelectDate, position, onClose }) => {
+    const { useState, useEffect, useRef } = React;
+    const [date, setDate] = useState(new Date());
+    const calendarRef = useRef(null);
+
+    const handleDateChange = (e) => {
+        const newDate = new Date(e.target.value);
+        onSelectDate(newDate);
+    };
+    
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (calendarRef.current && !calendarRef.current.contains(event.target)) {
+                onClose();
+            }
+        };
+
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, [onClose]);
+
+    return (
+        <div ref={calendarRef} style={{ top: position.top, left: position.left }} className="absolute z-20 bg-white border rounded-lg shadow-lg p-2 calendar-container">
+            <input type="date" onChange={handleDateChange} className="w-full p-1 border-gray-300 rounded-md"/>
+        </div>
+    );
+};
+
 const ShippedStatusBadge = ({ statusText }) => {
     const { useState, useRef, useEffect } = React;
     const [glintStyle, setGlintStyle] = useState({});
@@ -731,20 +761,91 @@ const ShippedStatusBadge = ({ statusText }) => {
 };
 
 // --- COMPONENTS ---
-const Dashboard = ({ orders, navigateTo, viewOrder, allVendors, allSelectableItems, setOrderForEmailModal }) => { // Added setOrderForEmailModal
-    const { useState, useEffect, useMemo } = React;
+const Dashboard = ({ orders, navigateTo, viewOrder, allVendors, allSelectableItems, setOrderForEmailModal }) => {
+    const { useState, useEffect, useMemo, useRef } = React;
     const [filteredOrders, setFilteredOrders] = useState(orders);
-    const [searchQuery, setSearchQuery] = useState('');
-    // orderForEmail state is removed from Dashboard, as EmailModal is now triggered from OrderForm or globally via setOrderForEmailModal
+    const [searchPills, setSearchPills] = useState([]);
+    const [inputValue, setInputValue] = useState('');
     const [dashboardStats, setDashboardStats] = useState({ totalRevenue: 0, averageOrderRevenue: 0, totalOrders: 0 });
+    const searchInputRef = useRef(null);
+    const [showCalendar, setShowCalendar] = useState(false);
+    const [calendarPosition, setCalendarPosition] = useState({ top: 0, left: 0 });
+    const [dateKeyword, setDateKeyword] = useState('');
 
-    const handleSearch = async () => {
-        if (searchQuery.trim() === '') {
+    const handleDateSelect = (date) => {
+        const dateString = date.toISOString().split('T')[0];
+        const newPill = `${dateKeyword}${dateString}`;
+        
+        // Remove the keyword and any partial date from the input value
+        const newInputValue = inputValue.replace(new RegExp(`${dateKeyword}\\S*`), '').trim();
+
+        setInputValue(newInputValue);
+        setSearchPills(prev => [...prev, newPill]);
+        setShowCalendar(false);
+        
+        // Focus the input and trigger search after state update
+        setTimeout(() => {
+            searchInputRef.current.focus();
+            handleSearch([...searchPills, newPill].join(' '));
+        }, 0);
+    };
+
+    const parseInputToPills = (value) => {
+        const keywords = ['from', 'vendor', 'customer', 'status', 'item', 'note', 'log', 'before', 'after', 'during'];
+        const keywordPattern = `(?:${keywords.join('|')}):`;
+        const structuredPattern = new RegExp(`(\\b(?:${keywordPattern})(?:"[^"]+"|\S+))|(\\btotal\\s*(?:>=|<=|<>|!=|=|<|>)\\s*\\d+\\.?\\d*)`, 'g');
+        
+        const newPills = value.match(structuredPattern) || [];
+        const remainingText = value.replace(structuredPattern, '').trim();
+        
+        if (newPills.length > 0) {
+            setSearchPills(prev => [...prev, ...newPills]);
+        }
+        setInputValue(remainingText);
+    };
+
+    const handleInputChange = (e) => {
+        const { value } = e.target;
+        const dateKeywords = ['before:', 'after:', 'during:'];
+        const activeKeyword = dateKeywords.find(kw => value.includes(kw));
+    
+        if (activeKeyword) {
+            if (!showCalendar) {
+                setDateKeyword(activeKeyword);
+                const inputRect = e.target.getBoundingClientRect();
+                setCalendarPosition({ top: inputRect.bottom + window.scrollY, left: inputRect.left + window.scrollX });
+                setShowCalendar(true);
+            }
+        }
+        
+        setInputValue(value);
+    };
+    
+    const handleKeyDown = (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            // Parse any remaining text into pills before searching
+            parseInputToPills(inputValue);
+            // Use a timeout to allow state to update before searching
+            setTimeout(() => handleSearch(), 0);
+        } else if (e.key === 'Backspace' && inputValue === '' && searchPills.length > 0) {
+            e.preventDefault();
+            setSearchPills(searchPills.slice(0, -1));
+        }
+    };
+    
+    const removePill = (indexToRemove) => {
+        setSearchPills(searchPills.filter((_, index) => index !== indexToRemove));
+    };
+
+    const handleSearch = async (query) => {
+        const fullQuery = query || [...searchPills, inputValue].join(' ').trim();
+        if (fullQuery === '') {
             setFilteredOrders(orders);
             return;
         }
         try {
-            const response = await fetch(`/api/search-orders?query=${encodeURIComponent(searchQuery)}`);
+            const response = await fetch(`/api/search-orders?query=${encodeURIComponent(fullQuery)}`);
             const data = await response.json();
             setFilteredOrders(data);
         } catch (error) {
@@ -754,11 +855,6 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allVendors, allSelectableIte
 
     useEffect(() => {
         setFilteredOrders(orders);
-        if (searchQuery.trim() === '') {
-            setFilteredOrders(orders);
-        } else {
-            handleSearch();
-        }
         const fetchDashboardStats = async () => {
             try {
                 const response = await fetch('/api/dashboard-stats');
@@ -787,6 +883,13 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allVendors, allSelectableIte
 
     return (
         <React.Fragment>
+            {showCalendar && (
+                <Calendar
+                    onSelectDate={handleDateSelect}
+                    position={calendarPosition}
+                    onClose={() => setShowCalendar(false)}
+                />
+            )}
             {/* EmailModal is now handled globally or by OrderForm, so removed from here directly */}
             <div className="flex justify-between items-center mb-6">
                 <h1 className="text-3xl font-bold text-slate-800">Dashboard</h1>
@@ -803,8 +906,37 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allVendors, allSelectableIte
                 <div className="flex justify-between items-center mb-4">
                     <h2 className="text-xl font-semibold text-slate-700">All Orders</h2>
                     <div className="flex items-center space-x-2">
-                        <input type="text" placeholder='Search for anything' value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSearch()} className="px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm w-60" />
-                        <button onClick={handleSearch} className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors">Search</button>
+                        <div 
+                            className="flex items-center flex-wrap gap-2 w-full max-w-md bg-white border border-slate-300 rounded-md shadow-sm p-1.5 focus-within:ring-2 focus-within:ring-orange-500 focus-within:border-orange-500"
+                            onClick={() => searchInputRef.current && searchInputRef.current.focus()}
+                        >
+                            {searchPills.map((pill, index) => (
+                                <span key={index} className="flex items-center bg-slate-200 text-slate-700 text-sm font-medium px-2 py-1 rounded">
+                                    {pill}
+                                    <button onClick={() => removePill(index)} className="ml-1.5 text-slate-500 hover:text-slate-800 focus:outline-none">
+                                        &times;
+                                    </button>
+                                </span>
+                            ))}
+                            <input
+                                ref={searchInputRef}
+                                type="text"
+                                value={inputValue}
+                                onChange={handleInputChange}
+                                onKeyDown={handleKeyDown}
+                                onBlur={() => {
+                                    parseInputToPills(inputValue);
+                                    setTimeout(() => {
+                                        if (!document.activeElement.closest('.calendar-container')) {
+                                            setShowCalendar(false);
+                                        }
+                                    }, 150);
+                                }}
+                                placeholder={searchPills.length === 0 ? 'Search for anything' : ''}
+                                className="flex-grow p-1 bg-transparent focus:outline-none min-w-[100px]"
+                            />
+                        </div>
+                        <button onClick={() => { parseInputToPills(inputValue); setTimeout(() => handleSearch(), 0); }} className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors">Search</button>
                     </div>
                 </div>
                 <div className="overflow-x-auto"><table className="w-full text-sm text-left text-slate-500"><thead className="text-xs text-slate-700 uppercase bg-slate-100"><tr><th className="px-4 py-3">Order ID</th><th className="px-4 py-3">Customer</th><th className="px-4 py-3">Date</th><th className="px-4 py-3">Total</th><th className="px-4 py-3">Status</th><th className="px-4 py-3 text-center">Actions</th></tr></thead>

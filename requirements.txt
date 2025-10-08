@@ -3,3 +3,4 @@ werkzeug
 reportlab
 python-dotenv
 PyInstaller
+python-dateutil
