@@ -1176,6 +1176,10 @@ def manage_packages_page(): return render_template('manage_packages.html')
 @app.route('/settings')
 def settings_page(): return render_template('settings.html')
 
+@app.route('/admin')
+def admin_page():
+    return render_template('admin.html')
+
 @app.route('/api/export-data', methods=['GET'])
 def export_data():
     """Creates a zip archive of the entire /data directory."""
