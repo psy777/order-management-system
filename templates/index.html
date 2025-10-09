@@ -246,14 +246,6 @@ const NameDropToggle = ({ value, onChange, disabled = false }) => {
     );
 };
 
-const StatusBar = ({ status, statusHistory }) => {
-    const statuses = ['Draft', 'Sent', 'Paid', 'Shipped'];
-    const currentStatusIndex = statuses.indexOf(status);
-    const timeZone = "America/Chicago";
-    const statusDateOptions = { year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true };
-
-    return (<div className="w-full my-6"><div className="flex items-center">{statuses.map((s, index) => (<React.Fragment key={s}><div className="relative group flex flex-col items-center"><div className={`w-8 h-8 rounded-full flex items-center justify-center text-white font-bold ${index <= currentStatusIndex ? 'bg-orange-600' : 'bg-slate-300'}`}>{index <= currentStatusIndex ? '✓' : '●'}</div><p className={`mt-2 text-xs text-center ${index <= currentStatusIndex ? 'text-orange-600 font-semibold' : 'text-slate-500'}`}>{s}</p>{statusHistory.find(h => h.status === s) && (<div className="absolute bottom-full mb-2 w-max px-2 py-1 bg-slate-800 text-white text-xs rounded-md opacity-0 group-hover:opacity-100 transition-opacity duration-300">{formatInTimeZone(statusHistory.find(h => h.status === s).date, timeZone, statusDateOptions)}</div>)}</div>{index < statuses.length - 1 && (<div className={`flex-auto border-t-4 mx-2 ${index < currentStatusIndex ? 'border-orange-600' : 'border-slate-300'}`}></div>)}</React.Fragment>))}</div></div>);
-};
 
 const generatePdf = (order, allItems, action = 'save') => {
     const { jsPDF } = window.jspdf;
@@ -1751,7 +1743,7 @@ const unpackPackage = (id, pkgCode) => {
                 />
             )}
             {/* EmailModal is now handled at the App level, triggered by setOrderForEmailModal prop */}
-            <div className="mb-6"><button onClick={handleReturnToDashboard} className="text-orange-600 hover:text-orange-800 font-semibold">&larr; Back to Dashboard</button><h1 className="text-3xl font-bold text-slate-800 mt-2">{order ? `Order Details: ${order.id}` : 'New Purchase Order'}</h1>{order && <StatusBar status={formData.status} statusHistory={formData.statusHistory} />}</div>
+            <div className="mb-6"><button onClick={handleReturnToDashboard} className="text-orange-600 hover:text-orange-800 font-semibold">&larr; Back to Dashboard</button><h1 className="text-3xl font-bold text-slate-800 mt-2">{order ? `Order Details: ${order.id}` : 'New Purchase Order'}</h1></div>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 <div className="lg:col-span-2 space-y-6">
                     <div className="relative">

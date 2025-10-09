@@ -289,6 +289,17 @@ def handle_order_logs(order_id):
                 naive_date = dateutil_parse(new_log_dict['timestamp'])
                 utc_date = pytz.utc.localize(naive_date)
                 new_log_dict['timestamp'] = utc_date.astimezone(user_timezone).isoformat()
+
+            if action == 'status' and details:
+                try:
+                    cursor.execute("UPDATE orders SET status = ? WHERE order_id = ?", (details, order_id))
+                    cursor.execute("INSERT INTO order_status_history (order_id, status, status_date) VALUES (?, ?, ?)",
+                                   (order_id, details, datetime.now(timezone.utc).isoformat()))
+                    conn.commit()
+                except sqlite3.Error as e:
+                    conn.rollback()
+                    app.logger.error(f"Failed to update order status for order {order_id}: {e}")
+                    # Decide if this should be a fatal error for the log entry
             
             conn.close()
             return jsonify(new_log_dict), 201

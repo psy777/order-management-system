@@ -32,6 +32,8 @@
             const [isSubmitting, setIsSubmitting] = useState(false);
             const fileInputRef = useRef(null);
 
+            const isStatusUpdate = action === 'status';
+
             const handleSubmit = async (e) => {
                 e.preventDefault();
                 setIsSubmitting(true);
@@ -70,11 +72,17 @@
                         <form onSubmit={handleSubmit}>
                             <div className="mb-4">
                                 <label htmlFor="action" className="block text-sm font-medium text-slate-700">Action</label>
-                                <input type="text" id="action" value={action} onChange={e => setAction(e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                                <select id="action" value={action} onChange={e => setAction(e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500">
+                                    <option value="Manual Entry">Manual Entry</option>
+                                    <option value="status">Status Update</option>
+                                    <option value="Phone Call">Phone Call</option>
+                                    <option value="Email">Email</option>
+                                    <option value="Internal Note">Internal Note</option>
+                                </select>
                             </div>
                             <div className="mb-4">
-                                <label htmlFor="details" className="block text-sm font-medium text-slate-700">Details</label>
-                                <textarea id="details" value={details} onChange={e => setDetails(e.target.value)} rows="3" className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500"></textarea>
+                                <label htmlFor="details" className="block text-sm font-medium text-slate-700">{isStatusUpdate ? 'New Status' : 'Details'}</label>
+                                <textarea id="details" value={details} onChange={e => setDetails(e.target.value)} rows="3" placeholder={isStatusUpdate ? 'Enter the new status...' : 'Enter details about the log...'} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500"></textarea>
                             </div>
                             <div className="mb-4">
                                 <label htmlFor="attachment" className="block text-sm font-medium text-slate-700">Attachment</label>
