@@ -547,8 +547,15 @@ def save_order():
         estimated_shipping_cost_dollars = new_order_payload.get('estimatedShipping', 0.0)
         if not isinstance(estimated_shipping_cost_dollars, (int, float)):
             estimated_shipping_cost_dollars = 0.0
-        estimated_shipping_cents = int(round(estimated_shipping_cost_dollars * 100))
-        final_total_dollars = round((subtotal_cents + name_drop_surcharge_cents + estimated_shipping_cents) / 100.0, 2)
+        
+        # Use the total from the payload if it exists, otherwise calculate it.
+        # The payload total is in cents, so convert to dollars for the database.
+        if 'total' in new_order_payload and isinstance(new_order_payload['total'], (int, float)):
+            final_total_dollars = round(new_order_payload['total'] / 100.0, 2)
+        else:
+            estimated_shipping_cents = int(round(estimated_shipping_cost_dollars * 100))
+            final_total_dollars = round((subtotal_cents + name_drop_surcharge_cents + estimated_shipping_cents) / 100.0, 2)
+
         new_order_payload['total'] = final_total_dollars
 
         if current_order_id_for_db_ops:

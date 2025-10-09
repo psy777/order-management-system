@@ -1358,8 +1358,34 @@ const unpackPackage = (id, pkgCode) => {
     const createOrderObject = (status) => {
         const finalStatus = status || formData.status;
         const newStatusHistory = formData.statusHistory.find(h => h.status === finalStatus) ? formData.statusHistory : [...formData.statusHistory, { status: finalStatus, date: new Date().toISOString() }];
-        // Ensure signatureDataUrl is included from formData
-        return { ...formData, id: formData.id || `PO-${Date.now()}`, date: formData.date || new Date().toISOString(), status: finalStatus, statusHistory: newStatusHistory, total: orderTotals.total, signatureDataUrl: formData.signatureDataUrl };
+        const isNewOrder = !formData.id;
+        
+        // Filter out unselected line items before saving
+        const filteredLineItems = formData.lineItems.filter(item => item.item !== '-- Select Item --');
+
+        // Recalculate totals based on filtered items
+        const subtotal = filteredLineItems.reduce((acc, item) => acc + (item.quantity * item.price), 0);
+        let nameDropSurcharge = 0;
+        if (formData.nameDrop) {
+            filteredLineItems.forEach(item => {
+                if (item.type === 'cross') {
+                    nameDropSurcharge += item.quantity * 100;
+                }
+            });
+        }
+        const estimatedShippingInCents = Math.round((parseFloat(formData.estimatedShipping) || 0) * 100);
+        const finalTotal = subtotal + nameDropSurcharge + estimatedShippingInCents;
+
+        return { 
+            ...formData, 
+            lineItems: filteredLineItems, // Use the filtered list
+            id: formData.id || `PO-${Date.now()}`, 
+            date: isNewOrder ? (formData.date || new Date().toISOString()) : formData.date, 
+            status: finalStatus, 
+            statusHistory: newStatusHistory, 
+            total: finalTotal, // Use the recalculated total
+            signatureDataUrl: formData.signatureDataUrl 
+        };
     };
 
     const handleSaveDraft = async () => {
