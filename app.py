@@ -247,8 +247,14 @@ def get_order(order_id):
 def handle_order_logs(order_id):
     conn = get_db_connection()
     cursor = conn.cursor()
+    settings = read_json_file(SETTINGS_FILE)
+    user_timezone_str = settings.get('timezone', 'UTC')
+    user_timezone = pytz.timezone(user_timezone_str)
 
     if request.method == 'POST':
+        # Handles multipart/form-data
+        action = request.form.get('action', 'Manual Entry')
+        details = request.form.get('details')
         note = request.form.get('note')
         file = request.files.get('attachment')
         attachment_path = None
@@ -257,15 +263,41 @@ def handle_order_logs(order_id):
             filename = secure_filename(file.filename)
             unique_filename = f"{uuid.uuid4().hex[:8]}_{filename}"
             attachment_path = unique_filename
-            file.save(os.path.join(app.config['UPLOAD_FOLDER'], unique_filename))
+            try:
+                file.save(os.path.join(app.config['UPLOAD_FOLDER'], unique_filename))
+            except Exception as e:
+                app.logger.error(f"Failed to save attachment for order {order_id}: {e}")
+                return jsonify({"status": "error", "message": "Failed to save attachment"}), 500
 
-        cursor.execute(
-            "INSERT INTO order_logs (order_id, user, action, note, attachment_path) VALUES (?, ?, ?, ?, ?)",
-            (order_id, "system", "Custom Log", note, attachment_path)
-        )
-        conn.commit()
-        conn.close()
-        return jsonify({"status": "success", "message": "Log entry added."})
+        try:
+            cursor.execute(
+                "INSERT INTO order_logs (order_id, user, action, details, note, attachment_path) VALUES (?, ?, ?, ?, ?, ?)",
+                (order_id, "system", action, details, note, attachment_path)
+            )
+            log_id = cursor.lastrowid
+            conn.commit()
+
+            cursor.execute("SELECT * FROM order_logs WHERE log_id = ?", (log_id,))
+            new_log_row = cursor.fetchone()
+            
+            if not new_log_row:
+                conn.close()
+                return jsonify({"status": "error", "message": "Failed to retrieve new log entry"}), 500
+
+            new_log_dict = dict(new_log_row)
+            if new_log_dict.get('timestamp'):
+                naive_date = dateutil_parse(new_log_dict['timestamp'])
+                utc_date = pytz.utc.localize(naive_date)
+                new_log_dict['timestamp'] = utc_date.astimezone(user_timezone).isoformat()
+            
+            conn.close()
+            return jsonify(new_log_dict), 201
+
+        except sqlite3.Error as e:
+            conn.rollback()
+            conn.close()
+            app.logger.error(f"Database error adding log for order {order_id}: {e}")
+            return jsonify({"status": "error", "message": "Database error"}), 500
 
     # GET request
     settings = read_json_file(SETTINGS_FILE)
