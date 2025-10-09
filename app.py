@@ -1413,11 +1413,11 @@ def export_data():
         
         # Create the zip file from the 'data' directory
         shutil.make_archive(archive_path_base, 'zip', data_dir)
-        
+
         archive_path_zip = f"{archive_path_base}.zip"
 
         # Send the file and clean up afterwards
-        response = send_from_directory(directory=temp_dir, path=f"{archive_name}.zip", as_attachment=True)
+        response = send_from_directory(temp_dir, f"{archive_name}.zip", as_attachment=True)
 
         @response.call_on_close
         def cleanup():
@@ -1473,7 +1473,10 @@ def import_data():
         # A full app restart might be safer, but re-running init_db can cover schema changes.
         init_db()
 
-        return jsonify({"status": "success", "message": "Data restored successfully. The application should be restarted to ensure all services use the new data."}), 200
+        # After a successful import, trigger a shutdown which will lead to a restart by the user or a process manager
+        Timer(1.0, lambda: os.kill(os.getpid(), 9)).start()
+
+        return jsonify({"status": "success", "message": "Data restored successfully. The application will restart in a few moments."}), 200
 
     except Exception as e:
         app.logger.error(f"Error restoring data: {e}")
