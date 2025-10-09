@@ -3,8 +3,9 @@ import shutil
 import PyInstaller.__main__
 
 # --- Configuration ---
-APP_NAME = "OrderManagementSystem"
+APP_NAME = "FireCoast"
 SCRIPT_FILE = "app.py"
+ICON_FILE = "firecoast_icon.png"
 DATA_FOLDER = "data"
 TEMPLATES_FOLDER = "templates"
 ASSETS_FOLDER = "assets"
@@ -22,6 +23,7 @@ def build():
         '--name=%s' % APP_NAME,
         '--onefile',
         '--windowed',
+        '--icon=%s' % ICON_FILE,
         '--add-data=%s%s%s' % (ASSETS_FOLDER, os.pathsep, ASSETS_FOLDER),
         '--add-data=%s%s%s' % (TEMPLATES_FOLDER, os.pathsep, TEMPLATES_FOLDER),
         '--add-data=%s%s%s' % (DATA_FOLDER, os.pathsep, DATA_FOLDER),

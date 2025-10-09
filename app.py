@@ -1503,7 +1503,7 @@ def view_order_page(order_id):
     return render_template('view_order.html', order_id=order_id)
 
 @app.route('/favicon.ico')
-def favicon(): return send_from_directory(os.path.join(app.root_path,'assets'),'favicon.ico',mimetype='image/vnd.microsoft.icon')
+def favicon(): return send_from_directory(os.path.join(app.root_path, ''),'favicon.ico',mimetype='image/vnd.microsoft.icon')
 @app.route('/data/<path:filename>')
 def serve_uploads(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
