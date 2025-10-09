@@ -167,19 +167,6 @@ const OrderLogsSection = ({ orderId, canEdit }) => {
                 </div>
             )}
             <div className="bg-white rounded-lg shadow-sm border border-slate-200">
-                {canEdit && (
-                    <div className="p-6 border-b">
-                        <h2 className="text-xl font-semibold text-slate-700 border-b pb-3 mb-4">Add New Log Entry</h2>
-                        <form onSubmit={handleSubmit} className="space-y-4">
-                            <Textarea label="Note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Add a note for this log entry..."/>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-600">Attachment</label>
-                                <input type="file" ref={fileInputRef} onChange={handleFileChange} className="mt-1 block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-orange-50 file:text-orange-700 hover:file:bg-orange-100" />
-                            </div>
-                            <button type="submit" className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors shadow-sm">Add Log</button>
-                        </form>
-                    </div>
-                )}
                 <div className="p-6">
                     <h2 className="text-xl font-semibold text-slate-700 mb-4">Log History</h2>
                     <div className="overflow-x-auto">
@@ -187,10 +174,8 @@ const OrderLogsSection = ({ orderId, canEdit }) => {
                             <thead className="text-xs text-slate-700 uppercase bg-slate-100">
                                 <tr>
                                     <th className="px-4 py-3">Timestamp</th>
-                                    <th className="px-4 py-3">User</th>
                                     <th className="px-4 py-3">Action</th>
                                     <th className="px-4 py-3">Details</th>
-                                    <th className="px-4 py-3">Note</th>
                                     <th className="px-4 py-3">Attachment</th>
                                     {canEdit && <th className="px-4 py-3"><span className="sr-only">Actions</span></th>}
                                 </tr>
@@ -199,10 +184,8 @@ const OrderLogsSection = ({ orderId, canEdit }) => {
                                 {logs.map(log => (
                                     <tr key={log.log_id} className="bg-white border-b hover:bg-slate-50">
                                         <td className="px-4 py-3 font-medium text-slate-800">{new Date(log.timestamp).toLocaleString()}</td>
-                                        <td className="px-4 py-3">{log.user || ''}</td>
                                         <td className="px-4 py-3">{log.action}</td>
                                         <td className="px-4 py-3">{log.details || ''}</td>
-                                        <td className="px-4 py-3">{log.note || ''}</td>
                                         <td className="px-4 py-3">
                                             {log.attachment_path ? <a href={`/data/${log.attachment_path}`} target="_blank" className="text-orange-600 hover:underline">View File</a> : ''}
                                         </td>
@@ -216,7 +199,7 @@ const OrderLogsSection = ({ orderId, canEdit }) => {
                                 ))}
                                 {logs.length === 0 && (
                                     <tr>
-                                        <td colSpan={canEdit ? "7" : "6"} className="text-center py-4 text-slate-500">No log entries for this order yet.</td>
+                                        <td colSpan={canEdit ? "5" : "4"} className="text-center py-4 text-slate-500">No log entries for this order yet.</td>
                                     </tr>
                                 )}
                             </tbody>
