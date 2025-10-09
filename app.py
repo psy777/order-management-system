@@ -19,6 +19,7 @@ import json
 import csv
 import shutil
 import zipfile
+import pytz
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request, send_from_directory, redirect, flash
@@ -118,11 +119,19 @@ if not os.path.exists(SETTINGS_FILE):
 def get_orders():
     conn = get_db_connection()
     cursor = conn.cursor()
+    settings = read_json_file(SETTINGS_FILE)
+    user_timezone_str = settings.get('timezone', 'UTC')
+    user_timezone = pytz.timezone(user_timezone_str)
+
     cursor.execute("SELECT o.*, v.company_name as vendor_company_name, v.contact_name as vendor_contact_name, v.email as vendor_email, v.phone as vendor_phone, v.billing_address as vendor_billing_address, v.billing_city as vendor_billing_city, v.billing_state as vendor_billing_state, v.billing_zip_code as vendor_billing_zip_code, v.shipping_address as vendor_shipping_address, v.shipping_city as vendor_shipping_city, v.shipping_state as vendor_shipping_state, v.shipping_zip_code as vendor_shipping_zip_code FROM orders o LEFT JOIN vendors v ON o.vendor_id = v.id WHERE o.status != 'Deleted' ORDER BY o.order_date DESC, o.order_id DESC")
     orders_from_db = cursor.fetchall()
     active_orders_response = []
     for order_row in orders_from_db:
         order_dict = dict(order_row)
+        if order_dict.get('order_date'):
+            utc_date = dateutil_parse(order_dict['order_date']).replace(tzinfo=pytz.utc)
+            order_dict['order_date'] = utc_date.astimezone(user_timezone).isoformat()
+        
         order_dict['vendorInfo'] = {
             "id": order_dict.pop('vendor_id'),
             "companyName": order_dict.pop('vendor_company_name') or "[Vendor Not Found]",
@@ -147,8 +156,17 @@ def get_orders():
         cursor.execute("SELECT item_code, package_code, quantity, price_per_unit_cents, style_chosen, item_type FROM order_line_items WHERE order_id = ?", (order_dict['order_id'],))
         order_dict['lineItems'] = [{'item': li['item_code'], 'packageCode': li['package_code'], 'price': li['price_per_unit_cents'], 'quantity': li['quantity'], 'style': li['style_chosen'], 'type': li['item_type']} for li in cursor.fetchall()]
         cursor.execute("SELECT status, status_date FROM order_status_history WHERE order_id = ? ORDER BY status_date ASC", (order_dict['order_id'],))
-        order_dict['statusHistory'] = [{'status': h['status'], 'date': h['status_date']} for h in cursor.fetchall()]
-        order_dict['id'] = order_dict.pop('order_id'); order_dict['date'] = order_dict.pop('order_date'); order_dict['total'] = order_dict.pop('total_amount'); order_dict['estimatedShipping'] = order_dict.pop('estimated_shipping_cost')
+        
+        status_history = []
+        for h in cursor.fetchall():
+            utc_date = dateutil_parse(h['status_date']).replace(tzinfo=pytz.utc)
+            status_history.append({'status': h['status'], 'date': utc_date.astimezone(user_timezone).isoformat()})
+        order_dict['statusHistory'] = status_history
+
+        order_dict['id'] = order_dict.pop('order_id')
+        order_dict['date'] = order_dict.pop('order_date')
+        order_dict['total'] = order_dict.pop('total_amount')
+        order_dict['estimatedShipping'] = order_dict.pop('estimated_shipping_cost')
         order_dict['nameDrop'] = True if order_dict.pop('name_drop', 0) == 1 else False
         active_orders_response.append(order_dict)
     conn.close()
@@ -158,6 +176,10 @@ def get_orders():
 def get_order(order_id):
     conn = get_db_connection()
     cursor = conn.cursor()
+    settings = read_json_file(SETTINGS_FILE)
+    user_timezone_str = settings.get('timezone', 'UTC')
+    user_timezone = pytz.timezone(user_timezone_str)
+
     cursor.execute("SELECT o.*, v.company_name as vendor_company_name, v.contact_name as vendor_contact_name, v.email as vendor_email, v.phone as vendor_phone, v.billing_address as vendor_billing_address, v.billing_city as vendor_billing_city, v.billing_state as vendor_billing_state, v.billing_zip_code as vendor_billing_zip_code, v.shipping_address as vendor_shipping_address, v.shipping_city as vendor_shipping_city, v.shipping_state as vendor_shipping_state, v.shipping_zip_code as vendor_shipping_zip_code FROM orders o LEFT JOIN vendors v ON o.vendor_id = v.id WHERE o.order_id = ?", (order_id,))
     order_row = cursor.fetchone()
     if not order_row:
@@ -165,6 +187,10 @@ def get_order(order_id):
         return jsonify({"status": "error", "message": "Order not found"}), 404
 
     order_dict = dict(order_row)
+    if order_dict.get('order_date'):
+        utc_date = dateutil_parse(order_dict['order_date']).replace(tzinfo=pytz.utc)
+        order_dict['order_date'] = utc_date.astimezone(user_timezone).isoformat()
+
     order_dict['vendorInfo'] = {
         "id": order_dict.pop('vendor_id'),
         "companyName": order_dict.pop('vendor_company_name') or "[Vendor Not Found]",
@@ -189,8 +215,17 @@ def get_order(order_id):
     cursor.execute("SELECT item_code, package_code, quantity, price_per_unit_cents, style_chosen, item_type FROM order_line_items WHERE order_id = ?", (order_dict['order_id'],))
     order_dict['lineItems'] = [{'item': li['item_code'], 'packageCode': li['package_code'], 'price': li['price_per_unit_cents'], 'quantity': li['quantity'], 'style': li['style_chosen'], 'type': li['item_type']} for li in cursor.fetchall()]
     cursor.execute("SELECT status, status_date FROM order_status_history WHERE order_id = ? ORDER BY status_date ASC", (order_dict['order_id'],))
-    order_dict['statusHistory'] = [{'status': h['status'], 'date': h['status_date']} for h in cursor.fetchall()]
-    order_dict['id'] = order_dict.pop('order_id'); order_dict['date'] = order_dict.pop('order_date'); order_dict['total'] = order_dict.pop('total_amount'); order_dict['estimatedShipping'] = order_dict.pop('estimated_shipping_cost')
+    
+    status_history = []
+    for h in cursor.fetchall():
+        utc_date = dateutil_parse(h['status_date']).replace(tzinfo=pytz.utc)
+        status_history.append({'status': h['status'], 'date': utc_date.astimezone(user_timezone).isoformat()})
+    order_dict['statusHistory'] = status_history
+
+    order_dict['id'] = order_dict.pop('order_id')
+    order_dict['date'] = order_dict.pop('order_date')
+    order_dict['total'] = order_dict.pop('total_amount')
+    order_dict['estimatedShipping'] = order_dict.pop('estimated_shipping_cost')
     order_dict['nameDrop'] = True if order_dict.pop('name_drop', 0) == 1 else False
     
     conn.close()
@@ -221,10 +256,73 @@ def handle_order_logs(order_id):
         return jsonify({"status": "success", "message": "Log entry added."})
 
     # GET request
+    settings = read_json_file(SETTINGS_FILE)
+    user_timezone_str = settings.get('timezone', 'UTC')
+    user_timezone = pytz.timezone(user_timezone_str)
+
     cursor.execute("SELECT log_id, timestamp, user, action, details, note, attachment_path FROM order_logs WHERE order_id = ? ORDER BY timestamp DESC", (order_id,))
-    logs = [dict(row) for row in cursor.fetchall()]
+    logs_from_db = cursor.fetchall()
+    logs = []
+    for log_row in logs_from_db:
+        log_dict = dict(log_row)
+        if log_dict.get('timestamp'):
+            # Timestamps from DB are naive, so we assume they are UTC
+            naive_date = dateutil_parse(log_dict['timestamp'])
+            utc_date = pytz.utc.localize(naive_date)
+            log_dict['timestamp'] = utc_date.astimezone(user_timezone).isoformat()
+        logs.append(log_dict)
+    
     conn.close()
     return jsonify(logs)
+
+@app.route('/api/orders/<string:order_id>/logs/<int:log_id>', methods=['POST', 'DELETE'])
+def handle_specific_order_log(order_id, log_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT attachment_path FROM order_logs WHERE log_id = ? AND order_id = ?", (log_id, order_id))
+    log = cursor.fetchone()
+
+    if not log:
+        conn.close()
+        return jsonify({"status": "error", "message": "Log not found"}), 404
+
+    if request.method == 'POST':  # Using POST for update to handle multipart/form-data
+        note = request.form.get('note')
+        file = request.files.get('attachment')
+        
+        attachment_path = log['attachment_path']
+
+        if file and file.filename:
+            if attachment_path:
+                old_file_path = os.path.join(app.config['UPLOAD_FOLDER'], attachment_path)
+                if os.path.exists(old_file_path):
+                    os.remove(old_file_path)
+
+            filename = secure_filename(file.filename)
+            unique_filename = f"{uuid.uuid4().hex[:8]}_{filename}"
+            attachment_path = unique_filename
+            file.save(os.path.join(app.config['UPLOAD_FOLDER'], unique_filename))
+        
+        cursor.execute(
+            "UPDATE order_logs SET note = ?, attachment_path = ? WHERE log_id = ?",
+            (note, attachment_path, log_id)
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "success", "message": "Log updated."})
+
+    elif request.method == 'DELETE':
+        attachment_path = log['attachment_path']
+        if attachment_path:
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], attachment_path)
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        
+        cursor.execute("DELETE FROM order_logs WHERE log_id = ?", (log_id,))
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "success", "message": "Log deleted."})
 
 @app.route('/api/search-orders', methods=['GET'])
 def search_orders():
@@ -1170,9 +1268,21 @@ def update_settings():
     existing_settings['company_name'] = new_settings_payload.get('company_name', existing_settings.get('company_name'))
     existing_settings['default_shipping_zip_code'] = new_settings_payload.get('default_shipping_zip_code', existing_settings.get('default_shipping_zip_code'))
     existing_settings['default_email_body'] = new_settings_payload.get('default_email_body', existing_settings.get('default_email_body'))
-
+    
     write_json_file(SETTINGS_FILE, existing_settings)
     return jsonify({"message": "Settings updated."}), 200
+
+@app.route('/api/settings/timezone', methods=['POST'])
+def update_timezone_settings():
+    payload = request.json
+    if not payload or 'timezone' not in payload:
+        return jsonify({"message": "Invalid request"}), 400
+
+    settings = read_json_file(SETTINGS_FILE)
+    settings['timezone'] = payload['timezone']
+    write_json_file(SETTINGS_FILE, settings)
+
+    return jsonify({"message": "Timezone updated successfully"}), 200
 
 @app.route('/api/settings/email', methods=['POST'])
 def update_email_settings():
@@ -1207,8 +1317,13 @@ def manage_customers_page(): return render_template('manage_customers.html')
 def manage_items_page(): return render_template('manage_items.html')
 @app.route('/manage/packages')
 def manage_packages_page(): return render_template('manage_packages.html')
+
 @app.route('/settings')
-def settings_page(): return render_template('settings.html')
+def settings_page():
+    timezones = pytz.all_timezones
+    settings = read_json_file(SETTINGS_FILE)
+    selected_timezone = settings.get('timezone', 'UTC')
+    return render_template('settings.html', timezones=timezones, selected_timezone=selected_timezone)
 
 @app.route('/admin')
 def admin_page():

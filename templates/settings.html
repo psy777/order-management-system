@@ -30,6 +30,14 @@
                         <input type="text" class="form-control" id="shippingZipCode" name="shippingZipCode">
                     </div>
                     <div class="form-group">
+                        <label for="timezone">Timezone</label>
+                        <select class="form-control" id="timezone" name="timezone">
+                            {% for tz in timezones %}
+                                <option value="{{ tz }}" {% if tz == selected_timezone %}selected{% endif %}>{{ tz }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="form-group">
                         <label for="defaultEmailBody">Default Email Body</label>
                         <textarea class="form-control" id="defaultEmailBody" name="defaultEmailBody" rows="5"></textarea>
                         <small class="form-text text-muted">
@@ -143,6 +151,7 @@
                 $('#appPassword').val(data.app_password);
                 $('#emailCc').val(data.email_cc);
                 $('#emailBcc').val(data.email_bcc);
+                $('#timezone').val(data.timezone || 'UTC');
             });
 
             // Handle general settings form submission
@@ -159,7 +168,20 @@
                     contentType: 'application/json',
                     data: JSON.stringify(settingsData),
                     success: function(response) {
-                        alert('Settings saved successfully!');
+                        // Now save the timezone
+                        $.ajax({
+                            url: '/api/settings/timezone',
+                            type: 'POST',
+                            contentType: 'application/json',
+                            data: JSON.stringify({ timezone: $('#timezone').val() }),
+                            success: function(response) {
+                                alert('Settings saved successfully!');
+                            },
+                            error: function(error) {
+                                alert('Error saving timezone.');
+                                console.error(error);
+                            }
+                        });
                     },
                     error: function(error) {
                         alert('Error saving settings.');
