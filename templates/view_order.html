@@ -110,6 +110,41 @@
                             </div>
                         </div>
 
+                        {order.orderLogs && order.orderLogs.length > 0 && (
+                            <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200 mb-6">
+                                <h2 className="text-xl font-semibold text-slate-700 border-b pb-3 mb-4">Order Logs</h2>
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-sm text-left text-slate-500">
+                                        <thead className="text-xs text-slate-700 uppercase bg-slate-100">
+                                            <tr>
+                                                <th className="px-4 py-3">Timestamp</th>
+                                                <th className="px-4 py-3">User</th>
+                                                <th className="px-4 py-3">Action</th>
+                                                <th className="px-4 py-3">Details</th>
+                                                <th className="px-4 py-3">Note</th>
+                                                <th className="px-4 py-3">Attachment</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {order.orderLogs.map(log => (
+                                                <tr key={log.log_id} className="bg-white border-b hover:bg-slate-50">
+                                                    <td className="px-4 py-3 font-medium text-slate-800">{new Date(log.timestamp).toLocaleString()}</td>
+                                                    <td className="px-4 py-3">{log.user || ''}</td>
+                                                    <td className="px-4 py-3">{log.action}</td>
+                                                    <td className="px-4 py-3">{log.details || ''}</td>
+                                                    <td className="px-4 py-3">{log.note || ''}</td>
+                                                    <td className="px-4 py-3">
+                                                        {log.attachment_path ? 
+                                                            <a href={`/data/${log.attachment_path}`} target="_blank" className="text-orange-600 hover:underline">View File</a> : ''}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+
                         <div className="bg-white rounded-lg shadow-sm border border-slate-200">
                             <div className="p-6 border-b"><h2 className="text-xl font-semibold text-slate-700">Line Items</h2></div>
                             <div className="overflow-x-auto">

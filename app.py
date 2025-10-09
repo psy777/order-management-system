@@ -228,6 +228,18 @@ def get_order(order_id):
     order_dict['estimatedShipping'] = order_dict.pop('estimated_shipping_cost')
     order_dict['nameDrop'] = True if order_dict.pop('name_drop', 0) == 1 else False
     
+    cursor.execute("SELECT log_id, timestamp, user, action, details, note, attachment_path FROM order_logs WHERE order_id = ? ORDER BY timestamp DESC", (order_id,))
+    logs_from_db = cursor.fetchall()
+    logs = []
+    for log_row in logs_from_db:
+        log_dict = dict(log_row)
+        if log_dict.get('timestamp'):
+            naive_date = dateutil_parse(log_dict['timestamp'])
+            utc_date = pytz.utc.localize(naive_date)
+            log_dict['timestamp'] = utc_date.astimezone(user_timezone).isoformat()
+        logs.append(log_dict)
+    order_dict['orderLogs'] = logs
+    
     conn.close()
     return jsonify(order_dict)
 
