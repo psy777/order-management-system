@@ -1097,7 +1097,7 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allVendors, allSelectableIte
                         const timeZone = "America/Chicago";
                         const dateOptions = { year: 'numeric', month: 'long', day: 'numeric' };
                         return (<tr key={order.id} onClick={() => viewOrder(order)} className="bg-white border-b hover:bg-slate-50 cursor-pointer">
-                        <td className="px-4 py-3 font-medium text-slate-800">{order.id}</td><td className="px-4 py-3">{order.vendorInfo.companyName}</td>
+                        <td className="px-4 py-3 font-medium text-slate-800">{order.display_id || order.id}</td><td className="px-4 py-3">{order.vendorInfo.companyName}</td>
                         <td className="px-4 py-3">{formatInTimeZone(order.date, timeZone, dateOptions)}</td><td className="px-4 py-3">${parseFloat(order.total || 0).toFixed(2)}</td>
                         <td className="px-4 py-3">
                             {order.status === 'Shipped' ? (
@@ -1142,7 +1142,7 @@ const UnsavedChangesModal = ({ onCancel, onDelete, onSaveAndClose }) => {
 const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allVendors, allSelectableItems, itemData, packageData, fetchAndUpdateVendors, setOrderForEmailModal }) => { // Added setOrderForEmailModal
     const { useState, useMemo, useEffect, useRef } = React;
     const [isEditing, setIsEditing] = useState(!order || order.status === 'Draft');
-    const [formData, setFormData] = useState(order ? {...order, estimatedShipping: order.estimatedShipping || '', scentOption: order.scentOption || 'Scented'} : { vendorInfo: { companyName: '', contactName: '', email: '', phone: '', billingAddress: '', billingCity: '', billingState: '', billingZipCode: '', shippingAddress: '', shippingCity: '', shippingState: '', shippingZipCode: '' }, lineItems: [], notes: "", estimatedShippingDate: '', estimatedShipping: '', scentOption: 'Scented', nameDrop: false, signatureDataUrl: null, statusHistory: [{ status: 'Draft', date: new Date().toISOString() }], status: 'Draft' });
+    const [formData, setFormData] = useState(order ? {...order, display_id: order.display_id || '', estimatedShipping: order.estimatedShipping || '', scentOption: order.scentOption || 'Scented'} : { display_id: '', vendorInfo: { companyName: '', contactName: '', email: '', phone: '', billingAddress: '', billingCity: '', billingState: '', billingZipCode: '', shippingAddress: '', shippingCity: '', shippingState: '', shippingZipCode: '' }, lineItems: [], notes: "", estimatedShippingDate: '', estimatedShipping: '', scentOption: 'Scented', nameDrop: false, signatureDataUrl: null, statusHistory: [{ status: 'Draft', date: new Date().toISOString() }], status: 'Draft' });
     const [vendorSuggestions, setVendorSuggestions] = useState([]);
     const [showUnsavedChangesModal, setShowUnsavedChangesModal] = useState(false);
     // orderToEmail state is removed, setOrderForEmailModal prop will be used directly
@@ -1739,10 +1739,13 @@ const unpackPackage = (id, pkgCode) => {
                 />
             )}
             {/* EmailModal is now handled at the App level, triggered by setOrderForEmailModal prop */}
-            <div className="mb-6"><button onClick={handleReturnToDashboard} className="text-orange-600 hover:text-orange-800 font-semibold">&larr; Back to Dashboard</button><h1 className="text-3xl font-bold text-slate-800 mt-2">{order ? `Order Details: ${order.id}` : 'New Purchase Order'}</h1></div>
+            <div className="mb-6"><button onClick={handleReturnToDashboard} className="text-orange-600 hover:text-orange-800 font-semibold">&larr; Back to Dashboard</button><h1 className="text-3xl font-bold text-slate-800 mt-2">{order ? `Order Details: ${formData.display_id || order.id}` : 'New Purchase Order'}</h1></div>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 <div className="lg:col-span-2 space-y-6">
                     <div className="relative">
+                         <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200 mb-6">
+                            <Input label="Custom Order ID" value={formData.display_id} onChange={e => setFormData(prev => ({...prev, display_id: e.target.value}))} disabled={!canEdit} />
+                        </div>
                         <div className={`bg-white p-6 rounded-lg shadow-sm border ${isEditingAutofilledVendor ? 'border-red-500 shadow-red-300/50 ring-2 ring-red-500' : 'border-slate-200'}`}>
                             <h2 className="text-xl font-semibold text-slate-700 border-b pb-3 mb-4">Vendor Information</h2>
                             {isEditingAutofilledVendor && (

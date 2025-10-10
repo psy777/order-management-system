@@ -164,6 +164,7 @@ def get_orders():
         order_dict['statusHistory'] = status_history
 
         order_dict['id'] = order_dict.pop('order_id')
+        order_dict['display_id'] = order_dict.pop('display_id')
         order_dict['date'] = order_dict.pop('order_date')
         order_dict['total'] = order_dict.pop('total_amount')
         order_dict['estimatedShipping'] = order_dict.pop('estimated_shipping_cost')
@@ -223,6 +224,7 @@ def get_order(order_id):
     order_dict['statusHistory'] = status_history
 
     order_dict['id'] = order_dict.pop('order_id')
+    order_dict['display_id'] = order_dict.pop('display_id')
     order_dict['date'] = order_dict.pop('order_date')
     order_dict['total'] = order_dict.pop('total_amount')
     order_dict['estimatedShipping'] = order_dict.pop('estimated_shipping_cost')
@@ -470,7 +472,7 @@ def search_orders():
             if term:
                 term_param = f'%{term}%'
                 text_conditions = [
-                    "o.order_id LIKE ?", "o.status LIKE ?", "o.notes LIKE ?",
+                    "o.order_id LIKE ?", "o.display_id LIKE ?", "o.status LIKE ?", "o.notes LIKE ?",
                     "v.company_name LIKE ?", "v.contact_name LIKE ?", "i.name LIKE ?", "oli.style_chosen LIKE ?",
                     "ol.details LIKE ?", "ol.note LIKE ?"
                 ]
@@ -612,18 +614,20 @@ def save_order():
             final_total_dollars = round((subtotal_cents + name_drop_surcharge_cents + estimated_shipping_cents) / 100.0, 2)
 
         new_order_payload['total'] = final_total_dollars
+        
+        display_id = new_order_payload.get('display_id', None)
 
         if current_order_id_for_db_ops:
-            cursor.execute("UPDATE orders SET vendor_id=?, order_date=?, status=?, notes=?, estimated_shipping_date=?, shipping_address=?, shipping_city=?, shipping_state=?, shipping_zip_code=?, estimated_shipping_cost=?, scent_option=?, name_drop=?, signature_data_url=?, total_amount=?, updated_at=CURRENT_TIMESTAMP WHERE order_id=?",
-                           (db_processed_vendor_id, new_order_payload.get('date', datetime.now(timezone.utc).isoformat()+"Z"), new_order_payload.get('status','Draft'), new_order_payload.get('notes'), new_order_payload.get('estimatedShippingDate'), new_order_payload.get('shippingAddress'), new_order_payload.get('shippingCity'), new_order_payload.get('shippingState'), new_order_payload.get('shippingZipCode'), estimated_shipping_cost_dollars, new_order_payload.get('scentOption'), 1 if new_order_payload.get('nameDrop') else 0, new_order_payload.get('signatureDataUrl'), final_total_dollars, current_order_id_for_db_ops))
+            cursor.execute("UPDATE orders SET display_id=?, vendor_id=?, order_date=?, status=?, notes=?, estimated_shipping_date=?, shipping_address=?, shipping_city=?, shipping_state=?, shipping_zip_code=?, estimated_shipping_cost=?, scent_option=?, name_drop=?, signature_data_url=?, total_amount=?, updated_at=CURRENT_TIMESTAMP WHERE order_id=?",
+                           (display_id, db_processed_vendor_id, new_order_payload.get('date', datetime.now(timezone.utc).isoformat()+"Z"), new_order_payload.get('status','Draft'), new_order_payload.get('notes'), new_order_payload.get('estimatedShippingDate'), new_order_payload.get('shippingAddress'), new_order_payload.get('shippingCity'), new_order_payload.get('shippingState'), new_order_payload.get('shippingZipCode'), estimated_shipping_cost_dollars, new_order_payload.get('scentOption'), 1 if new_order_payload.get('nameDrop') else 0, new_order_payload.get('signatureDataUrl'), final_total_dollars, current_order_id_for_db_ops))
             cursor.execute("DELETE FROM order_line_items WHERE order_id = ?", (current_order_id_for_db_ops,))
             cursor.execute("DELETE FROM order_status_history WHERE order_id = ?", (current_order_id_for_db_ops,))
         else:
             timestamp_ms = int(time.time() * 1000)
             current_order_id_for_db_ops = f"PO-{timestamp_ms}"
             new_order_payload['id'] = current_order_id_for_db_ops
-            cursor.execute("INSERT INTO orders (order_id, vendor_id, order_date, status, notes, estimated_shipping_date, shipping_address, shipping_city, shipping_state, shipping_zip_code, estimated_shipping_cost, scent_option, name_drop, signature_data_url, total_amount) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                           (current_order_id_for_db_ops, db_processed_vendor_id, new_order_payload.get('date', datetime.now(timezone.utc).isoformat()+"Z"), new_order_payload.get('status','Draft'), new_order_payload.get('notes'), new_order_payload.get('estimatedShippingDate'), new_order_payload.get('shippingAddress'), new_order_payload.get('shippingCity'), new_order_payload.get('shippingState'), new_order_payload.get('shippingZipCode'), estimated_shipping_cost_dollars, new_order_payload.get('scentOption'), 1 if new_order_payload.get('nameDrop') else 0, new_order_payload.get('signatureDataUrl'), final_total_dollars))
+            cursor.execute("INSERT INTO orders (order_id, display_id, vendor_id, order_date, status, notes, estimated_shipping_date, shipping_address, shipping_city, shipping_state, shipping_zip_code, estimated_shipping_cost, scent_option, name_drop, signature_data_url, total_amount) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                           (current_order_id_for_db_ops, display_id, db_processed_vendor_id, new_order_payload.get('date', datetime.now(timezone.utc).isoformat()+"Z"), new_order_payload.get('status','Draft'), new_order_payload.get('notes'), new_order_payload.get('estimatedShippingDate'), new_order_payload.get('shippingAddress'), new_order_payload.get('shippingCity'), new_order_payload.get('shippingState'), new_order_payload.get('shippingZipCode'), estimated_shipping_cost_dollars, new_order_payload.get('scentOption'), 1 if new_order_payload.get('nameDrop') else 0, new_order_payload.get('signatureDataUrl'), final_total_dollars))
         
         processed_order_id = current_order_id_for_db_ops 
         app.logger.info(f"DB-OP: processed_order_id is now set to: '{processed_order_id}' before line item processing.")
