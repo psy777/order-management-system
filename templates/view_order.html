@@ -161,31 +161,31 @@
                     </div>
 
                         <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200 mb-6">
-                            <h2 className="text-xl font-semibold text-slate-700 border-b pb-3 mb-4">Vendor Information</h2>
+                            <h2 className="text-xl font-semibold text-slate-700 border-b pb-3 mb-4">Contact Information</h2>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                 <div>
                                     <p className="text-sm font-medium text-slate-500">Company Name</p>
-                                    <p className="text-slate-800">{order.vendorInfo.companyName}</p>
+                                    <p className="text-slate-800">{order.contactInfo.companyName}</p>
                                 </div>
                                 <div>
                                     <p className="text-sm font-medium text-slate-500">Contact Name</p>
-                                    <p className="text-slate-800">{order.vendorInfo.contactName}</p>
+                                    <p className="text-slate-800">{order.contactInfo.contactName}</p>
                                 </div>
                                 <div>
                                     <p className="text-sm font-medium text-slate-500">Email</p>
-                                    <p className="text-slate-800">{order.vendorInfo.email}</p>
+                                    <p className="text-slate-800">{order.contactInfo.email}</p>
                                 </div>
                                 <div>
                                     <p className="text-sm font-medium text-slate-500">Phone</p>
-                                    <p className="text-slate-800">{order.vendorInfo.phone}</p>
+                                    <p className="text-slate-800">{order.contactInfo.phone}</p>
                                 </div>
                                 <div>
                                     <p className="text-sm font-medium text-slate-500">Shipping Address</p>
-                                    <p className="text-slate-800">{`${order.vendorInfo.shippingAddress}, ${order.vendorInfo.shippingCity}, ${order.vendorInfo.shippingState} ${order.vendorInfo.shippingZipCode}`}</p>
+                                    <p className="text-slate-800">{`${order.contactInfo.shippingAddress}, ${order.contactInfo.shippingCity}, ${order.contactInfo.shippingState} ${order.contactInfo.shippingZipCode}`}</p>
                                 </div>
                                  <div>
                                     <p className="text-sm font-medium text-slate-500">Billing Address</p>
-                                    <p className="text-slate-800">{`${order.vendorInfo.billingAddress}, ${order.vendorInfo.billingCity}, ${order.vendorInfo.billingState} ${order.vendorInfo.billingZipCode}`}</p>
+                                    <p className="text-slate-800">{`${order.contactInfo.billingAddress}, ${order.contactInfo.billingCity}, ${order.contactInfo.billingState} ${order.contactInfo.billingZipCode}`}</p>
                                 </div>
                             </div>
                         </div>

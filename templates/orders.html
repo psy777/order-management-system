@@ -14,8 +14,63 @@
 <link rel="icon" href="/favicon.ico" type="image/x-icon">
 <link rel="stylesheet" href="../assets/css/styles.css">
 </head>
-<body>
-    <div id="root"></div>
+<body class="bg-slate-50 min-h-screen font-sans">
+    <nav class="bg-slate-900 text-white shadow">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex h-16 items-center justify-between">
+                <div class="flex items-center space-x-10">
+                    <a href="/orders" class="text-lg font-semibold tracking-wide">FireCoast OMS</a>
+                    <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
+                        <a href="/orders" id="nav-orders-link" class="text-orange-300">Orders</a>
+                        <a href="/contacts" class="hover:text-orange-300 transition">Contacts</a>
+                        <a href="/analytics" class="hover:text-orange-300 transition">Analytics</a>
+                        <a href="/admin" class="hover:text-orange-300 transition">Admin</a>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-3 text-sm font-medium">
+                    <a href="/settings" class="hover:text-orange-300 transition">Settings</a>
+                    <a href="#" id="nav-log-out" class="hover:text-orange-300 transition">Log Out</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const ordersLink = document.getElementById('nav-orders-link');
+            if (ordersLink) {
+                ordersLink.addEventListener('click', (event) => {
+                    if (window.fireCoastNavigateTo) {
+                        event.preventDefault();
+                        window.fireCoastNavigateTo('dashboard');
+                    }
+                });
+            }
+            const logoutLink = document.getElementById('nav-log-out');
+            if (logoutLink) {
+                logoutLink.addEventListener('click', async (event) => {
+                    event.preventDefault();
+                    if (window.fireCoastLogout) {
+                        window.fireCoastLogout();
+                        return;
+                    }
+                    try {
+                        const response = await fetch('/shutdown', { method: 'POST' });
+                        if (response.ok) {
+                            document.body.innerHTML = '<div class="min-h-screen flex items-center justify-center text-slate-700 text-lg">Application has been shut down. You can now close this tab.</div>';
+                        } else {
+                            alert('Failed to log out.');
+                        }
+                    } catch (error) {
+                        console.error('Error logging out:', error);
+                        alert('Error attempting to log out.');
+                    }
+                });
+            }
+        });
+    </script>
+    <main class="py-10">
+        <div id="root" class="orders-app"></div>
+    </main>
     {% raw %}
     <script type="text/babel">
 // --- FORMATTERS ---
@@ -39,13 +94,152 @@ const Select = ({ value, onChange, disabled = false, children }) => (
 const Textarea = ({ label, placeholder, value, onChange, disabled = false, rows = 3, onFocus, onBlur }) => (
     <div><label className="block text-sm font-medium text-slate-600">{label}</label><textarea rows={rows} placeholder={placeholder} value={value} onChange={onChange} disabled={disabled} onFocus={onFocus} onBlur={onBlur} className="mt-1 block w-full text-sm px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 disabled:bg-slate-100 disabled:text-slate-500"></textarea></div>
 );
+
+const ContactMentionTextarea = ({ label, placeholder, value, onChange, disabled = false, rows = 3, contacts = [] }) => {
+    const { useState, useRef, useEffect } = React;
+    const textareaRef = useRef(null);
+    const [suggestions, setSuggestions] = useState([]);
+    const [isOpen, setIsOpen] = useState(false);
+    const [highlightIndex, setHighlightIndex] = useState(0);
+    const lastCaretRef = useRef(0);
+
+    const findMentionQuery = (text, caretPosition) => {
+        const uptoCaret = text.slice(0, caretPosition);
+        const match = uptoCaret.match(/@([a-z0-9_.-]*)$/i);
+        if (match) {
+            return match[1].toLowerCase();
+        }
+        return null;
+    };
+
+    const updateSuggestions = (text, caret) => {
+        const query = findMentionQuery(text, caret);
+        if (query === null) {
+            setSuggestions([]);
+            setIsOpen(false);
+            setHighlightIndex(0);
+            return;
+        }
+        const filtered = contacts
+            .filter(contact => contact.handle)
+            .filter(contact => {
+                if (!query) return true;
+                const handle = contact.handle.toLowerCase();
+                const name = (contact.contactName || '').toLowerCase();
+                const company = (contact.companyName || '').toLowerCase();
+                return handle.startsWith(query) || name.includes(query) || company.includes(query);
+            })
+            .slice(0, 8);
+        setSuggestions(filtered);
+        setIsOpen(filtered.length > 0);
+        setHighlightIndex(0);
+    };
+
+    const applyMention = (contact) => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+        const caret = textarea.selectionStart;
+        const text = textarea.value;
+        const uptoCaret = text.slice(0, caret);
+        const match = uptoCaret.match(/@([a-z0-9_.-]*)$/i);
+        if (!match) return;
+        const queryLength = match[1].length;
+        const insertionPoint = caret - queryLength;
+        const replacement = `@${contact.handle}`;
+        const newValue = text.slice(0, insertionPoint) + replacement + text.slice(caret);
+        onChange(newValue);
+        setTimeout(() => {
+            textarea.focus();
+            const newCaret = insertionPoint + replacement.length;
+            textarea.setSelectionRange(newCaret, newCaret);
+        }, 0);
+        setSuggestions([]);
+        setIsOpen(false);
+    };
+
+    const handleChange = (event) => {
+        const newValue = event.target.value;
+        onChange(newValue);
+        const caret = event.target.selectionStart;
+        lastCaretRef.current = caret;
+        updateSuggestions(newValue, caret);
+    };
+
+    const handleKeyDown = (event) => {
+        if (!isOpen || suggestions.length === 0) return;
+        if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            setHighlightIndex(prev => (prev + 1) % suggestions.length);
+        } else if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            setHighlightIndex(prev => (prev - 1 + suggestions.length) % suggestions.length);
+        } else if (event.key === 'Enter') {
+            const selected = suggestions[highlightIndex];
+            if (selected) {
+                event.preventDefault();
+                applyMention(selected);
+            }
+        } else if (event.key === 'Escape') {
+            setIsOpen(false);
+        }
+    };
+
+    useEffect(() => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+        const handler = () => {
+            const caret = textarea.selectionStart;
+            lastCaretRef.current = caret;
+            updateSuggestions(textarea.value, caret);
+        };
+        textarea.addEventListener('click', handler);
+        textarea.addEventListener('keyup', handler);
+        return () => {
+            textarea.removeEventListener('click', handler);
+            textarea.removeEventListener('keyup', handler);
+        };
+    }, [contacts]);
+
+    return (
+        <div className="relative">
+            {label !== undefined && label !== null && label !== '' && (
+                <label className="block text-sm font-medium text-slate-600">{label}</label>
+            )}
+            <textarea
+                ref={textareaRef}
+                rows={rows}
+                placeholder={placeholder}
+                value={value}
+                onChange={handleChange}
+                onKeyDown={handleKeyDown}
+                disabled={disabled}
+                className="mt-1 block w-full text-sm px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 disabled:bg-slate-100 disabled:text-slate-500"
+            />
+            {isOpen && suggestions.length > 0 && (
+                <div className="absolute z-20 mt-1 w-full max-h-56 overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg">
+                    {suggestions.map((contact, index) => (
+                        <button
+                            type="button"
+                            key={contact.id || contact.handle || index}
+                            onMouseDown={(event) => { event.preventDefault(); applyMention(contact); }}
+                            className={`w-full text-left px-3 py-2 text-sm ${highlightIndex === index ? 'bg-orange-100 text-orange-900' : 'text-slate-700 hover:bg-orange-50'}`}
+                        >
+                            <span className="font-semibold">@{contact.handle}</span>
+                            <span className="ml-2 text-xs text-slate-500">{contact.contactName || contact.companyName}</span>
+                        </button>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
 const TrashIcon = () => (<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clipRule="evenodd" /></svg>);
 const DollarSignIcon = () => (<svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8v1m0 8v1m-4-4h8m-4-4a8 8 0 100 16 8 8 0 000-16z" /></svg>);
 const ViewIcon = () => (<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>);
 const PdfIcon = () => (<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>);
 const EmailIcon = () => (<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>);
 
-const OrderLogsSection = ({ orderId, canEdit }) => {
+const OrderLogsSection = ({ orderId, canEdit, allContacts = [] }) => {
     if (!orderId) return null;
 
     const { useState, useEffect, useRef } = React;
@@ -150,7 +344,7 @@ const OrderLogsSection = ({ orderId, canEdit }) => {
                 <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
                     <div className="bg-white p-6 rounded-lg shadow-xl w-full max-w-lg">
                         <h2 className="text-xl font-bold mb-4">Edit Log Entry</h2>
-                        <Textarea label="Note" value={editedNote} onChange={(e) => setEditedNote(e.target.value)} />
+                        <ContactMentionTextarea label="Note" value={editedNote} onChange={setEditedNote} contacts={allContacts} />
                         <div className="mt-4">
                             <label className="block text-sm font-medium text-slate-600">Attachment</label>
                             <input type="file" onChange={handleEditedFileChange} className="mt-1 block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-orange-50 file:text-orange-700 hover:file:bg-orange-100" />
@@ -159,6 +353,36 @@ const OrderLogsSection = ({ orderId, canEdit }) => {
                             <button onClick={() => setEditingLog(null)} className="px-4 py-2 bg-slate-200 text-slate-800 rounded-md hover:bg-slate-300">Cancel</button>
                             <button onClick={handleUpdate} className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700">Update</button>
                         </div>
+                    </div>
+                </div>
+            )}
+            {canEdit && (
+                <div className="bg-white rounded-lg shadow-sm border border-slate-200 mb-6">
+                    <div className="p-6">
+                        <h2 className="text-xl font-semibold text-slate-700 mb-4">Add Log Entry</h2>
+                        <form onSubmit={handleSubmit} className="space-y-4">
+                            <ContactMentionTextarea
+                                label="Notes"
+                                placeholder="Share updates and mention teammates or clients with @handle"
+                                value={note}
+                                onChange={setNote}
+                                contacts={allContacts}
+                                rows={4}
+                            />
+                            <div>
+                                <label className="block text-sm font-medium text-slate-600 mb-1">Attachment</label>
+                                <input
+                                    type="file"
+                                    ref={fileInputRef}
+                                    onChange={handleFileChange}
+                                    className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-orange-50 file:text-orange-700 hover:file:bg-orange-100"
+                                />
+                            </div>
+                            <div className="flex justify-end space-x-3">
+                                <button type="submit" className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700">Post Log</button>
+                                <button type="button" onClick={() => { setNote(''); setAttachment(null); if (fileInputRef.current) fileInputRef.current.value=''; }} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-md hover:bg-slate-300">Clear</button>
+                            </div>
+                        </form>
                     </div>
                 </div>
             )}
@@ -246,7 +470,7 @@ const NameDropToggle = ({ value, onChange, disabled = false }) => {
 const generatePdf = (order, allItems, action = 'save') => {
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF();
-    const { vendorInfo, lineItems, notes, total, id, date, scentOption, estimatedShippingDate, estimatedShipping, nameDrop, signatureDataUrl } = order; // Added signatureDataUrl and estimatedShipping
+    const { contactInfo, lineItems, notes, total, id, date, scentOption, estimatedShippingDate, estimatedShipping, nameDrop, signatureDataUrl } = order; // Added signatureDataUrl and estimatedShipping
     const timeZone = "America/Chicago";
     const dateOptions = { year: 'numeric', month: 'long', day: 'numeric' };
     doc.setFontSize(20); doc.text("Purchase Order", 14, 22);
@@ -257,31 +481,31 @@ const generatePdf = (order, allItems, action = 'save') => {
     const leftColumnX = 14;
     const rightColumnX = 105; // Start addresses further to the right
 
-    // Vendor Info - Left Column
-    doc.setFontSize(12); doc.text("Vendor Information", leftColumnX, leftColumnY); 
+    // Contact Info - Left Column
+    doc.setFontSize(12); doc.text("Contact Information", leftColumnX, leftColumnY); 
     leftColumnY += 6;
     doc.setFontSize(10);
-    doc.text(`${vendorInfo.companyName}`, leftColumnX, leftColumnY); leftColumnY += 5;
-    doc.text(`${vendorInfo.contactName}`, leftColumnX, leftColumnY); leftColumnY += 5;
-    doc.text(`${vendorInfo.email}`, leftColumnX, leftColumnY); leftColumnY += 5;
-    doc.text(`${vendorInfo.phone}`, leftColumnX, leftColumnY); leftColumnY += 5;
+    doc.text(`${contactInfo.companyName}`, leftColumnX, leftColumnY); leftColumnY += 5;
+    doc.text(`${contactInfo.contactName}`, leftColumnX, leftColumnY); leftColumnY += 5;
+    doc.text(`${contactInfo.email}`, leftColumnX, leftColumnY); leftColumnY += 5;
+    doc.text(`${contactInfo.phone}`, leftColumnX, leftColumnY); leftColumnY += 5;
 
     // Billing Address - Right Column
-    if (vendorInfo.billingAddress || vendorInfo.billingCity) {
+    if (contactInfo.billingAddress || contactInfo.billingCity) {
         doc.setFontSize(10);
         doc.text("Billing Address:", rightColumnX, rightColumnY); rightColumnY += 5;
-        const ba = `${vendorInfo.billingAddress || ''}\n${vendorInfo.billingCity || ''}, ${vendorInfo.billingState || ''} ${vendorInfo.billingZipCode || ''}`;
+        const ba = `${contactInfo.billingAddress || ''}\n${contactInfo.billingCity || ''}, ${contactInfo.billingState || ''} ${contactInfo.billingZipCode || ''}`;
         const billingAddressLines = doc.splitTextToSize(ba, 90);
         doc.text(billingAddressLines, rightColumnX, rightColumnY);
         rightColumnY += (billingAddressLines.length * 4) + 2;
     }
 
     // Shipping Address - Right Column, below Billing
-    if (vendorInfo.shippingAddress || vendorInfo.shippingCity) {
-        if (vendorInfo.billingAddress || vendorInfo.billingCity) rightColumnY += 3;
+    if (contactInfo.shippingAddress || contactInfo.shippingCity) {
+        if (contactInfo.billingAddress || contactInfo.billingCity) rightColumnY += 3;
         doc.setFontSize(10);
         doc.text("Shipping Address:", rightColumnX, rightColumnY); rightColumnY += 5;
-        const sa = `${vendorInfo.shippingAddress || ''}\n${vendorInfo.shippingCity || ''}, ${vendorInfo.shippingState || ''} ${vendorInfo.shippingZipCode || ''}`;
+        const sa = `${contactInfo.shippingAddress || ''}\n${contactInfo.shippingCity || ''}, ${contactInfo.shippingState || ''} ${contactInfo.shippingZipCode || ''}`;
         const shippingAddressLines = doc.splitTextToSize(sa, 90);
         doc.text(shippingAddressLines, rightColumnX, rightColumnY);
         rightColumnY += (shippingAddressLines.length * 4) + 2;
@@ -646,9 +870,10 @@ const EmailModal = ({ order, onClose, allItems, onEmailClientOpened, appSettings
             let body = appSettings.default_email_body;
             // Replace placeholders
             // For [customerName], prefer contact name, fallback to company name.
-            body = body.replace(/\[customerName\]/g, order.vendorInfo.contactName || order.vendorInfo.companyName || '');
-            // For [vendorCompanyName], use company name.
-            body = body.replace(/\[vendorCompanyName\]/g, order.vendorInfo.companyName || '');
+            body = body.replace(/\[customerName\]/g, order.contactInfo.contactName || order.contactInfo.companyName || '');
+            // For [contactCompanyName], use company name.
+            body = body.replace(/\[contactCompanyName\]/g, order.contactInfo.companyName || '');
+            body = body.replace(/\[contactCompany\]/g, order.contactInfo.companyName || '');
             body = body.replace(/\[orderID\]/g, order.id || '');
             body = body.replace(/\[yourCompany\]/g, appSettings.company_name || 'Your Company');
             setEditableBody(body);
@@ -656,7 +881,7 @@ const EmailModal = ({ order, onClose, allItems, onEmailClientOpened, appSettings
             // Fallback if settings are not loaded or default_email_body is missing
             const fallbackYourCompanyName = appSettings?.company_name || "Your Company";
             setEditableBody(
-`Dear ${order.vendorInfo.contactName || order.vendorInfo.companyName},
+`Dear ${order.contactInfo.contactName || order.contactInfo.companyName},
 
 Please find attached the purchase order ${order.id} for your records.
 
@@ -668,7 +893,7 @@ ${fallbackYourCompanyName}`
 
     if (!order) return null;
 
-    const recipient = order.vendorInfo.email;
+    const recipient = order.contactInfo.email;
     const subjectText = `${appSettings?.company_name || "Your Company"} - Order Confirmation ${order.id}`;
     
     // mailtoHref will be constructed on click or when rendering the link to use the latest editableBody
@@ -679,7 +904,7 @@ ${fallbackYourCompanyName}`
         <div className="bg-white rounded-lg shadow-xl p-8 w-full max-w-2xl max-h-[90vh] overflow-y-auto modal-content">
                 <h2 className="text-2xl font-bold text-slate-800 mb-4">Send Order Confirmation</h2>
                 <div className="space-y-4">
-                    <Input label="To" value={order.vendorInfo.email} disabled />
+                    <Input label="To" value={order.contactInfo.email} disabled />
                     <Input label="Subject" value={subjectText} disabled />
                     <Textarea label="Email Body" value={editableBody} onChange={e => setEditableBody(e.target.value)} rows={8} disabled={false} />
                     <div className="bg-orange-50 p-4 rounded-md border border-orange-200">
@@ -768,7 +993,7 @@ ${fallbackYourCompanyName}`
                             setIsSending(true);
                             const emailPayload = {
                                 order: order,
-                                recipientEmail: order.vendorInfo.email,
+                                recipientEmail: order.contactInfo.email,
                                 subject: subjectText,
                                 body: editableBody,
                                 attachments: attachments.map(a => ({ original: a.original, unique: a.unique })),
@@ -919,7 +1144,7 @@ const ShippedStatusBadge = ({ statusText }) => {
 };
 
 // --- COMPONENTS ---
-const Dashboard = ({ orders, navigateTo, viewOrder, allVendors, allSelectableItems, setOrderForEmailModal }) => {
+const Dashboard = ({ orders, navigateTo, viewOrder, allContacts, allSelectableItems, setOrderForEmailModal }) => {
     const { useState, useEffect, useMemo, useRef } = React;
     const [filteredOrders, setFilteredOrders] = useState(orders);
     const [searchPills, setSearchPills] = useState([]);
@@ -949,7 +1174,7 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allVendors, allSelectableIte
     };
 
     const parseInputToPills = (value) => {
-        const keywords = ['from', 'vendor', 'customer', 'status', 'item', 'note', 'log', 'before', 'after', 'during'];
+        const keywords = ['from', 'contact', 'customer', 'status', 'item', 'note', 'log', 'before', 'after', 'during'];
         const keywordPattern = `(?:${keywords.join('|')}):`;
         const structuredPattern = new RegExp(`(\\b(?:${keywordPattern})(?:"[^"]+"|\S+))|(\\btotal\\s*(?:>=|<=|<>|!=|=|<|>)\\s*\\d+\\.?\\d*)`, 'g');
         
@@ -1097,7 +1322,7 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allVendors, allSelectableIte
                         const timeZone = "America/Chicago";
                         const dateOptions = { year: 'numeric', month: 'long', day: 'numeric' };
                         return (<tr key={order.id} onClick={() => viewOrder(order)} className="bg-white border-b hover:bg-slate-50 cursor-pointer">
-                        <td className="px-4 py-3 font-medium text-slate-800">{order.display_id || order.id}</td><td className="px-4 py-3">{order.vendorInfo.companyName}</td>
+                        <td className="px-4 py-3 font-medium text-slate-800">{order.display_id || order.id}</td><td className="px-4 py-3">{order.contactInfo.companyName}</td>
                         <td className="px-4 py-3">{formatInTimeZone(order.date, timeZone, dateOptions)}</td><td className="px-4 py-3">${parseFloat(order.total || 0).toFixed(2)}</td>
                         <td className="px-4 py-3">
                             {order.status === 'Shipped' ? (
@@ -1139,25 +1364,25 @@ const UnsavedChangesModal = ({ onCancel, onDelete, onSaveAndClose }) => {
     );
 };
 
-const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allVendors, allSelectableItems, itemData, packageData, fetchAndUpdateVendors, setOrderForEmailModal }) => { // Added setOrderForEmailModal
+const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, allSelectableItems, itemData, packageData, fetchAndUpdateContacts, setOrderForEmailModal }) => { // Added setOrderForEmailModal
     const { useState, useMemo, useEffect, useRef } = React;
     const [isEditing, setIsEditing] = useState(!order || order.status === 'Draft');
-    const [formData, setFormData] = useState(order ? {...order, display_id: order.display_id || '', estimatedShipping: order.estimatedShipping || '', scentOption: order.scentOption || 'Scented'} : { display_id: '', vendorInfo: { companyName: '', contactName: '', email: '', phone: '', billingAddress: '', billingCity: '', billingState: '', billingZipCode: '', shippingAddress: '', shippingCity: '', shippingState: '', shippingZipCode: '' }, lineItems: [], notes: "", estimatedShippingDate: '', estimatedShipping: '', scentOption: 'Scented', nameDrop: false, signatureDataUrl: null, statusHistory: [{ status: 'Draft', date: new Date().toISOString() }], status: 'Draft' });
-    const [vendorSuggestions, setVendorSuggestions] = useState([]);
+    const [formData, setFormData] = useState(order ? {...order, display_id: order.display_id || '', estimatedShipping: order.estimatedShipping || '', scentOption: order.scentOption || 'Scented'} : { display_id: '', contactInfo: { companyName: '', contactName: '', email: '', phone: '', billingAddress: '', billingCity: '', billingState: '', billingZipCode: '', shippingAddress: '', shippingCity: '', shippingState: '', shippingZipCode: '' }, lineItems: [], notes: "", estimatedShippingDate: '', estimatedShipping: '', scentOption: 'Scented', nameDrop: false, signatureDataUrl: null, statusHistory: [{ status: 'Draft', date: new Date().toISOString() }], status: 'Draft' });
+    const [contactSuggestions, setContactSuggestions] = useState([]);
     const [showUnsavedChangesModal, setShowUnsavedChangesModal] = useState(false);
     // orderToEmail state is removed, setOrderForEmailModal prop will be used directly
     const [scanInput, setScanInput] = useState('');
     const scanInputRef = React.useRef(null);
     const [sameAsShipping, setSameAsShipping] = useState(true);
-    const [isAutofilledVendorActive, setIsAutofilledVendorActive] = useState(false); // Renamed
-    const [initialVendorInfoAfterAutofill, setInitialVendorInfoAfterAutofill] = useState(null); // New state
-    const [isEditingAutofilledVendor, setIsEditingAutofilledVendor] = useState(false);
-    const [isVendorInputActive, setIsVendorInputActive] = useState(false);
+    const [isAutofilledContactActive, setIsAutofilledContactActive] = useState(false); // Renamed
+    const [initialContactInfoAfterAutofill, setInitialContactInfoAfterAutofill] = useState(null); // New state
+    const [isEditingAutofilledContact, setIsEditingAutofilledContact] = useState(false);
+    const [isContactInputActive, setIsContactInputActive] = useState(false);
     const hideSuggestionsTimeoutRef = React.useRef(null);
-    // fetchAndUpdateVendors is now directly available from props destructuring
+    // fetchAndUpdateContacts is now directly available from props destructuring
 
     const handleReturnToDashboard = () => {
-        const isNewUnsavedDraft = !order && (formData.lineItems.length > 0 || (formData.vendorInfo && formData.vendorInfo.companyName));
+        const isNewUnsavedDraft = !order && (formData.lineItems.length > 0 || (formData.contactInfo && formData.contactInfo.companyName));
 
         if (isNewUnsavedDraft) {
             setShowUnsavedChangesModal(true);
@@ -1180,16 +1405,16 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allVendors, allS
 
         const debouncedFetchShipping = debounce(fetchEstimatedShipping, 750); // 750ms debounce
 
-        if (formData.vendorInfo.shippingZipCode && formData.lineItems) {
+        if (formData.contactInfo.shippingZipCode && formData.lineItems) {
              // Only call if zip is 5 digits and there are items
-            if (formData.vendorInfo.shippingZipCode.length === 5 && /^\d{5}$/.test(formData.vendorInfo.shippingZipCode) && formData.lineItems.length > 0) {
-                debouncedFetchShipping(formData.vendorInfo.shippingZipCode, formData.lineItems);
-            } else if (formData.vendorInfo.shippingZipCode.length === 5 && /^\d{5}$/.test(formData.vendorInfo.shippingZipCode) && formData.lineItems.length === 0) {
+            if (formData.contactInfo.shippingZipCode.length === 5 && /^\d{5}$/.test(formData.contactInfo.shippingZipCode) && formData.lineItems.length > 0) {
+                debouncedFetchShipping(formData.contactInfo.shippingZipCode, formData.lineItems);
+            } else if (formData.contactInfo.shippingZipCode.length === 5 && /^\d{5}$/.test(formData.contactInfo.shippingZipCode) && formData.lineItems.length === 0) {
                 // If valid zip but no items, set shipping to 0
                 setFormData(prev => ({ ...prev, estimatedShipping: '0.00' }));
             }
         }
-    }, [formData.vendorInfo.shippingZipCode, formData.lineItems]);
+    }, [formData.contactInfo.shippingZipCode, formData.lineItems]);
 
 
 
@@ -1241,16 +1466,16 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allVendors, allS
 
         const debouncedFetchShipping = debounce(fetchEstimatedShipping, 750); // 750ms debounce
 
-        if (formData.vendorInfo.shippingZipCode && formData.lineItems) {
+        if (formData.contactInfo.shippingZipCode && formData.lineItems) {
              // Only call if zip is 5 digits and there are items
-            if (formData.vendorInfo.shippingZipCode.length === 5 && /^\d{5}$/.test(formData.vendorInfo.shippingZipCode) && formData.lineItems.length > 0) {
-                debouncedFetchShipping(formData.vendorInfo.shippingZipCode, formData.lineItems);
-            } else if (formData.vendorInfo.shippingZipCode.length === 5 && /^\d{5}$/.test(formData.vendorInfo.shippingZipCode) && formData.lineItems.length === 0) {
+            if (formData.contactInfo.shippingZipCode.length === 5 && /^\d{5}$/.test(formData.contactInfo.shippingZipCode) && formData.lineItems.length > 0) {
+                debouncedFetchShipping(formData.contactInfo.shippingZipCode, formData.lineItems);
+            } else if (formData.contactInfo.shippingZipCode.length === 5 && /^\d{5}$/.test(formData.contactInfo.shippingZipCode) && formData.lineItems.length === 0) {
                 // If valid zip but no items, set shipping to 0
                 setFormData(prev => ({ ...prev, estimatedShipping: '0.00' }));
             }
         }
-    }, [formData.vendorInfo.shippingZipCode, formData.lineItems]);
+    }, [formData.contactInfo.shippingZipCode, formData.lineItems]);
 
 
     const formatPhoneNumber = (value) => {
@@ -1266,15 +1491,15 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allVendors, allS
 
     let nextId = useMemo(() => formData.lineItems.length > 0 ? Math.max(...formData.lineItems.map(i => i.id)) + 1 : 1, [formData.lineItems]);
 
-    const handleVendorInputFocus = () => {
+    const handleContactInputFocus = () => {
         clearTimeout(hideSuggestionsTimeoutRef.current);
-        setIsVendorInputActive(true);
+        setIsContactInputActive(true);
     };
 
-    const handleVendorInputBlur = () => {
+    const handleContactInputBlur = () => {
         // Use a timeout to allow click on suggestion list before it disappears
         hideSuggestionsTimeoutRef.current = setTimeout(() => {
-            setIsVendorInputActive(false);
+            setIsContactInputActive(false);
         }, 150); 
     };
     
@@ -1344,44 +1569,44 @@ const unpackPackage = (id, pkgCode) => {
     const addEmptyLineItem = () => { setFormData(prev => ({ ...prev, lineItems: [...prev.lineItems, { id: nextId++, item: '-- Select Item --', style: '', type: '', quantity: 1, price: 0 }] })); };
     const removeLineItem = (id) => { setFormData(prev => ({ ...prev, lineItems: prev.lineItems.filter(item => item.id !== id) })); };
 
-    const handleVendorInfoChange = (field, value) => {
+    const handleContactInfoChange = (field, value) => {
         let processedValue = value;
         if (field === 'phone') {
             processedValue = formatPhoneNumber(value);
         }
-        const newVendorInfo = {...formData.vendorInfo, [field]: processedValue};
+        const newContactInfo = {...formData.contactInfo, [field]: processedValue};
         if (field === 'billingAddress' && sameAsBilling) {
-            newVendorInfo.shippingAddress = processedValue; // if billing address is phone, this would be an issue, but it's not
+            newContactInfo.shippingAddress = processedValue; // if billing address is phone, this would be an issue, but it's not
         }
         // Special handling if 'billingAddress' is being updated and 'sameAsBilling' is true
         if (field === 'billingAddress' && sameAsBilling) {
-            newVendorInfo.shippingAddress = newVendorInfo.billingAddress;
+            newContactInfo.shippingAddress = newContactInfo.billingAddress;
         }
 
-        setFormData(prev => ({ ...prev, vendorInfo: newVendorInfo }));
+        setFormData(prev => ({ ...prev, contactInfo: newContactInfo }));
 
-        if (isAutofilledVendorActive) {
-            // Compare current form vendor info with the initial info after autofill
-            const currentVendorString = JSON.stringify(newVendorInfo);
-            const initialVendorString = JSON.stringify(initialVendorInfoAfterAutofill);
-            if (currentVendorString !== initialVendorString) {
-                setIsEditingAutofilledVendor(true);
+        if (isAutofilledContactActive) {
+            // Compare current form contact info with the initial info after autofill
+            const currentContactString = JSON.stringify(newContactInfo);
+            const initialContactString = JSON.stringify(initialContactInfoAfterAutofill);
+            if (currentContactString !== initialContactString) {
+                setIsEditingAutofilledContact(true);
             } else {
-                setIsEditingAutofilledVendor(false);
+                setIsEditingAutofilledContact(false);
             }
         } else {
-            setIsEditingAutofilledVendor(false); // If not an active autofilled vendor, not editing one
+            setIsEditingAutofilledContact(false); // If not an active autofilled contact, not editing one
         }
 
         if (value.length > 1 && (field === 'companyName' || field === 'contactName' || field === 'email')) { // Only suggest for certain fields
-            const searchResults = allVendors.filter(vendor => {
+            const searchResults = allContacts.filter(contact => {
                 const searchLower = value.toLowerCase();
-                return (vendor.companyName && vendor.companyName.toLowerCase().includes(searchLower)) ||
-                       (vendor.contactName && vendor.contactName.toLowerCase().includes(searchLower)) ||
-                       (vendor.email && vendor.email.toLowerCase().includes(searchLower));
+                return (contact.companyName && contact.companyName.toLowerCase().includes(searchLower)) ||
+                       (contact.contactName && contact.contactName.toLowerCase().includes(searchLower)) ||
+                       (contact.email && contact.email.toLowerCase().includes(searchLower));
             });
-            setVendorSuggestions(searchResults);
-        } else { setVendorSuggestions([]); }
+            setContactSuggestions(searchResults);
+        } else { setContactSuggestions([]); }
     };
 
     const handleSameAsShippingChange = (e) => {
@@ -1389,32 +1614,32 @@ const unpackPackage = (id, pkgCode) => {
         setSameAsShipping(isChecked);
         setFormData(prev => ({
             ...prev,
-            vendorInfo: {
-                ...prev.vendorInfo,
-                billingAddress: isChecked ? prev.vendorInfo.shippingAddress : '',
-                billingCity: isChecked ? prev.vendorInfo.shippingCity : '',
-                billingState: isChecked ? prev.vendorInfo.shippingState : '',
-                billingZipCode: isChecked ? prev.vendorInfo.shippingZipCode : ''
+            contactInfo: {
+                ...prev.contactInfo,
+                billingAddress: isChecked ? prev.contactInfo.shippingAddress : '',
+                billingCity: isChecked ? prev.contactInfo.shippingCity : '',
+                billingState: isChecked ? prev.contactInfo.shippingState : '',
+                billingZipCode: isChecked ? prev.contactInfo.shippingZipCode : ''
             }
         }));
     };
     
     useEffect(() => {
         // Initialize sameAsShipping based on whether shipping and billing addresses are identical when an order is loaded
-        if (order && order.vendorInfo) {
-            if (order.vendorInfo.shippingAddress && order.vendorInfo.shippingAddress === order.vendorInfo.billingAddress) {
+        if (order && order.contactInfo) {
+            if (order.contactInfo.shippingAddress && order.contactInfo.shippingAddress === order.contactInfo.billingAddress) {
                 setSameAsShipping(true);
-            } else if (order.vendorInfo.shippingAddress && !order.vendorInfo.billingAddress) {
+            } else if (order.contactInfo.shippingAddress && !order.contactInfo.billingAddress) {
                  // If billing is empty but shipping is not, assume sameAsShipping should be true initially
                 setSameAsShipping(true);
                 setFormData(prev => ({
                     ...prev,
-                    vendorInfo: {
-                        ...prev.vendorInfo,
-                        billingAddress: prev.vendorInfo.shippingAddress,
-                        billingCity: prev.vendorInfo.shippingCity,
-                        billingState: prev.vendorInfo.shippingState,
-                        billingZipCode: prev.vendorInfo.shippingZipCode
+                    contactInfo: {
+                        ...prev.contactInfo,
+                        billingAddress: prev.contactInfo.shippingAddress,
+                        billingCity: prev.contactInfo.shippingCity,
+                        billingState: prev.contactInfo.shippingState,
+                        billingZipCode: prev.contactInfo.shippingZipCode
                     }
                 }));
             }
@@ -1426,41 +1651,41 @@ const unpackPackage = (id, pkgCode) => {
             setSameAsShipping(true);
              setFormData(prev => ({ // ensure billing address is copied if shipping has a default
                 ...prev,
-                vendorInfo: {
-                    ...prev.vendorInfo,
-                    billingAddress: prev.vendorInfo.shippingAddress,
-                    billingCity: prev.vendorInfo.shippingCity,
-                    billingState: prev.vendorInfo.shippingState,
-                    billingZipCode: prev.vendorInfo.shippingZipCode
+                contactInfo: {
+                    ...prev.contactInfo,
+                    billingAddress: prev.contactInfo.shippingAddress,
+                    billingCity: prev.contactInfo.shippingCity,
+                    billingState: prev.contactInfo.shippingState,
+                    billingZipCode: prev.contactInfo.shippingZipCode
                 }
             }));
         }
     }, [order]);
 
 
-    const selectVendor = (vendor) => {
+    const selectContact = (contact) => {
         clearTimeout(hideSuggestionsTimeoutRef.current); // Clear any pending hide
         setFormData(prev => {
-            const newVendorInfo = {...vendor};
+            const newContactInfo = {...contact};
             if (sameAsShipping) {
-                newVendorInfo.billingAddress = newVendorInfo.shippingAddress;
-                newVendorInfo.billingCity = newVendorInfo.shippingCity;
-                newVendorInfo.billingState = newVendorInfo.shippingState;
-                newVendorInfo.billingZipCode = newVendorInfo.shippingZipCode;
+                newContactInfo.billingAddress = newContactInfo.shippingAddress;
+                newContactInfo.billingCity = newContactInfo.shippingCity;
+                newContactInfo.billingState = newContactInfo.shippingState;
+                newContactInfo.billingZipCode = newContactInfo.shippingZipCode;
             } else {
-                // If not sameAsShipping, retain existing billingAddress from form or set to empty if vendor doesn't have one
-                newVendorInfo.billingAddress = prev.vendorInfo.billingAddress || vendor.billingAddress || '';
-                newVendorInfo.billingCity = prev.vendorInfo.billingCity || vendor.billingCity || '';
-                newVendorInfo.billingState = prev.vendorInfo.billingState || vendor.billingState || '';
-                newVendorInfo.billingZipCode = prev.vendorInfo.billingZipCode || vendor.billingZipCode || '';
+                // If not sameAsShipping, retain existing billingAddress from form or set to empty if contact doesn't have one
+                newContactInfo.billingAddress = prev.contactInfo.billingAddress || contact.billingAddress || '';
+                newContactInfo.billingCity = prev.contactInfo.billingCity || contact.billingCity || '';
+                newContactInfo.billingState = prev.contactInfo.billingState || contact.billingState || '';
+                newContactInfo.billingZipCode = prev.contactInfo.billingZipCode || contact.billingZipCode || '';
             }
-            return {...prev, vendorInfo: newVendorInfo};
+            return {...prev, contactInfo: newContactInfo};
         }); 
-        setVendorSuggestions([]);
-        setInitialVendorInfoAfterAutofill(JSON.parse(JSON.stringify(vendor))); // Store a deep copy
-        setIsAutofilledVendorActive(true);
-        setIsEditingAutofilledVendor(false);
-        setIsVendorInputActive(false); // Hide suggestions immediately after selection
+        setContactSuggestions([]);
+        setInitialContactInfoAfterAutofill(JSON.parse(JSON.stringify(contact))); // Store a deep copy
+        setIsAutofilledContactActive(true);
+        setIsEditingAutofilledContact(false);
+        setIsContactInputActive(false); // Hide suggestions immediately after selection
     }
     
     const orderTotals = useMemo(() => {
@@ -1535,8 +1760,8 @@ const unpackPackage = (id, pkgCode) => {
     };
 
     const handleSaveDraft = async () => {
-        if (!formData.vendorInfo.companyName) {
-            console.log("Order save failed: Please select a vendor.");
+        if (!formData.contactInfo.companyName) {
+            console.log("Order save failed: Please select a contact.");
             return;
         }
         const newOrder = createOrderObject('Draft');
@@ -1550,7 +1775,7 @@ const unpackPackage = (id, pkgCode) => {
     };
     
     const handleSaveAndSend = async () => {
-        if (!formData.vendorInfo.companyName || !formData.vendorInfo.email) { console.log("Order save failed: Please select a vendor with a valid email address."); return; }
+        if (!formData.contactInfo.companyName || !formData.contactInfo.email) { console.log("Order save failed: Please select a contact with a valid email address."); return; }
         const newOrder = createOrderObject('Sent'); // Order status is 'Sent'
         await saveOrder(newOrder); // Save the order
         
@@ -1569,7 +1794,7 @@ const unpackPackage = (id, pkgCode) => {
 
         const orderId = formData.id;
         const orderStatus = formData.status;
-        const companyName = formData.vendorInfo?.companyName || "";
+        const companyName = formData.contactInfo?.companyName || "";
         const cleanedOrderId = orderId.replace("PO-", "");
         let orderIdDigitsForConfirmation = "";
 
@@ -1636,91 +1861,91 @@ const unpackPackage = (id, pkgCode) => {
         }
     };
 
-    const handleCancelVendorEdit = () => {
-        if (initialVendorInfoAfterAutofill) {
-            setFormData(prev => ({ ...prev, vendorInfo: JSON.parse(JSON.stringify(initialVendorInfoAfterAutofill)) }));
+    const handleCancelContactEdit = () => {
+        if (initialContactInfoAfterAutofill) {
+            setFormData(prev => ({ ...prev, contactInfo: JSON.parse(JSON.stringify(initialContactInfoAfterAutofill)) }));
         }
-        setIsEditingAutofilledVendor(false);
-        // isAutofilledVendorActive remains true because we reverted to the autofilled state
+        setIsEditingAutofilledContact(false);
+        // isAutofilledContactActive remains true because we reverted to the autofilled state
     };
 
-    const handleSaveVendorEdits = async () => {
-        if (!initialVendorInfoAfterAutofill || !initialVendorInfoAfterAutofill.id) {
-            console.log("Cannot save edits: Original vendor ID is missing.");
+    const handleSaveContactEdits = async () => {
+        if (!initialContactInfoAfterAutofill || !initialContactInfoAfterAutofill.id) {
+            console.log("Cannot save edits: Original contact ID is missing.");
             return;
         }
-        const vendorIdToUpdate = initialVendorInfoAfterAutofill.id;
-        const payload = { ...formData.vendorInfo }; // Current form data for vendor
+        const contactIdToUpdate = initialContactInfoAfterAutofill.id;
+        const payload = { ...formData.contactInfo }; // Current form data for contact
         // Ensure ID in payload matches, or remove it if backend prefers ID only in URL
-        payload.id = vendorIdToUpdate; 
+        payload.id = contactIdToUpdate; 
 
         try {
-            const response = await fetch(`/api/vendors/${vendorIdToUpdate}`, {
+            const response = await fetch(`/api/contacts/${contactIdToUpdate}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
             const result = await response.json();
             if (response.ok && result.status === 'success') {
-                setInitialVendorInfoAfterAutofill(JSON.parse(JSON.stringify(result.vendor))); // Update with data from server
-                setFormData(prev => ({ ...prev, vendorInfo: JSON.parse(JSON.stringify(result.vendor)) }));
-                setIsEditingAutofilledVendor(false);
-                if (fetchAndUpdateVendors) fetchAndUpdateVendors(); // Refresh global vendor list
-                console.log("Vendor edits saved successfully.");
+                setInitialContactInfoAfterAutofill(JSON.parse(JSON.stringify(result.contact))); // Update with data from server
+                setFormData(prev => ({ ...prev, contactInfo: JSON.parse(JSON.stringify(result.contact)) }));
+                setIsEditingAutofilledContact(false);
+                if (fetchAndUpdateContacts) fetchAndUpdateContacts(); // Refresh global contact list
+                console.log("Contact edits saved successfully.");
             } else {
-                console.log(`Failed to save vendor edits: ${result.message || 'Unknown error'}`);
+                console.log(`Failed to save contact edits: ${result.message || 'Unknown error'}`);
             }
         } catch (error) {
-            console.error("Error saving vendor edits:", error);
-            console.log(`Error saving vendor edits: ${error.message}`);
+            console.error("Error saving contact edits:", error);
+            console.log(`Error saving contact edits: ${error.message}`);
         }
     };
 
-    const handleCreateNewVendorRecord = async () => {
-        const currentVendorData = { ...formData.vendorInfo };
+    const handleCreateNewContactRecord = async () => {
+        const currentContactData = { ...formData.contactInfo };
         // Remove 'id' to ensure a new record is created by the backend
-        delete currentVendorData.id; 
+        delete currentContactData.id; 
 
-        if (!currentVendorData.companyName) {
-            console.log("Company name is required to create a new vendor record.");
+        if (!currentContactData.companyName) {
+            console.log("Company name is required to create a new contact record.");
             return;
         }
 
         try {
-            const response = await fetch('/api/vendors', {
+            const response = await fetch('/api/contacts', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(currentVendorData)
+                body: JSON.stringify(currentContactData)
             });
             const result = await response.json();
-            if (response.ok && result.status === 'success' && result.vendor) {
-                const newVendorFromServer = result.vendor;
-                setFormData(prev => ({ ...prev, vendorInfo: JSON.parse(JSON.stringify(newVendorFromServer)) }));
-                setInitialVendorInfoAfterAutofill(JSON.parse(JSON.stringify(newVendorFromServer)));
-                setIsAutofilledVendorActive(true); // Now it's an "autofilled" (newly created) record
-                setIsEditingAutofilledVendor(false);
-                if (fetchAndUpdateVendors) fetchAndUpdateVendors(); // Refresh global vendor list
-                console.log(`New vendor "${newVendorFromServer.companyName}" created successfully with ID: ${newVendorFromServer.id}`);
+            if (response.ok && result.status === 'success' && result.contact) {
+                const newContactFromServer = result.contact;
+                setFormData(prev => ({ ...prev, contactInfo: JSON.parse(JSON.stringify(newContactFromServer)) }));
+                setInitialContactInfoAfterAutofill(JSON.parse(JSON.stringify(newContactFromServer)));
+                setIsAutofilledContactActive(true); // Now it's an "autofilled" (newly created) record
+                setIsEditingAutofilledContact(false);
+                if (fetchAndUpdateContacts) fetchAndUpdateContacts(); // Refresh global contact list
+                console.log(`New contact "${newContactFromServer.companyName}" created successfully with ID: ${newContactFromServer.id}`);
             } else {
-                console.log(`Failed to create new vendor record: ${result.message || 'Unknown error'}`);
+                console.log(`Failed to create new contact record: ${result.message || 'Unknown error'}`);
             }
         } catch (error) {
-            console.error("Error creating new vendor record:", error);
-            console.log(`Error creating new vendor record: ${error.message}`);
+            console.error("Error creating new contact record:", error);
+            console.log(`Error creating new contact record: ${error.message}`);
         }
     };
 
-    const handleClearAllVendorInputs = () => { // Renamed
+    const handleClearAllContactInputs = () => { // Renamed
         setFormData(prev => ({
             ...prev,
-            vendorInfo: { companyName: '', contactName: '', email: '', phone: '', billingAddress: '', shippingAddress: '' }
+            contactInfo: { companyName: '', contactName: '', email: '', phone: '', billingAddress: '', shippingAddress: '' }
         }));
         // If clearing inputs, it's no longer an "autofilled" scenario in its original sense for editing purposes.
-        // However, if the user *then* types something identical to a known vendor, suggestions should still work.
-        // The key is that `isEditingAutofilledVendor` should be false.
-        setInitialVendorInfoAfterAutofill(null); // No specific "initial" state to compare against after clearing.
-        setIsAutofilledVendorActive(false); // It's effectively a new entry or cleared state.
-        setIsEditingAutofilledVendor(false);
+        // However, if the user *then* types something identical to a known contact, suggestions should still work.
+        // The key is that `isEditingAutofilledContact` should be false.
+        setInitialContactInfoAfterAutofill(null); // No specific "initial" state to compare against after clearing.
+        setIsAutofilledContactActive(false); // It's effectively a new entry or cleared state.
+        setIsEditingAutofilledContact(false);
     };
 
     return (
@@ -1746,32 +1971,32 @@ const unpackPackage = (id, pkgCode) => {
                          <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200 mb-6">
                             <Input label="Custom Order ID" value={formData.display_id} onChange={e => setFormData(prev => ({...prev, display_id: e.target.value}))} disabled={!canEdit} />
                         </div>
-                        <div className={`bg-white p-6 rounded-lg shadow-sm border ${isEditingAutofilledVendor ? 'border-red-500 shadow-red-300/50 ring-2 ring-red-500' : 'border-slate-200'}`}>
-                            <h2 className="text-xl font-semibold text-slate-700 border-b pb-3 mb-4">Vendor Information</h2>
-                            {isEditingAutofilledVendor && (
+                        <div className={`bg-white p-6 rounded-lg shadow-sm border ${isEditingAutofilledContact ? 'border-red-500 shadow-red-300/50 ring-2 ring-red-500' : 'border-slate-200'}`}>
+                            <h2 className="text-xl font-semibold text-slate-700 border-b pb-3 mb-4">Contact Information</h2>
+                            {isEditingAutofilledContact && (
                                 <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-center">
-                                    <p className="text-sm font-medium text-red-700">You are editing a vendor record.</p>
+                                    <p className="text-sm font-medium text-red-700">You are editing a contact record.</p>
                                     <div className="mt-3 flex flex-wrap justify-center gap-2">
-                                        <button onClick={handleCancelVendorEdit} className="px-3 py-1.5 text-xs bg-gray-500 text-white font-semibold rounded-md hover:bg-gray-600">Cancel</button>
-                                        <button onClick={handleSaveVendorEdits} className="px-3 py-1.5 text-xs bg-green-600 text-white font-semibold rounded-md hover:bg-green-700">Save Edits</button>
-                                        <button onClick={handleClearAllVendorInputs} className="px-3 py-1.5 text-xs bg-slate-500 text-white font-semibold rounded-md hover:bg-slate-600">Clear All Inputs</button>
-                                        <button onClick={handleCreateNewVendorRecord} className="px-3 py-1.5 text-xs bg-blue-600 text-white font-semibold rounded-md hover:bg-blue-700">Create New Record</button>
+                                        <button onClick={handleCancelContactEdit} className="px-3 py-1.5 text-xs bg-gray-500 text-white font-semibold rounded-md hover:bg-gray-600">Cancel</button>
+                                        <button onClick={handleSaveContactEdits} className="px-3 py-1.5 text-xs bg-green-600 text-white font-semibold rounded-md hover:bg-green-700">Save Edits</button>
+                                        <button onClick={handleClearAllContactInputs} className="px-3 py-1.5 text-xs bg-slate-500 text-white font-semibold rounded-md hover:bg-slate-600">Clear All Inputs</button>
+                                        <button onClick={handleCreateNewContactRecord} className="px-3 py-1.5 text-xs bg-blue-600 text-white font-semibold rounded-md hover:bg-blue-700">Create New Record</button>
                                     </div>
                                 </div>
                             )}
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                 <div className="space-y-4">
-                                    <Input label="Company Name" value={formData.vendorInfo.companyName} onChange={e => handleVendorInfoChange('companyName', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
-                                    <Input label="Contact Name" value={formData.vendorInfo.contactName} onChange={e => handleVendorInfoChange('contactName', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
-                                    <Input label="Email" value={formData.vendorInfo.email} onChange={e => handleVendorInfoChange('email', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
-                                    <Input label="Phone" value={formData.vendorInfo.phone} onChange={e => handleVendorInfoChange('phone', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
+                                    <Input label="Company Name" value={formData.contactInfo.companyName} onChange={e => handleContactInfoChange('companyName', e.target.value)} disabled={!canEdit} onFocus={handleContactInputFocus} onBlur={handleContactInputBlur} />
+                                    <Input label="Contact Name" value={formData.contactInfo.contactName} onChange={e => handleContactInfoChange('contactName', e.target.value)} disabled={!canEdit} onFocus={handleContactInputFocus} onBlur={handleContactInputBlur} />
+                                    <Input label="Email" value={formData.contactInfo.email} onChange={e => handleContactInfoChange('email', e.target.value)} disabled={!canEdit} onFocus={handleContactInputFocus} onBlur={handleContactInputBlur} />
+                                    <Input label="Phone" value={formData.contactInfo.phone} onChange={e => handleContactInfoChange('phone', e.target.value)} disabled={!canEdit} onFocus={handleContactInputFocus} onBlur={handleContactInputBlur} />
                                 </div>
                                 <div className="space-y-4">
-                                    <Input label="Shipping Address" value={formData.vendorInfo.shippingAddress} onChange={e => handleVendorInfoChange('shippingAddress', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
+                                    <Input label="Shipping Address" value={formData.contactInfo.shippingAddress} onChange={e => handleContactInfoChange('shippingAddress', e.target.value)} disabled={!canEdit} onFocus={handleContactInputFocus} onBlur={handleContactInputBlur} />
                                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                        <Input label="City" value={formData.vendorInfo.shippingCity} onChange={e => handleVendorInfoChange('shippingCity', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
-                                        <Input label="State" value={formData.vendorInfo.shippingState} onChange={e => handleVendorInfoChange('shippingState', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
-                                        <Input label="Zip Code" value={formData.vendorInfo.shippingZipCode} onChange={e => handleVendorInfoChange('shippingZipCode', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
+                                        <Input label="City" value={formData.contactInfo.shippingCity} onChange={e => handleContactInfoChange('shippingCity', e.target.value)} disabled={!canEdit} onFocus={handleContactInputFocus} onBlur={handleContactInputBlur} />
+                                        <Input label="State" value={formData.contactInfo.shippingState} onChange={e => handleContactInfoChange('shippingState', e.target.value)} disabled={!canEdit} onFocus={handleContactInputFocus} onBlur={handleContactInputBlur} />
+                                        <Input label="Zip Code" value={formData.contactInfo.shippingZipCode} onChange={e => handleContactInfoChange('shippingZipCode', e.target.value)} disabled={!canEdit} onFocus={handleContactInputFocus} onBlur={handleContactInputBlur} />
                                     </div>
                                     <label className="block text-sm font-medium text-slate-600 pt-4">Billing Address</label>
                                     <div className="flex items-center">
@@ -1780,24 +2005,24 @@ const unpackPackage = (id, pkgCode) => {
                                     </div>
                                     {!sameAsShipping && (
                                         <div className="space-y-4">
-                                            <Input label="Billing Address" value={formData.vendorInfo.billingAddress} onChange={e => handleVendorInfoChange('billingAddress', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
+                                            <Input label="Billing Address" value={formData.contactInfo.billingAddress} onChange={e => handleContactInfoChange('billingAddress', e.target.value)} disabled={!canEdit} onFocus={handleContactInputFocus} onBlur={handleContactInputBlur} />
                                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                                <Input label="City" value={formData.vendorInfo.billingCity} onChange={e => handleVendorInfoChange('billingCity', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
-                                                <Input label="State" value={formData.vendorInfo.billingState} onChange={e => handleVendorInfoChange('billingState', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
-                                                <Input label="Zip Code" value={formData.vendorInfo.billingZipCode} onChange={e => handleVendorInfoChange('billingZipCode', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
+                                                <Input label="City" value={formData.contactInfo.billingCity} onChange={e => handleContactInfoChange('billingCity', e.target.value)} disabled={!canEdit} onFocus={handleContactInputFocus} onBlur={handleContactInputBlur} />
+                                                <Input label="State" value={formData.contactInfo.billingState} onChange={e => handleContactInfoChange('billingState', e.target.value)} disabled={!canEdit} onFocus={handleContactInputFocus} onBlur={handleContactInputBlur} />
+                                                <Input label="Zip Code" value={formData.contactInfo.billingZipCode} onChange={e => handleContactInfoChange('billingZipCode', e.target.value)} disabled={!canEdit} onFocus={handleContactInputFocus} onBlur={handleContactInputBlur} />
                                             </div>
                                         </div>
                                     )}
                                 </div>
                             </div>
                         </div>
-                        {vendorSuggestions.length > 0 && canEdit && isVendorInputActive && (
+                        {contactSuggestions.length > 0 && canEdit && isContactInputActive && (
                             <div className="absolute z-10 w-full mt-1 bg-white border border-slate-300 rounded-lg shadow-lg">
                                 <ul className="py-1 max-h-60 overflow-y-auto">
-                                    {vendorSuggestions.map(vendor => (
-                                        <li key={vendor.id} onClick={() => selectVendor(vendor)} className="px-4 py-2 hover:bg-orange-100 cursor-pointer">
-                                            <p className="font-semibold text-slate-800">{vendor.companyName}</p>
-                                            <p className="text-sm text-slate-500">{vendor.contactName} - {vendor.email}</p>
+                                    {contactSuggestions.map(contact => (
+                                        <li key={contact.id} onClick={() => selectContact(contact)} className="px-4 py-2 hover:bg-orange-100 cursor-pointer">
+                                            <p className="font-semibold text-slate-800">{contact.companyName}</p>
+                                            <p className="text-sm text-slate-500">{contact.contactName} - {contact.email}</p>
                                         </li>
                                     ))}
                                 </ul>
@@ -1805,7 +2030,7 @@ const unpackPackage = (id, pkgCode) => {
                         )}
                     </div>
 
-                    <OrderLogsSection orderId={formData.id} canEdit={canEdit} />
+                    <OrderLogsSection orderId={formData.id} canEdit={canEdit} allContacts={allContacts} />
 
                     <div className="bg-white rounded-lg shadow-sm border border-slate-200"><div className="p-6 border-b"><h2 className="text-xl font-semibold text-slate-700 mb-4">Line Items</h2>{canEdit && (<div className="flex gap-2"><input ref={scanInputRef} type="text" value={scanInput} onChange={e => setScanInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { handleScanAddItem(e); } }} placeholder="Scan or Enter Item Code" className="flex-grow block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm" /><button onClick={handleScanAddItem} className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors">Add</button></div>)}</div><div className="overflow-x-auto"><table className="w-full text-sm text-left text-slate-500"><thead className="text-xs text-slate-700 uppercase bg-slate-100"><tr><th scope="col" className="px-4 py-3">Item</th><th scope="col" className="px-4 py-3">Style</th><th scope="col" className="px-4 py-3 text-center">Qty</th><th scope="col" className="px-4 py-3 text-right">Unit Price</th><th scope="col" className="px-4 py-3 text-right">Total</th>{canEdit && <th scope="col" className="px-2 py-3"></th>}</tr></thead><tbody>{formData.lineItems.map(item => (<tr key={item.id} className="border-b align-middle"><td className="px-4 py-2"><Select value={item.item} onChange={e => handleLineItemChange(item.id, 'item', e.target.value)} disabled={!canEdit}><option value="-- Select Item --">-- Select Item --</option>{Object.entries(allSelectableItems).map(([id, details]) => (<option key={id} value={id}>{details.name}</option>))}</Select></td><td className="px-4 py-2"><Select value={item.style} onChange={e => handleLineItemChange(item.id, 'style', e.target.value)} disabled={!canEdit}>{(allSelectableItems[item.item]?.styles || []).map(name => (<option key={name} value={name}>{name}</option>))}</Select></td><td className="px-4 py-2"><input type="number" min="0" value={item.quantity} onChange={e => handleLineItemChange(item.id, 'quantity', Number(e.target.value))} className="w-16 sm:w-20 text-center bg-white border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm p-2" disabled={!canEdit} /></td><td className="px-4 py-2 text-right"><PriceInput value={item.price} onChange={newPrice => handleLineItemChange(item.id, 'price', newPrice)} disabled={!canEdit}/></td><td className="px-4 py-2 text-right font-medium text-slate-800">${((item.quantity * item.price) / 100).toFixed(2)}</td>{canEdit && <td className="px-2 py-2 text-center"><button onClick={() => removeLineItem(item.id)} className="text-slate-400 hover:text-red-600 p-1 rounded-full hover:bg-red-100 transition-colors"><TrashIcon /></button></td>}</tr>))}</tbody></table></div>{canEdit && <div className="p-6 border-t"><button onClick={addEmptyLineItem} className="w-full text-center px-4 py-2 bg-orange-100 text-orange-700 font-semibold rounded-md hover:bg-orange-200 transition-colors">+ Add Line Item</button></div>}</div>
                 </div>
@@ -1820,7 +2045,18 @@ const unpackPackage = (id, pkgCode) => {
                             disabled={!canEdit}
                         />
                     </div>
-                    <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200"><h2 className="text-xl font-semibold text-slate-700 mb-3">Notes</h2><Textarea value={formData.notes} onChange={e => setFormData(p => ({...p, notes: e.target.value}))} rows={4} disabled={!canEdit} /></div>
+                    <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
+                        <h2 className="text-xl font-semibold text-slate-700 mb-3">Notes</h2>
+                        <ContactMentionTextarea
+                            value={formData.notes}
+                            onChange={value => setFormData(p => ({...p, notes: value}))}
+                            rows={4}
+                            disabled={!canEdit}
+                            contacts={allContacts}
+                            placeholder="Capture order notes and use @handle to mention key contacts"
+                            label=""
+                        />
+                    </div>
                     <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
                         <h2 className="text-xl font-semibold text-slate-700 mb-4">Order Summary</h2>
                         <div className="space-y-3">
@@ -1865,12 +2101,12 @@ const unpackPackage = (id, pkgCode) => {
 
 // --- MAIN APP COMPONENT (Router) ---
 const App = () => {
-    const { useState, useEffect } = React;
+    const { useState, useEffect, useCallback } = React;
     const [page, setPage] = useState('dashboard');
     const [orders, setOrders] = useState([]);
     const [activeOrder, setActiveOrder] = useState(null);
     const [isLoading, setIsLoading] = useState(true);
-    const [allVendors, setAllVendors] = useState([]);
+    const [allContacts, setAllContacts] = useState([]);
     const [allSelectableItems, setAllSelectableItems] = useState({});
     const [itemData, setItemData] = useState({});
     const [packageData, setPackageData] = useState({});
@@ -1892,13 +2128,13 @@ const App = () => {
         });
     };
 
-    const fetchAndUpdateVendors = async () => {
+    const fetchAndUpdateContacts = async () => {
         try {
-            const vendorsRes = await fetch('/api/vendors');
-            const vendorsData = await vendorsRes.json();
-            setAllVendors(vendorsData);
+            const contactsRes = await fetch('/api/contacts');
+            const contactsData = await contactsRes.json();
+            setAllContacts(contactsData);
         } catch (error) {
-            console.error("Failed to re-fetch vendors:", error);
+            console.error("Failed to re-fetch contacts:", error);
         }
     };
 
@@ -1906,9 +2142,9 @@ const App = () => {
         const fetchData = async () => {
             setIsLoading(true);
             try {
-            const [ordersRes, vendorsRes, itemsRes, packagesRes, settingsRes] = await Promise.all([
+            const [ordersRes, contactsRes, itemsRes, packagesRes, settingsRes] = await Promise.all([
                 fetch('/api/orders'),
-                fetch('/api/vendors'),
+                fetch('/api/contacts'),
                 fetch('/api/items'),
                 fetch('/api/packages'),
                 fetch('/api/settings') // Fetch settings
@@ -1917,7 +2153,7 @@ const App = () => {
             const ordersData   = await ordersRes.json();
             const settingsData = await settingsRes.json(); // Get settings data
             setAppSettings(settingsData); // Set app settings
-            const vendorsData  = await vendorsRes.json();
+            const contactsData  = await contactsRes.json();
             const itemsDataArray    = await itemsRes.json(); // Renamed to itemsDataArray
             const packagesData = await packagesRes.json();
 
@@ -1928,7 +2164,7 @@ const App = () => {
             }, {});
 
             setOrders(ordersData);
-            setAllVendors(vendorsData);
+            setAllContacts(contactsData);
             // Combine items (now itemsDataById) and packages for the dropdown
             const combinedSelectableItems = { ...itemsDataById }; // Spread the object
             for (const pkgId in packagesData) {
@@ -1951,6 +2187,11 @@ const App = () => {
                     setActiveOrder(orderToEdit);
                     setPage('viewOrder');
                 }
+            } else {
+                const viewParam = urlParams.get('view');
+                if (viewParam === 'create') {
+                    setPage('createOrder');
+                }
             }
 
             } catch (error) {
@@ -1963,7 +2204,13 @@ const App = () => {
     }, []);
 
     
-    const navigateTo = (pageName) => { setPage(pageName); };
+    const navigateTo = (pageName) => {
+        if (pageName === 'settings') {
+            window.location.href = '/settings';
+            return;
+        }
+        setPage(pageName);
+    };
 
     const viewOrder = (order) => {
         window.location.href = `/order/${order.id}`;
@@ -2048,20 +2295,18 @@ const App = () => {
     const renderPage = () => {
         switch(page) {
             case 'createOrder': 
-                return <OrderForm navigateTo={navigateTo} saveOrder={saveOrder} allVendors={allVendors} allSelectableItems={allSelectableItems} itemData={itemData} packageData={packageData} fetchAndUpdateVendors={fetchAndUpdateVendors} setOrderForEmailModal={setOrderForEmailModal} />;
+                return <OrderForm navigateTo={navigateTo} saveOrder={saveOrder} allContacts={allContacts} allSelectableItems={allSelectableItems} itemData={itemData} packageData={packageData} fetchAndUpdateContacts={fetchAndUpdateContacts} setOrderForEmailModal={setOrderForEmailModal} />;
             case 'viewOrder': 
                 // This case is now handled by a separate page, but we keep the OrderForm logic
                 // for when the user navigates back to edit from the view page via URL param.
-                return <OrderForm order={activeOrder} navigateTo={navigateTo} saveOrder={saveOrder} deleteOrder={deleteOrder} allVendors={allVendors} allSelectableItems={allSelectableItems} itemData={itemData} packageData={packageData} fetchAndUpdateVendors={fetchAndUpdateVendors} setOrderForEmailModal={setOrderForEmailModal} />;
-            case 'settings': 
-                return <iframe src="/settings" style={{ width: '100%', height: 'calc(100vh - 100px)', border: 'none' }}></iframe>;
-            case 'dashboard': 
-            default: 
-                return <Dashboard orders={orders} navigateTo={navigateTo} viewOrder={viewOrder} allVendors={allVendors} allSelectableItems={allSelectableItems} setOrderForEmailModal={setOrderForEmailModal} />;
+                return <OrderForm order={activeOrder} navigateTo={navigateTo} saveOrder={saveOrder} deleteOrder={deleteOrder} allContacts={allContacts} allSelectableItems={allSelectableItems} itemData={itemData} packageData={packageData} fetchAndUpdateContacts={fetchAndUpdateContacts} setOrderForEmailModal={setOrderForEmailModal} />;
+            case 'dashboard':
+            default:
+                return <Dashboard orders={orders} navigateTo={navigateTo} viewOrder={viewOrder} allContacts={allContacts} allSelectableItems={allSelectableItems} setOrderForEmailModal={setOrderForEmailModal} />;
         }
     }
 
-    const handleLogout = async () => {
+    const handleLogout = useCallback(async () => {
         try {
             const response = await fetch('/shutdown', { method: 'POST' });
             if (response.ok) {
@@ -2077,7 +2322,22 @@ const App = () => {
             console.error('Error during shutdown attempt:', error);
             alert('Error attempting to shut down the server. Please use Task Manager to stop the task.');
         }
-    };
+    }, []);
+
+    useEffect(() => {
+        window.fireCoastNavigateTo = (target) => {
+            if (target === 'createOrder') {
+                setPage('createOrder');
+            } else if (target === 'dashboard') {
+                setPage('dashboard');
+            }
+        };
+        window.fireCoastLogout = handleLogout;
+        return () => {
+            delete window.fireCoastNavigateTo;
+            delete window.fireCoastLogout;
+        };
+    }, [handleLogout]);
 
     return (
         <div className="bg-slate-50 min-h-screen font-sans">
@@ -2098,8 +2358,7 @@ const App = () => {
             <div className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
                 {renderPage()}
             </div>
-            {/* New Settings/Logout Button - Conditionally render based on page */}
-            {page !== 'settings' && (
+            {/* Quick access menu for settings and shutdown actions */}
             <div className="fixed bottom-4 left-4 z-50">
                 <button
                     onClick={() => setShowSettingsMenu(!showSettingsMenu)}
@@ -2109,7 +2368,7 @@ const App = () => {
                     <CogIcon />
                 </button>
                 {showSettingsMenu && (
-                    <div 
+                    <div
                         className="absolute bottom-full left-0 mb-2 w-48 bg-white rounded-md shadow-lg py-1 ring-1 ring-black ring-opacity-5 focus:outline-none"
                         role="menu"
                         aria-orientation="vertical"
@@ -2117,19 +2376,15 @@ const App = () => {
                     >
                         <a
                             href="/admin"
-                            target="_blank"
+                            onClick={() => setShowSettingsMenu(false)}
                             className="block px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 hover:text-slate-900"
                             role="menuitem"
                         >
                             Admin Dashboard
                         </a>
                         <a
-                            href="#"
-                            onClick={(e) => {
-                                e.preventDefault();
-                                navigateTo('settings');
-                                setShowSettingsMenu(false);
-                            }}
+                            href="/settings"
+                            onClick={() => setShowSettingsMenu(false)}
                             className="block px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 hover:text-slate-900"
                             role="menuitem"
                         >

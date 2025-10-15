@@ -21,8 +21,10 @@ import shutil
 import zipfile
 import pytz
 
+MENTION_PATTERN = re.compile(r'@([A-Za-z0-9_.-]+)')
+
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, request, send_from_directory, redirect, flash
+from flask import Flask, jsonify, render_template, request, send_from_directory, redirect, flash, url_for
 from shipcostestimate import calculate_shipping_cost_for_order
 from database import get_db_connection, init_db
 
@@ -56,59 +58,181 @@ def write_json_file(file_path, data):
     with open(file_path, 'w') as f:
         json.dump(data, f, indent=4)
 
-def update_or_create_vendor(cursor, vendor_info_payload):
-    if not vendor_info_payload or not vendor_info_payload.get("companyName"): return vendor_info_payload.get("id") if vendor_info_payload else None
-    
-    provided_id = vendor_info_payload.get("id")
-    company_name = vendor_info_payload.get("companyName")
-    contact_name = vendor_info_payload.get("contactName", "")
-    email = vendor_info_payload.get("email", "")
-    phone = vendor_info_payload.get("phone", "")
-    billing_address = vendor_info_payload.get("billingAddress", "")
-    billing_city = vendor_info_payload.get("billingCity", "")
-    billing_state = vendor_info_payload.get("billingState", "")
-    billing_zip_code = vendor_info_payload.get("billingZipCode", "")
-    shipping_address = vendor_info_payload.get("shippingAddress", "")
-    shipping_city = vendor_info_payload.get("shippingCity", "")
-    shipping_state = vendor_info_payload.get("shippingState", "")
-    shipping_zip_code = vendor_info_payload.get("shippingZipCode", "")
 
-    final_vendor_id = provided_id
+def _slugify_handle(source_text: str) -> str:
+    base = re.sub(r'[^a-z0-9]+', '-', (source_text or '').lower()).strip('-')
+    if not base:
+        return 'contact'
+    return base.replace('-', '')[:32]
+
+
+def _generate_unique_handle(cursor, preferred_text: str) -> str:
+    base = _slugify_handle(preferred_text)
+    candidate = base
+    suffix = 1
+    while True:
+        cursor.execute("SELECT 1 FROM contacts WHERE handle = ?", (candidate,))
+        if not cursor.fetchone():
+            return candidate
+        candidate = f"{base}{suffix}"
+        suffix += 1
+
+
+def ensure_contact_handle(cursor, contact_id, fallback_text=""):
+    cursor.execute("SELECT handle, company_name, contact_name FROM contacts WHERE id = ?", (contact_id,))
+    existing = cursor.fetchone()
+    if not existing:
+        return None
+    handle, company_name, contact_name = existing
+    if handle:
+        return handle
+    new_handle = _generate_unique_handle(cursor, contact_name or company_name or fallback_text or 'contact')
+    cursor.execute("UPDATE contacts SET handle = ? WHERE id = ?", (new_handle, contact_id))
+    return new_handle
+
+
+def update_or_create_contact(cursor, contact_info_payload):
+    if not contact_info_payload or not contact_info_payload.get("companyName"):
+        return contact_info_payload.get("id") if contact_info_payload else None
+
+    provided_id = contact_info_payload.get("id")
+    company_name = contact_info_payload.get("companyName")
+    contact_name = contact_info_payload.get("contactName", "")
+    email = contact_info_payload.get("email", "")
+    phone = contact_info_payload.get("phone", "")
+    billing_address = contact_info_payload.get("billingAddress", "")
+    billing_city = contact_info_payload.get("billingCity", "")
+    billing_state = contact_info_payload.get("billingState", "")
+    billing_zip_code = contact_info_payload.get("billingZipCode", "")
+    shipping_address = contact_info_payload.get("shippingAddress", "")
+    shipping_city = contact_info_payload.get("shippingCity", "")
+    shipping_state = contact_info_payload.get("shippingState", "")
+    shipping_zip_code = contact_info_payload.get("shippingZipCode", "")
+    notes = contact_info_payload.get("notes")
+    provided_handle = contact_info_payload.get("handle")
+    if provided_handle:
+        provided_handle = provided_handle.lower().lstrip('@')
+
+    final_contact_id = provided_id
     if provided_id:
-        cursor.execute("UPDATE vendors SET company_name = ?, contact_name = ?, email = ?, phone = ?, billing_address = ?, billing_city = ?, billing_state = ?, billing_zip_code = ?, shipping_address = ?, shipping_city = ?, shipping_state = ?, shipping_zip_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                       (company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, provided_id))
+        field_values = [company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code,
+                        shipping_address, shipping_city, shipping_state, shipping_zip_code, provided_id]
+        cursor.execute(
+            "UPDATE contacts SET company_name = ?, contact_name = ?, email = ?, phone = ?, billing_address = ?, billing_city = ?, "
+            "billing_state = ?, billing_zip_code = ?, shipping_address = ?, shipping_city = ?, shipping_state = ?, shipping_zip_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            tuple(field_values)
+        )
         if cursor.rowcount == 0:
-            final_vendor_id = str(uuid.uuid4())
-            cursor.execute("INSERT INTO vendors (id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                           (final_vendor_id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code))
+            final_contact_id = str(uuid.uuid4())
+            cursor.execute(
+                "INSERT INTO contacts (id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, "
+                "billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (final_contact_id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state,
+                 billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code,
+                 provided_handle or _generate_unique_handle(cursor, contact_name or company_name), notes)
+            )
+        else:
+            if provided_handle:
+                cursor.execute("UPDATE contacts SET handle = ? WHERE id = ?", (provided_handle, provided_id))
+            if notes is not None:
+                cursor.execute("UPDATE contacts SET notes = ? WHERE id = ?", (notes, provided_id))
+            ensure_contact_handle(cursor, provided_id, contact_name or company_name)
     else:
-        final_vendor_id = str(uuid.uuid4())
-        cursor.execute("INSERT INTO vendors (id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                       (final_vendor_id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code))
-    return final_vendor_id
+        final_contact_id = str(uuid.uuid4())
+        handle_to_use = provided_handle or _generate_unique_handle(cursor, contact_name or company_name)
+        cursor.execute(
+            "INSERT INTO contacts (id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (final_contact_id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state,
+             billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle_to_use, notes)
+        )
+    final_notes = notes
+    if final_contact_id and notes is None:
+        cursor.execute("SELECT notes FROM contacts WHERE id = ?", (final_contact_id,))
+        existing_notes_row = cursor.fetchone()
+        if existing_notes_row:
+            final_notes = existing_notes_row['notes'] if isinstance(existing_notes_row, sqlite3.Row) else existing_notes_row[0]
+    sync_contact_mentions(cursor, extract_contact_handles(final_notes), 'contact_profile_note', f'note:{final_contact_id}', final_notes)
+    return final_contact_id
 
-def update_vendor_by_id(cursor, vendor_id, vendor_data_payload):
+
+def update_contact_by_id(cursor, contact_id, contact_data_payload):
     field_mappings = {
-        "companyName": "company_name", "contactName": "contact_name", "email": "email", "phone": "phone",
-        "billingAddress": "billing_address", "billingCity": "billing_city", "billingState": "billing_state", "billingZipCode": "billing_zip_code",
-        "shippingAddress": "shipping_address", "shippingCity": "shipping_city", "shippingState": "shipping_state", "shippingZipCode": "shipping_zip_code"
+        "companyName": "company_name",
+        "contactName": "contact_name",
+        "email": "email",
+        "phone": "phone",
+        "billingAddress": "billing_address",
+        "billingCity": "billing_city",
+        "billingState": "billing_state",
+        "billingZipCode": "billing_zip_code",
+        "shippingAddress": "shipping_address",
+        "shippingCity": "shipping_city",
+        "shippingState": "shipping_state",
+        "shippingZipCode": "shipping_zip_code",
+        "notes": "notes",
+        "handle": "handle",
     }
     fields_to_update, values_to_update = [], []
     for pk, dn in field_mappings.items():
-        if pk in vendor_data_payload: fields_to_update.append(f"{dn} = ?"); values_to_update.append(vendor_data_payload[pk])
+        if pk in contact_data_payload:
+            value = contact_data_payload[pk]
+            if pk == 'handle' and value:
+                value = value.lower().lstrip('@')
+            fields_to_update.append(f"{dn} = ?")
+            values_to_update.append(value)
     if not fields_to_update:
-        cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code FROM vendors WHERE id = ?", (vendor_id,))
+        cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes FROM contacts WHERE id = ?", (contact_id,))
         cv = cursor.fetchone()
         return dict(cv) if cv else None
-    sql_query = f"UPDATE vendors SET {', '.join(fields_to_update)}, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-    values_to_update.append(vendor_id)
+    sql_query = f"UPDATE contacts SET {', '.join(fields_to_update)}, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+    values_to_update.append(contact_id)
     try:
         cursor.execute(sql_query, tuple(values_to_update))
-        if cursor.rowcount == 0: return None
-        cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code FROM vendors WHERE id = ?", (vendor_id,))
+        if cursor.rowcount == 0:
+            return None
+        ensure_contact_handle(cursor, contact_id)
+        cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes FROM contacts WHERE id = ?", (contact_id,))
         uvd = cursor.fetchone()
-        return dict(uvd) if uvd else None
-    except sqlite3.Error as e: app.logger.error(f"DB error updating vendor {vendor_id}: {e}"); raise
+        if not uvd:
+            return None
+        updated_contact = dict(uvd)
+        if 'notes' in contact_data_payload:
+            sync_contact_mentions(cursor, extract_contact_handles(updated_contact.get('notes')), 'contact_profile_note', f'note:{contact_id}', updated_contact.get('notes'))
+        return updated_contact
+    except sqlite3.Error as e:
+        app.logger.error(f"DB error updating contact {contact_id}: {e}")
+        raise
+
+
+def extract_contact_handles(text):
+    if not text:
+        return []
+    handles = []
+    for match in MENTION_PATTERN.finditer(text):
+        handle = match.group(1).lower()
+        if handle not in handles:
+            handles.append(handle)
+    return handles
+
+
+def sync_contact_mentions(cursor, handles, context_type, context_id, snippet):
+    cursor.execute("DELETE FROM contact_mentions WHERE context_type = ? AND context_id = ?", (context_type, str(context_id)))
+    if not handles:
+        return
+    snippet_text = (snippet or '').strip()
+    if len(snippet_text) > 500:
+        snippet_text = snippet_text[:497] + '...'
+    for handle in handles:
+        cursor.execute("SELECT id FROM contacts WHERE lower(handle) = ?", (handle,))
+        row = cursor.fetchone()
+        if not row:
+            continue
+        contact_id = row['id'] if isinstance(row, sqlite3.Row) else row[0]
+        cursor.execute(
+            "INSERT INTO contact_mentions (contact_id, context_type, context_id, snippet) VALUES (?, ?, ?, ?)",
+            (contact_id, context_type, str(context_id), snippet_text)
+        )
 
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
@@ -123,7 +247,7 @@ def get_orders():
     user_timezone_str = settings.get('timezone', 'UTC')
     user_timezone = pytz.timezone(user_timezone_str)
 
-    cursor.execute("SELECT o.*, v.company_name as vendor_company_name, v.contact_name as vendor_contact_name, v.email as vendor_email, v.phone as vendor_phone, v.billing_address as vendor_billing_address, v.billing_city as vendor_billing_city, v.billing_state as vendor_billing_state, v.billing_zip_code as vendor_billing_zip_code, v.shipping_address as vendor_shipping_address, v.shipping_city as vendor_shipping_city, v.shipping_state as vendor_shipping_state, v.shipping_zip_code as vendor_shipping_zip_code FROM orders o LEFT JOIN vendors v ON o.vendor_id = v.id WHERE o.status != 'Deleted' ORDER BY o.order_date DESC, o.order_id DESC")
+    cursor.execute("SELECT o.*, v.company_name as contact_company_name, v.contact_name as contact_contact_name, v.email as contact_email, v.phone as contact_phone, v.billing_address as contact_billing_address, v.billing_city as contact_billing_city, v.billing_state as contact_billing_state, v.billing_zip_code as contact_billing_zip_code, v.shipping_address as contact_shipping_address, v.shipping_city as contact_shipping_city, v.shipping_state as contact_shipping_state, v.shipping_zip_code as contact_shipping_zip_code, v.handle as contact_handle, v.notes as contact_notes FROM orders o LEFT JOIN contacts v ON o.contact_id = v.id WHERE o.status != 'Deleted' ORDER BY o.order_date DESC, o.order_id DESC")
     orders_from_db = cursor.fetchall()
     active_orders_response = []
     for order_row in orders_from_db:
@@ -132,26 +256,29 @@ def get_orders():
             utc_date = dateutil_parse(order_dict['order_date']).replace(tzinfo=pytz.utc)
             order_dict['order_date'] = utc_date.astimezone(user_timezone).isoformat()
         
-        order_dict['vendorInfo'] = {
-            "id": order_dict.pop('vendor_id'),
-            "companyName": order_dict.pop('vendor_company_name') or "[Vendor Not Found]",
-            "contactName": order_dict.pop('vendor_contact_name'),
-            "email": order_dict.pop('vendor_email'),
-            "phone": order_dict.pop('vendor_phone'),
-            "billingAddress": order_dict.pop('vendor_billing_address'),
-            "billingCity": order_dict.pop('vendor_billing_city'),
-            "billingState": order_dict.pop('vendor_billing_state'),
-            "billingZipCode": order_dict.pop('vendor_billing_zip_code'),
-            "shippingAddress": order_dict.pop('vendor_shipping_address'),
-            "shippingCity": order_dict.pop('vendor_shipping_city'),
-            "shippingState": order_dict.pop('vendor_shipping_state'),
-            "shippingZipCode": order_dict.pop('vendor_shipping_zip_code')
+        order_dict['contactInfo'] = {
+            "id": order_dict.pop('contact_id'),
+            "companyName": order_dict.pop('contact_company_name') or "[Contact Not Found]",
+            "contactName": order_dict.pop('contact_contact_name'),
+            "email": order_dict.pop('contact_email'),
+            "phone": order_dict.pop('contact_phone'),
+            "billingAddress": order_dict.pop('contact_billing_address'),
+            "billingCity": order_dict.pop('contact_billing_city'),
+            "billingState": order_dict.pop('contact_billing_state'),
+            "billingZipCode": order_dict.pop('contact_billing_zip_code'),
+            "shippingAddress": order_dict.pop('contact_shipping_address'),
+            "shippingCity": order_dict.pop('contact_shipping_city'),
+            "shippingState": order_dict.pop('contact_shipping_state'),
+            "shippingZipCode": order_dict.pop('contact_shipping_zip_code'),
+            "handle": order_dict.pop('contact_handle'),
+            "notes": order_dict.pop('contact_notes')
         }
-        if not order_dict['vendorInfo']['id']:
-            order_dict['vendorInfo'] = {
-                "id": None, "companyName": "[Vendor Not Found]", "contactName": "", "email": "", "phone": "",
+        if not order_dict['contactInfo']['id']:
+            order_dict['contactInfo'] = {
+                "id": None, "companyName": "[Contact Not Found]", "contactName": "", "email": "", "phone": "",
                 "billingAddress": "", "billingCity": "", "billingState": "", "billingZipCode": "",
-                "shippingAddress": "", "shippingCity": "", "shippingState": "", "shippingZipCode": ""
+                "shippingAddress": "", "shippingCity": "", "shippingState": "", "shippingZipCode": "",
+                "handle": None, "notes": ""
             }
         cursor.execute("SELECT item_code, package_code, quantity, price_per_unit_cents, style_chosen, item_type FROM order_line_items WHERE order_id = ?", (order_dict['order_id'],))
         order_dict['lineItems'] = [{'item': li['item_code'], 'packageCode': li['package_code'], 'price': li['price_per_unit_cents'], 'quantity': li['quantity'], 'style': li['style_chosen'], 'type': li['item_type']} for li in cursor.fetchall()]
@@ -181,7 +308,7 @@ def get_order(order_id):
     user_timezone_str = settings.get('timezone', 'UTC')
     user_timezone = pytz.timezone(user_timezone_str)
 
-    cursor.execute("SELECT o.*, v.company_name as vendor_company_name, v.contact_name as vendor_contact_name, v.email as vendor_email, v.phone as vendor_phone, v.billing_address as vendor_billing_address, v.billing_city as vendor_billing_city, v.billing_state as vendor_billing_state, v.billing_zip_code as vendor_billing_zip_code, v.shipping_address as vendor_shipping_address, v.shipping_city as vendor_shipping_city, v.shipping_state as vendor_shipping_state, v.shipping_zip_code as vendor_shipping_zip_code FROM orders o LEFT JOIN vendors v ON o.vendor_id = v.id WHERE o.order_id = ?", (order_id,))
+    cursor.execute("SELECT o.*, v.company_name as contact_company_name, v.contact_name as contact_contact_name, v.email as contact_email, v.phone as contact_phone, v.billing_address as contact_billing_address, v.billing_city as contact_billing_city, v.billing_state as contact_billing_state, v.billing_zip_code as contact_billing_zip_code, v.shipping_address as contact_shipping_address, v.shipping_city as contact_shipping_city, v.shipping_state as contact_shipping_state, v.shipping_zip_code as contact_shipping_zip_code, v.handle as contact_handle, v.notes as contact_notes FROM orders o LEFT JOIN contacts v ON o.contact_id = v.id WHERE o.order_id = ?", (order_id,))
     order_row = cursor.fetchone()
     if not order_row:
         conn.close()
@@ -192,26 +319,29 @@ def get_order(order_id):
         utc_date = dateutil_parse(order_dict['order_date']).replace(tzinfo=pytz.utc)
         order_dict['order_date'] = utc_date.astimezone(user_timezone).isoformat()
 
-    order_dict['vendorInfo'] = {
-        "id": order_dict.pop('vendor_id'),
-        "companyName": order_dict.pop('vendor_company_name') or "[Vendor Not Found]",
-        "contactName": order_dict.pop('vendor_contact_name'),
-        "email": order_dict.pop('vendor_email'),
-        "phone": order_dict.pop('vendor_phone'),
-        "billingAddress": order_dict.pop('vendor_billing_address'),
-        "billingCity": order_dict.pop('vendor_billing_city'),
-        "billingState": order_dict.pop('vendor_billing_state'),
-        "billingZipCode": order_dict.pop('vendor_billing_zip_code'),
-        "shippingAddress": order_dict.pop('vendor_shipping_address'),
-        "shippingCity": order_dict.pop('vendor_shipping_city'),
-        "shippingState": order_dict.pop('vendor_shipping_state'),
-        "shippingZipCode": order_dict.pop('vendor_shipping_zip_code')
+    order_dict['contactInfo'] = {
+        "id": order_dict.pop('contact_id'),
+        "companyName": order_dict.pop('contact_company_name') or "[Contact Not Found]",
+        "contactName": order_dict.pop('contact_contact_name'),
+        "email": order_dict.pop('contact_email'),
+        "phone": order_dict.pop('contact_phone'),
+        "billingAddress": order_dict.pop('contact_billing_address'),
+        "billingCity": order_dict.pop('contact_billing_city'),
+        "billingState": order_dict.pop('contact_billing_state'),
+        "billingZipCode": order_dict.pop('contact_billing_zip_code'),
+        "shippingAddress": order_dict.pop('contact_shipping_address'),
+        "shippingCity": order_dict.pop('contact_shipping_city'),
+        "shippingState": order_dict.pop('contact_shipping_state'),
+        "shippingZipCode": order_dict.pop('contact_shipping_zip_code'),
+        "handle": order_dict.pop('contact_handle'),
+        "notes": order_dict.pop('contact_notes')
     }
-    if not order_dict['vendorInfo']['id']:
-        order_dict['vendorInfo'] = {
-            "id": None, "companyName": "[Vendor Not Found]", "contactName": "", "email": "", "phone": "",
+    if not order_dict['contactInfo']['id']:
+        order_dict['contactInfo'] = {
+            "id": None, "companyName": "[Contact Not Found]", "contactName": "", "email": "", "phone": "",
             "billingAddress": "", "billingCity": "", "billingState": "", "billingZipCode": "",
-            "shippingAddress": "", "shippingCity": "", "shippingState": "", "shippingZipCode": ""
+            "shippingAddress": "", "shippingCity": "", "shippingState": "", "shippingZipCode": "",
+            "handle": None, "notes": ""
         }
     cursor.execute("SELECT item_code, package_code, quantity, price_per_unit_cents, style_chosen, item_type FROM order_line_items WHERE order_id = ?", (order_dict['order_id'],))
     order_dict['lineItems'] = [{'item': li['item_code'], 'packageCode': li['package_code'], 'price': li['price_per_unit_cents'], 'quantity': li['quantity'], 'style': li['style_chosen'], 'type': li['item_type']} for li in cursor.fetchall()]
@@ -277,6 +407,9 @@ def handle_order_logs(order_id):
                 (order_id, "system", action, details, note, attachment_path)
             )
             log_id = cursor.lastrowid
+            if note:
+                handles = extract_contact_handles(note)
+                sync_contact_mentions(cursor, handles, 'order_log', log_id, note)
             conn.commit()
 
             cursor.execute("SELECT * FROM order_logs WHERE log_id = ?", (log_id,))
@@ -347,7 +480,7 @@ def handle_specific_order_log(order_id, log_id):
     if request.method == 'POST':  # Using POST for update to handle multipart/form-data
         note = request.form.get('note')
         file = request.files.get('attachment')
-        
+
         attachment_path = log['attachment_path']
 
         if file and file.filename:
@@ -365,6 +498,8 @@ def handle_specific_order_log(order_id, log_id):
             "UPDATE order_logs SET note = ?, attachment_path = ? WHERE log_id = ?",
             (note, attachment_path, log_id)
         )
+        handles = extract_contact_handles(note)
+        sync_contact_mentions(cursor, handles, 'order_log', log_id, note)
         conn.commit()
         conn.close()
         return jsonify({"status": "success", "message": "Log updated."})
@@ -375,8 +510,9 @@ def handle_specific_order_log(order_id, log_id):
             file_path = os.path.join(app.config['UPLOAD_FOLDER'], attachment_path)
             if os.path.exists(file_path):
                 os.remove(file_path)
-        
+
         cursor.execute("DELETE FROM order_logs WHERE log_id = ?", (log_id,))
+        cursor.execute("DELETE FROM contact_mentions WHERE context_type = ? AND context_id = ?", ('order_log', str(log_id)))
         conn.commit()
         conn.close()
         return jsonify({"status": "success", "message": "Log deleted."})
@@ -441,9 +577,9 @@ def search_orders():
         else:
           # Keep the existing logic for non-date fields
           field_map = {
-              'from': {'join': "LEFT JOIN vendors v ON o.vendor_id = v.id", 'condition': "(v.company_name LIKE ? OR v.contact_name LIKE ?)", 'params': [f'%{value}%', f'%{value}%']},
-              'vendor': {'join': "LEFT JOIN vendors v ON o.vendor_id = v.id", 'condition': "(v.company_name LIKE ? OR v.contact_name LIKE ?)", 'params': [f'%{value}%', f'%{value}%']},
-              'customer': {'join': "LEFT JOIN vendors v ON o.vendor_id = v.id", 'condition': "(v.company_name LIKE ? OR v.contact_name LIKE ?)", 'params': [f'%{value}%', f'%{value}%']},
+              'from': {'join': "LEFT JOIN contacts v ON o.contact_id = v.id", 'condition': "(v.company_name LIKE ? OR v.contact_name LIKE ?)", 'params': [f'%{value}%', f'%{value}%']},
+              'contact': {'join': "LEFT JOIN contacts v ON o.contact_id = v.id", 'condition': "(v.company_name LIKE ? OR v.contact_name LIKE ?)", 'params': [f'%{value}%', f'%{value}%']},
+              'customer': {'join': "LEFT JOIN contacts v ON o.contact_id = v.id", 'condition': "(v.company_name LIKE ? OR v.contact_name LIKE ?)", 'params': [f'%{value}%', f'%{value}%']},
               'status': {'condition': "o.status LIKE ?", 'params': [f'%{value}%']},
               'item': {'join': "LEFT JOIN order_line_items oli ON o.order_id = oli.order_id LEFT JOIN items i ON oli.item_code = i.item_code", 'condition': "(i.name LIKE ? OR oli.style_chosen LIKE ?)", 'params': [f'%{value}%', f'%{value}%']},
               'note': {'condition': "o.notes LIKE ?", 'params': [f'%{value}%']},
@@ -458,7 +594,7 @@ def search_orders():
               params.extend(rule['params'])
 
     join_order = [
-      "LEFT JOIN vendors v ON o.vendor_id = v.id",
+      "LEFT JOIN contacts v ON o.contact_id = v.id",
       "LEFT JOIN order_logs ol ON o.order_id = ol.order_id",
       "LEFT JOIN order_line_items oli ON o.order_id = oli.order_id",
       "LEFT JOIN items i ON oli.item_code = i.item_code"
@@ -495,9 +631,9 @@ def search_orders():
 
         placeholders = ','.join('?' for _ in order_ids)
         sql_fetch_orders = f"""
-            SELECT o.*, v.company_name as vendor_company_name, v.contact_name as vendor_contact_name, v.email as vendor_email, v.phone as vendor_phone, v.billing_address as vendor_billing_address, v.billing_city as vendor_billing_city, v.billing_state as vendor_billing_state, v.billing_zip_code as vendor_billing_zip_code, v.shipping_address as vendor_shipping_address, v.shipping_city as vendor_shipping_city, v.shipping_state as vendor_shipping_state, v.shipping_zip_code as vendor_shipping_zip_code 
+            SELECT o.*, v.company_name as contact_company_name, v.contact_name as contact_contact_name, v.email as contact_email, v.phone as contact_phone, v.billing_address as contact_billing_address, v.billing_city as contact_billing_city, v.billing_state as contact_billing_state, v.billing_zip_code as contact_billing_zip_code, v.shipping_address as contact_shipping_address, v.shipping_city as contact_shipping_city, v.shipping_state as contact_shipping_state, v.shipping_zip_code as contact_shipping_zip_code 
             FROM orders o 
-            LEFT JOIN vendors v ON o.vendor_id = v.id 
+            LEFT JOIN contacts v ON o.contact_id = v.id 
             WHERE o.order_id IN ({placeholders}) 
             ORDER BY o.order_date DESC, o.order_id DESC
         """
@@ -508,12 +644,12 @@ def search_orders():
         active_orders_response = []
         for order_row in orders_from_db:
             order_dict = dict(order_row)
-            order_dict['vendorInfo'] = {
-                "id": order_dict.pop('vendor_id'),
-                "companyName": order_dict.pop('vendor_company_name') or "[Vendor Not Found]",
-                "contactName": order_dict.pop('vendor_contact_name'), 'email': order_dict.pop('vendor_email'), 'phone': order_dict.pop('vendor_phone'),
-                'billingAddress': order_dict.pop('vendor_billing_address'), 'billingCity': order_dict.pop('vendor_billing_city'), 'billingState': order_dict.pop('vendor_billing_state'), 'billingZipCode': order_dict.pop('vendor_billing_zip_code'),
-                'shippingAddress': order_dict.pop('vendor_shipping_address'), 'shippingCity': order_dict.pop('vendor_shipping_city'), 'shippingState': order_dict.pop('vendor_shipping_state'), 'shippingZipCode': order_dict.pop('vendor_shipping_zip_code')
+            order_dict['contactInfo'] = {
+                "id": order_dict.pop('contact_id'),
+                "companyName": order_dict.pop('contact_company_name') or "[Contact Not Found]",
+                "contactName": order_dict.pop('contact_contact_name'), 'email': order_dict.pop('contact_email'), 'phone': order_dict.pop('contact_phone'),
+                'billingAddress': order_dict.pop('contact_billing_address'), 'billingCity': order_dict.pop('contact_billing_city'), 'billingState': order_dict.pop('contact_billing_state'), 'billingZipCode': order_dict.pop('contact_billing_zip_code'),
+                'shippingAddress': order_dict.pop('contact_shipping_address'), 'shippingCity': order_dict.pop('contact_shipping_city'), 'shippingState': order_dict.pop('contact_shipping_state'), 'shippingZipCode': order_dict.pop('contact_shipping_zip_code')
             }
             cursor.execute("SELECT item_code, package_code, quantity, price_per_unit_cents, style_chosen, item_type FROM order_line_items WHERE order_id = ?", (order_dict['order_id'],))
             order_dict['lineItems'] = [{'item': li['item_code'], 'packageCode': li['package_code'], 'price': li['price_per_unit_cents'], 'quantity': li['quantity'], 'style': li['style_chosen'], 'type': li['item_type']} for li in cursor.fetchall()]
@@ -560,7 +696,7 @@ def save_order():
         
         existing_order_row = None
         if order_id_from_payload:
-            cursor.execute("SELECT status, vendor_id FROM orders WHERE order_id = ?", (order_id_from_payload,))
+            cursor.execute("SELECT status, contact_id FROM orders WHERE order_id = ?", (order_id_from_payload,))
             existing_order_row = cursor.fetchone()
 
         current_order_id_for_db_ops = order_id_from_payload if existing_order_row else None
@@ -570,12 +706,12 @@ def save_order():
         if order_id_from_payload and is_attempting_delete: 
             if existing_order_row:
                 if existing_order_row['status'] != "Draft":
-                    vendor_id_for_confirm = existing_order_row['vendor_id']
+                    contact_id_for_confirm = existing_order_row['contact_id']
                     company_name_for_confirm = ""
-                    if vendor_id_for_confirm:
-                        cursor.execute("SELECT company_name FROM vendors WHERE id = ?", (vendor_id_for_confirm,))
-                        vendor_row = cursor.fetchone()
-                        if vendor_row: company_name_for_confirm = vendor_row['company_name']
+                    if contact_id_for_confirm:
+                        cursor.execute("SELECT company_name FROM contacts WHERE id = ?", (contact_id_for_confirm,))
+                        contact_row = cursor.fetchone()
+                        if contact_row: company_name_for_confirm = contact_row['company_name']
                     order_id_str = order_id_from_payload.replace("PO-", "")
                     order_id_last_4 = order_id_str[-4:] if len(order_id_str) >= 4 else order_id_str
                     if not company_name_for_confirm or not order_id_last_4: 
@@ -590,11 +726,11 @@ def save_order():
                 if conn_main: conn_main.rollback()
                 return jsonify({"status": "error", "message": f"Order ID {order_id_from_payload} not found."}), 404
         
-        db_processed_vendor_id = None
-        if 'vendorInfo' in new_order_payload and new_order_payload['vendorInfo']:
-            db_processed_vendor_id = update_or_create_vendor(cursor, new_order_payload['vendorInfo'])
-            if db_processed_vendor_id: new_order_payload['vendorInfo']['id'] = db_processed_vendor_id
-            else: app.logger.error(f"Vendor processing failed. Payload: {new_order_payload.get('vendorInfo')}")
+        db_processed_contact_id = None
+        if 'contactInfo' in new_order_payload and new_order_payload['contactInfo']:
+            db_processed_contact_id = update_or_create_contact(cursor, new_order_payload['contactInfo'])
+            if db_processed_contact_id: new_order_payload['contactInfo']['id'] = db_processed_contact_id
+            else: app.logger.error(f"Contact processing failed. Payload: {new_order_payload.get('contactInfo')}")
         
         if 'nameDrop' not in new_order_payload: new_order_payload['nameDrop'] = False
         
@@ -618,16 +754,16 @@ def save_order():
         display_id = new_order_payload.get('display_id', None)
 
         if current_order_id_for_db_ops:
-            cursor.execute("UPDATE orders SET display_id=?, vendor_id=?, order_date=?, status=?, notes=?, estimated_shipping_date=?, shipping_address=?, shipping_city=?, shipping_state=?, shipping_zip_code=?, estimated_shipping_cost=?, scent_option=?, name_drop=?, signature_data_url=?, total_amount=?, updated_at=CURRENT_TIMESTAMP WHERE order_id=?",
-                           (display_id, db_processed_vendor_id, new_order_payload.get('date', datetime.now(timezone.utc).isoformat()+"Z"), new_order_payload.get('status','Draft'), new_order_payload.get('notes'), new_order_payload.get('estimatedShippingDate'), new_order_payload.get('shippingAddress'), new_order_payload.get('shippingCity'), new_order_payload.get('shippingState'), new_order_payload.get('shippingZipCode'), estimated_shipping_cost_dollars, new_order_payload.get('scentOption'), 1 if new_order_payload.get('nameDrop') else 0, new_order_payload.get('signatureDataUrl'), final_total_dollars, current_order_id_for_db_ops))
+            cursor.execute("UPDATE orders SET display_id=?, contact_id=?, order_date=?, status=?, notes=?, estimated_shipping_date=?, shipping_address=?, shipping_city=?, shipping_state=?, shipping_zip_code=?, estimated_shipping_cost=?, scent_option=?, name_drop=?, signature_data_url=?, total_amount=?, updated_at=CURRENT_TIMESTAMP WHERE order_id=?",
+                           (display_id, db_processed_contact_id, new_order_payload.get('date', datetime.now(timezone.utc).isoformat()+"Z"), new_order_payload.get('status','Draft'), new_order_payload.get('notes'), new_order_payload.get('estimatedShippingDate'), new_order_payload.get('shippingAddress'), new_order_payload.get('shippingCity'), new_order_payload.get('shippingState'), new_order_payload.get('shippingZipCode'), estimated_shipping_cost_dollars, new_order_payload.get('scentOption'), 1 if new_order_payload.get('nameDrop') else 0, new_order_payload.get('signatureDataUrl'), final_total_dollars, current_order_id_for_db_ops))
             cursor.execute("DELETE FROM order_line_items WHERE order_id = ?", (current_order_id_for_db_ops,))
             cursor.execute("DELETE FROM order_status_history WHERE order_id = ?", (current_order_id_for_db_ops,))
         else:
             timestamp_ms = int(time.time() * 1000)
             current_order_id_for_db_ops = f"PO-{timestamp_ms}"
             new_order_payload['id'] = current_order_id_for_db_ops
-            cursor.execute("INSERT INTO orders (order_id, display_id, vendor_id, order_date, status, notes, estimated_shipping_date, shipping_address, shipping_city, shipping_state, shipping_zip_code, estimated_shipping_cost, scent_option, name_drop, signature_data_url, total_amount) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                           (current_order_id_for_db_ops, display_id, db_processed_vendor_id, new_order_payload.get('date', datetime.now(timezone.utc).isoformat()+"Z"), new_order_payload.get('status','Draft'), new_order_payload.get('notes'), new_order_payload.get('estimatedShippingDate'), new_order_payload.get('shippingAddress'), new_order_payload.get('shippingCity'), new_order_payload.get('shippingState'), new_order_payload.get('shippingZipCode'), estimated_shipping_cost_dollars, new_order_payload.get('scentOption'), 1 if new_order_payload.get('nameDrop') else 0, new_order_payload.get('signatureDataUrl'), final_total_dollars))
+            cursor.execute("INSERT INTO orders (order_id, display_id, contact_id, order_date, status, notes, estimated_shipping_date, shipping_address, shipping_city, shipping_state, shipping_zip_code, estimated_shipping_cost, scent_option, name_drop, signature_data_url, total_amount) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                           (current_order_id_for_db_ops, display_id, db_processed_contact_id, new_order_payload.get('date', datetime.now(timezone.utc).isoformat()+"Z"), new_order_payload.get('status','Draft'), new_order_payload.get('notes'), new_order_payload.get('estimatedShippingDate'), new_order_payload.get('shippingAddress'), new_order_payload.get('shippingCity'), new_order_payload.get('shippingState'), new_order_payload.get('shippingZipCode'), estimated_shipping_cost_dollars, new_order_payload.get('scentOption'), 1 if new_order_payload.get('nameDrop') else 0, new_order_payload.get('signatureDataUrl'), final_total_dollars))
         
         processed_order_id = current_order_id_for_db_ops 
         app.logger.info(f"DB-OP: processed_order_id is now set to: '{processed_order_id}' before line item processing.")
@@ -641,7 +777,11 @@ def save_order():
             cursor.execute("INSERT INTO order_status_history (order_id, status, status_date) VALUES (?,?,?)", (processed_order_id, hist.get('status'), hist.get('date')))
         if not any(h['status'] == new_order_payload.get('status') for h in new_order_payload.get('statusHistory',[])):
             cursor.execute("INSERT INTO order_status_history (order_id, status, status_date) VALUES (?,?,?)", (processed_order_id, new_order_payload.get('status'), datetime.now(timezone.utc).isoformat()+"Z"))
-        
+
+        notes_text = new_order_payload.get('notes')
+        handles_from_notes = extract_contact_handles(notes_text)
+        sync_contact_mentions(cursor, handles_from_notes, 'order_note', processed_order_id, notes_text)
+
         if existing_order_row:
             cursor.execute("INSERT INTO order_logs (order_id, user, action, details) VALUES (?, ?, ?, ?)",
                            (current_order_id_for_db_ops, "system", "Order Updated", f"Order {current_order_id_for_db_ops} was updated."))
@@ -809,55 +949,131 @@ def delete_item(item_code_url):
     except sqlite3.Error as e: conn.rollback(); app.logger.error(f"DB err delete item {item_code_url}:{e}"); return jsonify({"message":"DB error."}),500
     finally: conn.close()
 
-@app.route('/api/vendors', methods=['GET'])
-def get_vendors():
+@app.route('/api/contacts', methods=['GET'])
+def get_contacts():
     conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code FROM vendors ORDER BY company_name COLLATE NOCASE ASC")
-    vendors_list = [{
+    cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes FROM contacts ORDER BY company_name COLLATE NOCASE ASC")
+    contacts_list = [{
         "id": r["id"], "companyName": r["company_name"], "contactName": r["contact_name"], "email": r["email"], "phone": r["phone"],
         "billingAddress": r["billing_address"], "billingCity": r["billing_city"], "billingState": r["billing_state"], "billingZipCode": r["billing_zip_code"],
-        "shippingAddress": r["shipping_address"], "shippingCity": r["shipping_city"], "shippingState": r["shipping_state"], "shippingZipCode": r["shipping_zip_code"]
+        "shippingAddress": r["shipping_address"], "shippingCity": r["shipping_city"], "shippingState": r["shipping_state"], "shippingZipCode": r["shipping_zip_code"],
+        "handle": r["handle"], "notes": r["notes"]
     } for r in cursor.fetchall()]
-    conn.close(); return jsonify(vendors_list)
+    conn.close(); return jsonify(contacts_list)
 
-@app.route('/api/vendors/<string:vendor_id>', methods=['PUT'])
-def api_update_vendor(vendor_id):
+@app.route('/api/contacts/<string:contact_id>', methods=['GET'])
+def api_get_contact(contact_id):
+    conn = get_db_connection(); cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes, created_at, updated_at FROM contacts WHERE id=?", (contact_id,))
+        contact_row = cursor.fetchone()
+        if not contact_row:
+            conn.close();
+            return jsonify({"message": "Contact not found."}), 404
+        ensure_contact_handle(cursor, contact_id, contact_row['contact_name'] or contact_row['company_name'])
+        cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes, created_at, updated_at FROM contacts WHERE id=?", (contact_id,))
+        refreshed_row = cursor.fetchone()
+        base_contact = {
+            "id": refreshed_row["id"],
+            "companyName": refreshed_row["company_name"],
+            "contactName": refreshed_row["contact_name"],
+            "email": refreshed_row["email"],
+            "phone": refreshed_row["phone"],
+            "billingAddress": refreshed_row["billing_address"],
+            "billingCity": refreshed_row["billing_city"],
+            "billingState": refreshed_row["billing_state"],
+            "billingZipCode": refreshed_row["billing_zip_code"],
+            "shippingAddress": refreshed_row["shipping_address"],
+            "shippingCity": refreshed_row["shipping_city"],
+            "shippingState": refreshed_row["shipping_state"],
+            "shippingZipCode": refreshed_row["shipping_zip_code"],
+            "handle": refreshed_row["handle"],
+            "notes": refreshed_row["notes"],
+            "createdAt": refreshed_row["created_at"],
+            "updatedAt": refreshed_row["updated_at"],
+        }
+
+        cursor.execute("SELECT mention_id, context_type, context_id, snippet, created_at FROM contact_mentions WHERE contact_id = ? ORDER BY created_at DESC", (contact_id,))
+        mentions = []
+        for mention in cursor.fetchall():
+            context_type = mention['context_type']
+            context_id = mention['context_id']
+            mention_entry = {
+                "id": mention['mention_id'],
+                "contextType": context_type,
+                "contextId": context_id,
+                "snippet": mention['snippet'],
+                "createdAt": mention['created_at'],
+            }
+            if context_type == 'order_log':
+                try:
+                    log_id = int(context_id)
+                except (TypeError, ValueError):
+                    log_id = None
+                if log_id is not None:
+                    cursor.execute("SELECT order_id, timestamp FROM order_logs WHERE log_id = ?", (log_id,))
+                    log_row = cursor.fetchone()
+                    if log_row:
+                        mention_entry['orderId'] = log_row['order_id']
+                        mention_entry['logTimestamp'] = log_row['timestamp']
+                        cursor.execute("SELECT display_id FROM orders WHERE order_id = ?", (log_row['order_id'],))
+                        order_meta = cursor.fetchone()
+                        if order_meta:
+                            mention_entry['orderDisplayId'] = order_meta['display_id'] or log_row['order_id']
+            elif context_type == 'order_note':
+                cursor.execute("SELECT order_id, display_id, updated_at FROM orders WHERE order_id = ?", (context_id,))
+                order_row = cursor.fetchone()
+                if order_row:
+                    mention_entry['orderId'] = order_row['order_id']
+                    mention_entry['orderDisplayId'] = order_row['display_id'] or order_row['order_id']
+                    mention_entry['orderUpdatedAt'] = order_row['updated_at']
+            mentions.append(mention_entry)
+        conn.close()
+        return jsonify({"contact": base_contact, "mentions": mentions})
+    except sqlite3.Error as e:
+        conn.close()
+        app.logger.error(f"DB err fetch contact {contact_id}: {e}")
+        return jsonify({"message": "DB error."}), 500
+
+
+@app.route('/api/contacts/<string:contact_id>', methods=['PUT'])
+def api_update_contact(contact_id):
     payload=request.json
     if not payload: return jsonify({"message":"Missing data."}),400
     conn=get_db_connection(); cursor=conn.cursor()
     try:
-        updated_vendor=update_vendor_by_id(cursor,vendor_id,payload)
-        if updated_vendor is None: conn.close(); return jsonify({"message":f"Vendor {vendor_id} not found."}),404
+        updated_contact=update_contact_by_id(cursor,contact_id,payload)
+        if updated_contact is None: conn.close(); return jsonify({"message":f"Contact {contact_id} not found."}),404
         conn.commit(); conn.close()
-        return jsonify({"message":"Vendor updated.","vendor":updated_vendor}),200
-    except sqlite3.Error as e: conn.rollback(); conn.close(); app.logger.error(f"DB err update vendor {vendor_id}:{e}"); return jsonify({"message":"DB error."}),500
-    except Exception as e_g: conn.rollback(); conn.close(); app.logger.error(f"Global err update vendor {vendor_id}:{e_g}"); return jsonify({"message":"Unexpected error."}),500
+        return jsonify({"message":"Contact updated.","contact":updated_contact}),200
+    except sqlite3.Error as e: conn.rollback(); conn.close(); app.logger.error(f"DB err update contact {contact_id}:{e}"); return jsonify({"message":"DB error."}),500
+    except Exception as e_g: conn.rollback(); conn.close(); app.logger.error(f"Global err update contact {contact_id}:{e_g}"); return jsonify({"message":"Unexpected error."}),500
 
-@app.route('/api/vendors', methods=['POST'])
-def api_create_vendor():
+@app.route('/api/contacts', methods=['POST'])
+def api_create_contact():
     payload=request.json
     if not payload or not payload.get("companyName"): return jsonify({"message":"Missing companyName."}),400
     conn=get_db_connection(); cursor=conn.cursor()
     try:
-        vendor_id=update_or_create_vendor(cursor,payload)
-        if not vendor_id: conn.rollback(); conn.close(); return jsonify({"message":"Failed to process vendor."}),500
-        cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code FROM vendors WHERE id=?",(vendor_id,))
-        vendor_db=cursor.fetchone()
-        if not vendor_db: conn.rollback(); conn.close(); app.logger.error(f"Vendor {vendor_id} processed but not retrieved."); return jsonify({"message":"Vendor processed but not retrieved."}),500
+        contact_id=update_or_create_contact(cursor,payload)
+        if not contact_id: conn.rollback(); conn.close(); return jsonify({"message":"Failed to process contact."}),500
+        cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes FROM contacts WHERE id=?",(contact_id,))
+        contact_db=cursor.fetchone()
+        if not contact_db: conn.rollback(); conn.close(); app.logger.error(f"Contact {contact_id} processed but not retrieved."); return jsonify({"message":"Contact processed but not retrieved."}),500
         conn.commit(); conn.close()
-        return jsonify({"message":"Vendor processed.","vendor":dict(vendor_db)}),201
-    except sqlite3.Error as e: conn.rollback(); conn.close(); app.logger.error(f"DB err create vendor:{e}"); return jsonify({"message":"DB error."}),500
-    except Exception as e_g: conn.rollback(); conn.close(); app.logger.error(f"Global err create vendor:{e_g}"); return jsonify({"message":"Unexpected error."}),500
+        return jsonify({"message":"Contact processed.","contact":dict(contact_db)}),201
+    except sqlite3.Error as e: conn.rollback(); conn.close(); app.logger.error(f"DB err create contact:{e}"); return jsonify({"message":"DB error."}),500
+    except Exception as e_g: conn.rollback(); conn.close(); app.logger.error(f"Global err create contact:{e_g}"); return jsonify({"message":"Unexpected error."}),500
 
-@app.route('/api/vendors/<string:vendor_id>', methods=['DELETE'])
-def delete_vendor(vendor_id):
+@app.route('/api/contacts/<string:contact_id>', methods=['DELETE'])
+def delete_contact(contact_id):
     conn=get_db_connection(); cursor=conn.cursor()
     try:
-        cursor.execute("DELETE FROM vendors WHERE id=?",(vendor_id,))
+        cursor.execute("DELETE FROM contacts WHERE id=?",(contact_id,))
         conn.commit()
-        if cursor.rowcount>0: conn.close(); return jsonify({"message":"Vendor deleted."}),200
-        else: conn.close(); return jsonify({"message":"Vendor not found."}),404
-    except sqlite3.Error as e: conn.rollback(); conn.close(); app.logger.error(f"DB err delete vendor {vendor_id}:{e}"); return jsonify({"message":"DB error."}),500
+        if cursor.rowcount>0: conn.close(); return jsonify({"message":"Contact deleted."}),200
+        else: conn.close(); return jsonify({"message":"Contact not found."}),404
+    except sqlite3.Error as e: conn.rollback(); conn.close(); app.logger.error(f"DB err delete contact {contact_id}:{e}"); return jsonify({"message":"DB error."}),500
 
 @app.route('/api/calculate-shipping-estimate', methods=['POST'])
 def calculate_shipping_estimate_endpoint():
@@ -1091,21 +1307,21 @@ def import_customers_csv():
                 shipping_zip_code_idx = column_indices.get('shipping_zip_code')
                 shipping_zip_code = row[shipping_zip_code_idx] if shipping_zip_code_idx is not None else ''
 
-                cursor.execute("SELECT id FROM vendors WHERE company_name = ?", (company_name,))
-                existing_vendor = cursor.fetchone()
+                cursor.execute("SELECT id FROM contacts WHERE company_name = ?", (company_name,))
+                existing_contact = cursor.fetchone()
                 
-                if existing_vendor:
+                if existing_contact:
                     cursor.execute("""
-                        UPDATE vendors 
+                        UPDATE contacts 
                         SET contact_name = ?, email = ?, phone = ?, billing_address = ?, billing_city = ?, billing_state = ?, billing_zip_code = ?, shipping_address = ?, shipping_city = ?, shipping_state = ?, shipping_zip_code = ?, updated_at = CURRENT_TIMESTAMP
                         WHERE company_name = ?
                     """, (contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, company_name))
                 else:
-                    vendor_id = str(uuid.uuid4())
+                    contact_id = str(uuid.uuid4())
                     cursor.execute("""
-                        INSERT INTO vendors (id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code)
+                        INSERT INTO contacts (id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (vendor_id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code))
+                    """, (contact_id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code))
             
             conn.commit()
             conn.close()
@@ -1294,7 +1510,7 @@ def get_settings():
         settings = {
             "company_name": "Your Company Name",
             "default_shipping_zip_code": "00000",
-            "default_email_body": "Dear [vendorCompany],\n\nPlease find attached the purchase order [orderID] for your records.\n\nWe appreciate your business!\n\nThank you,\n[yourCompany]",
+            "default_email_body": "Dear [contactCompany],\n\nPlease find attached the purchase order [orderID] for your records.\n\nWe appreciate your business!\n\nThank you,\n[yourCompany]",
             "email_address": "",
             "app_password": ""
         }
@@ -1308,7 +1524,7 @@ def get_settings():
             settings['app_password'] = ""
             updated = True
         if 'default_email_body' not in settings:
-            settings['default_email_body'] = "Dear [vendorCompany],\n\nPlease find attached the purchase order [orderID] for your records.\n\nWe appreciate your business!\n\nThank you,\n[yourCompany]"
+            settings['default_email_body'] = "Dear [contactCompany],\n\nPlease find attached the purchase order [orderID] for your records.\n\nWe appreciate your business!\n\nThank you,\n[yourCompany]"
             updated = True
         if 'email_cc' not in settings:
             settings['email_cc'] = ""
@@ -1394,6 +1610,18 @@ def settings_page():
 @app.route('/admin')
 def admin_page():
     return render_template('admin.html')
+
+@app.route('/analytics')
+def analytics_page():
+    return render_template('analytics.html')
+
+@app.route('/contacts')
+def contacts_page():
+    return render_template('contacts.html')
+
+@app.route('/orders')
+def orders_page():
+    return render_template('orders.html')
 
 @app.route('/api/export-data', methods=['GET'])
 def export_data():
@@ -1515,7 +1743,8 @@ def serve_uploads(filename):
 @app.route('/assets/<path:filename>')
 def serve_assets(filename): return send_from_directory(os.path.join(app.root_path,'assets'),filename)
 @app.route('/')
-def home(): return render_template('index.html')
+def home():
+    return redirect(url_for('admin_page'))
 
 @app.route('/shutdown', methods=['POST'])
 def shutdown(): Timer(0.1,lambda:os._exit(0)).start(); return "Shutdown initiated.",200
@@ -1536,7 +1765,7 @@ def main():
     else:
         print(f"Port {PORT} is free. Starting new server.")
         Timer(1, open_browser).start()
-        app.run(port=PORT, debug=False)
+        app.run(host='0.0.0.0', port=PORT, debug=False)
 
 if __name__ == '__main__':
     init_db()
