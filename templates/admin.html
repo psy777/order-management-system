@@ -13,12 +13,11 @@
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex h-16 items-center justify-between">
                 <div class="flex items-center space-x-10">
-                    <a href="/orders" class="text-lg font-semibold tracking-wide">FireCoast OMS</a>
+                    <a href="/admin" class="text-lg font-semibold tracking-wide">FireCoast OMS</a>
                     <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
                         <a href="/orders" class="hover:text-orange-300 transition">Orders</a>
                         <a href="/contacts" class="hover:text-orange-300 transition">Contacts</a>
                         <a href="/analytics" class="hover:text-orange-300 transition">Analytics</a>
-                        <a href="/admin" class="text-orange-300">Admin</a>
                     </div>
                 </div>
                 <div class="flex items-center space-x-3 text-sm font-medium">
@@ -57,11 +56,11 @@
         <header class="space-y-3">
             <p class="text-sm uppercase tracking-[0.3em] text-slate-500">FireCoast Operations</p>
             <h1 class="text-3xl sm:text-4xl font-bold text-slate-800">Administrative Control Center</h1>
-            <p class="text-slate-600 max-w-2xl">Welcome to the streamlined admin hub. Jump directly into daily order management or review the latest analytics to keep your teams aligned.</p>
+            <p class="text-slate-600 max-w-2xl">Welcome to the streamlined admin hub. Jump directly into daily order management, review the latest analytics, or keep your relationships current in the contacts workspace.</p>
         </header>
         <section class="space-y-6">
             <h2 class="text-lg font-semibold text-slate-700">Key Workspaces</h2>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 <a href="/orders" class="group bg-white border border-slate-200 rounded-xl shadow-sm p-6 transition transform hover:-translate-y-1 hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2">
                     <div class="flex items-center justify-between">
                         <div>
@@ -81,6 +80,16 @@
                         <span class="text-orange-500 text-xl">→</span>
                     </div>
                     <p class="mt-4 text-sm text-slate-600">Monitor revenue trends, order volume, and average values with a dedicated analytics overview.</p>
+                </a>
+                <a href="/contacts" class="group bg-white border border-slate-200 rounded-xl shadow-sm p-6 transition transform hover:-translate-y-1 hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-xs uppercase tracking-wider text-slate-500">Directory</p>
+                            <h3 class="mt-2 text-2xl font-semibold text-slate-800 group-hover:text-orange-600">Contacts</h3>
+                        </div>
+                        <span class="text-orange-500 text-xl">→</span>
+                    </div>
+                    <p class="mt-4 text-sm text-slate-600">Maintain customer handles, update profile details, and review every @mention tied to their orders.</p>
                 </a>
             </div>
         </section>

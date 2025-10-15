@@ -36,6 +36,21 @@ app = Flask(__name__, template_folder='templates')
 app.config['JSON_SORT_KEYS'] = False
 app.secret_key = os.urandom(24)
 
+_db_bootstrapped = False
+
+
+@app.before_request
+def _ensure_database_initialized():
+    """Guarantee the SQLite schema exists before serving any request."""
+    global _db_bootstrapped
+    if _db_bootstrapped:
+        return
+    try:
+        init_db()
+        _db_bootstrapped = True
+    except Exception as exc:  # pragma: no cover - defensive logging
+        app.logger.exception("Failed to initialize database before request: %s", exc)
+
 DATA_DIR = 'data'
 SETTINGS_FILE = os.path.join(DATA_DIR, 'settings.json')
 
