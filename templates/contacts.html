@@ -16,7 +16,7 @@
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex h-16 items-center justify-between">
                 <div class="flex items-center space-x-10">
-                    <a href="/admin" class="text-lg font-semibold tracking-wide">FireCoast OMS</a>
+                    <a href="/admin" id="nav-home-link" class="text-lg font-semibold tracking-wide">FireCoast OMS</a>
                     <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
                         <a href="/orders" class="hover:text-orange-300 transition">Orders</a>
                         <a href="/contacts" class="text-orange-300">Contacts</a>
@@ -32,6 +32,14 @@
     </nav>
     <script>
         document.addEventListener('DOMContentLoaded', () => {
+            const brandLink = document.getElementById('nav-home-link');
+            if (brandLink) {
+                brandLink.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    window.location.href = '/admin';
+                });
+            }
+
             const logoutLink = document.getElementById('nav-log-out');
             if (logoutLink) {
                 logoutLink.addEventListener('click', async (event) => {
