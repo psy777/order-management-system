@@ -70,6 +70,34 @@
     <script type="text/babel">
 const { useState, useEffect, useMemo } = React;
 
+const EMPTY_CONTACT = {
+    id: null,
+    contactName: '',
+    companyName: '',
+    email: '',
+    phone: '',
+    billingAddress: '',
+    billingCity: '',
+    billingState: '',
+    billingZipCode: '',
+    shippingAddress: '',
+    shippingCity: '',
+    shippingState: '',
+    shippingZipCode: '',
+    handle: '',
+    notes: '',
+    primaryOrders: [],
+    mentions: [],
+};
+
+const sortContactsByName = (list) => {
+    return [...list].sort((a, b) => {
+        const left = (a.contactName && a.contactName.trim()) || (a.companyName && a.companyName.trim()) || '';
+        const right = (b.contactName && b.contactName.trim()) || (b.companyName && b.companyName.trim()) || '';
+        return left.toLowerCase().localeCompare(right.toLowerCase());
+    });
+};
+
 const formatDateTime = (dateString) => {
     if (!dateString) return 'Unknown';
     try {
@@ -195,20 +223,32 @@ const ContactMentionTextarea = ({ label, placeholder, value, onChange, disabled 
     );
 };
 
-const ContactListItem = ({ contact, isActive, onSelect }) => (
-    <button
-        onClick={() => onSelect(contact.id)}
-        className={`w-full text-left px-4 py-3 border-b border-slate-200 transition ${isActive ? 'bg-orange-50 border-l-4 border-l-orange-500 text-orange-700 font-semibold' : 'hover:bg-slate-100 text-slate-700'}`}
-    >
-        <div className="flex items-center justify-between">
-            <div>
-                <p className="text-sm font-semibold">{contact.companyName || 'Untitled Company'}</p>
-                <p className="text-xs text-slate-500">{contact.contactName || 'Unassigned contact'}</p>
+const ContactListItem = ({ contact, isActive, onSelect }) => {
+    const rawName = (contact.contactName || '').trim();
+    const rawCompany = (contact.companyName || '').trim();
+    const email = (contact.email || '').trim();
+    const displayName = rawName || rawCompany || email || 'Unnamed contact';
+    let secondary = '';
+    if (rawName && rawCompany) {
+        secondary = rawCompany;
+    } else if ((rawName || rawCompany) && email) {
+        secondary = email;
+    }
+    return (
+        <button
+            onClick={() => onSelect(contact.id)}
+            className={`w-full text-left px-4 py-3 border-b border-slate-200 transition ${isActive ? 'bg-orange-50 border-l-4 border-l-orange-500 text-orange-700 font-semibold' : 'hover:bg-slate-100 text-slate-700'}`}
+        >
+            <div className="flex items-center justify-between">
+                <div>
+                    <p className="text-sm font-semibold">{displayName}</p>
+                    {secondary && <p className="text-xs text-slate-500">{secondary}</p>}
+                </div>
+                {contact.handle && <span className="text-xs bg-slate-200 text-slate-700 px-2 py-0.5 rounded-full">@{contact.handle}</span>}
             </div>
-            {contact.handle && <span className="text-xs bg-slate-200 text-slate-700 px-2 py-0.5 rounded-full">@{contact.handle}</span>}
-        </div>
-    </button>
-);
+        </button>
+    );
+};
 
 const ContactMentions = ({ mentions }) => {
     if (!mentions || mentions.length === 0) {
@@ -218,13 +258,18 @@ const ContactMentions = ({ mentions }) => {
         <ul className="space-y-4">
             {mentions.map(mention => (
                 <li key={mention.id} className="bg-white border border-slate-200 rounded-lg shadow-sm p-4">
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
                         <p className="text-sm font-semibold text-slate-700">
                             {mention.contextType === 'order_log' && 'Order Log'}
                             {mention.contextType === 'order_note' && 'Order Notes'}
                             {mention.contextType === 'contact_profile_note' && 'Contact Profile'}
                         </p>
-                        <span className="text-xs text-slate-400">{formatDateTime(mention.createdAt)}</span>
+                        <div className="flex items-center gap-2">
+                            {mention.isPrimaryContact && (
+                                <span className="text-xs font-semibold text-green-700 bg-green-100 px-2 py-0.5 rounded-full">Primary contact</span>
+                            )}
+                            <span className="text-xs text-slate-400">{formatDateTime(mention.createdAt)}</span>
+                        </div>
                     </div>
                     <p className="text-sm text-slate-600 mt-3 whitespace-pre-line">{mention.snippet}</p>
                     {(mention.orderId || mention.orderDisplayId) && (
@@ -248,11 +293,29 @@ const ContactMentions = ({ mentions }) => {
 };
 
 const ContactDetail = ({ contact, onSave, isSaving, contactsCatalog }) => {
-    const [formState, setFormState] = useState(contact);
+    const mapContactToFormState = (contactData = EMPTY_CONTACT) => ({
+        id: contactData?.id || null,
+        contactName: contactData?.contactName || '',
+        companyName: contactData?.companyName || '',
+        email: contactData?.email || '',
+        phone: contactData?.phone || '',
+        shippingAddress: contactData?.shippingAddress || '',
+        shippingCity: contactData?.shippingCity || '',
+        shippingState: contactData?.shippingState || '',
+        shippingZipCode: contactData?.shippingZipCode || '',
+        billingAddress: contactData?.billingAddress || '',
+        billingCity: contactData?.billingCity || '',
+        billingState: contactData?.billingState || '',
+        billingZipCode: contactData?.billingZipCode || '',
+        handle: contactData?.handle || '',
+        notes: contactData?.notes || '',
+    });
+
+    const [formState, setFormState] = useState(mapContactToFormState(contact));
     const [isDirty, setIsDirty] = useState(false);
 
     useEffect(() => {
-        setFormState(contact);
+        setFormState(mapContactToFormState(contact));
         setIsDirty(false);
     }, [contact]);
 
@@ -271,24 +334,53 @@ const ContactDetail = ({ contact, onSave, isSaving, contactsCatalog }) => {
 
     const handleSubmit = async (event) => {
         event.preventDefault();
-        await onSave(formState);
+        const saved = await onSave(formState);
+        if (saved) {
+            setFormState(mapContactToFormState(saved));
+        }
         setIsDirty(false);
     };
+
+    const formatAddress = (line1, city, state, zip) => {
+        if (!line1) return 'Not provided';
+        const segments = [line1];
+        const cityState = [city, state].filter(Boolean).join(', ');
+        if (cityState) {
+            segments.push(cityState);
+        }
+        if (zip) {
+            segments.push(zip);
+        }
+        return segments.join(' ');
+    };
+
+    const isNew = !formState.id;
+    const primaryOrders = contact.primaryOrders || [];
+    const displayName = (formState.contactName && formState.contactName.trim()) || (formState.companyName && formState.companyName.trim()) || (formState.email && formState.email.trim()) || 'Unnamed contact';
+    const showCompanyLine = Boolean(formState.companyName && formState.companyName.trim() && formState.companyName.trim() !== formState.contactName?.trim());
+    const canSubmit = Boolean((formState.contactName && formState.contactName.trim()) || (formState.companyName && formState.companyName.trim())) && isDirty && !isSaving;
 
     return (
         <div className="space-y-6">
             <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
-                <div className="flex items-start justify-between">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div>
-                        <p className="text-xs uppercase tracking-wider text-slate-500">Primary Contact</p>
-                        <h2 className="mt-2 text-2xl font-semibold text-slate-800">{formState.companyName || 'Untitled Company'}</h2>
-                        <p className="text-sm text-slate-500">{formState.contactName || 'No individual assigned'}</p>
+                        <p className="text-xs uppercase tracking-wider text-slate-500">{isNew ? 'New Contact' : 'Contact'}</p>
+                        <h2 className="mt-1 text-2xl font-semibold text-slate-800">{displayName}</h2>
+                        {showCompanyLine && <p className="text-sm text-slate-500">{formState.companyName}</p>}
                     </div>
-                    {formState.handle && (
-                        <span className="inline-flex items-center space-x-2 bg-orange-100 text-orange-700 px-3 py-1 rounded-full text-sm font-semibold">
-                            <span>@{formState.handle}</span>
-                        </span>
-                    )}
+                    <div className="flex flex-wrap gap-2">
+                        {formState.handle && (
+                            <span className="inline-flex items-center space-x-1 bg-orange-100 text-orange-700 px-3 py-1 rounded-full text-sm font-semibold">
+                                <span>@{formState.handle}</span>
+                            </span>
+                        )}
+                        {primaryOrders.length > 0 && (
+                            <span className="inline-flex items-center bg-slate-100 text-slate-700 px-3 py-1 rounded-full text-xs font-semibold">
+                                Primary for {primaryOrders.length} order{primaryOrders.length === 1 ? '' : 's'}
+                            </span>
+                        )}
+                    </div>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6 text-sm text-slate-600">
                     <div>
@@ -301,72 +393,88 @@ const ContactDetail = ({ contact, onSave, isSaving, contactsCatalog }) => {
                     </div>
                     <div>
                         <p className="font-semibold text-slate-700">Shipping Address</p>
-                        <p>{formState.shippingAddress ? `${formState.shippingAddress}, ${formState.shippingCity || ''} ${formState.shippingState || ''} ${formState.shippingZipCode || ''}` : 'Not provided'}</p>
+                        <p>{formatAddress(formState.shippingAddress, formState.shippingCity, formState.shippingState, formState.shippingZipCode)}</p>
                     </div>
                     <div>
                         <p className="font-semibold text-slate-700">Billing Address</p>
-                        <p>{formState.billingAddress ? `${formState.billingAddress}, ${formState.billingCity || ''} ${formState.billingState || ''} ${formState.billingZipCode || ''}` : 'Not provided'}</p>
+                        <p>{formatAddress(formState.billingAddress, formState.billingCity, formState.billingState, formState.billingZipCode)}</p>
                     </div>
                 </div>
+                {primaryOrders.length > 0 && (
+                    <div className="mt-6">
+                        <h3 className="text-sm font-semibold text-slate-700 mb-3">Primary Orders</h3>
+                        <ul className="space-y-2">
+                            {primaryOrders.map(order => (
+                                <li key={order.orderId} className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+                                    <div>
+                                        <p className="font-semibold text-slate-700">{order.orderDisplayId}</p>
+                                        <p className="text-xs text-slate-500">{order.status || 'Status unknown'} · Updated {formatDateTime(order.updatedAt)}</p>
+                                    </div>
+                                    <a href={`/order/${order.orderId}`} className="text-xs font-semibold text-orange-600 hover:text-orange-800">View</a>
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
             </div>
 
             <form onSubmit={handleSubmit} className="bg-white border border-slate-200 rounded-xl shadow-sm p-6 space-y-4">
-                <div className="flex items-center justify-between">
-                    <h3 className="text-lg font-semibold text-slate-800">Contact Profile</h3>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <h3 className="text-lg font-semibold text-slate-800">{isNew ? 'Create Contact' : 'Contact Profile'}</h3>
                     <button
                         type="submit"
-                        disabled={!isDirty || isSaving}
-                        className={`px-4 py-2 rounded-md text-sm font-semibold ${isDirty ? 'bg-orange-600 text-white hover:bg-orange-700' : 'bg-slate-200 text-slate-500 cursor-not-allowed'} ${isSaving ? 'opacity-75' : ''}`}
+                        disabled={!canSubmit}
+                        className={`px-4 py-2 rounded-md text-sm font-semibold ${canSubmit ? 'bg-orange-600 text-white hover:bg-orange-700' : 'bg-slate-200 text-slate-500 cursor-not-allowed'} ${isSaving ? 'opacity-75' : ''}`}
                     >
-                        {isSaving ? 'Saving…' : 'Save Changes'}
+                        {isSaving ? 'Saving…' : isNew ? 'Create Contact' : 'Save Changes'}
                     </button>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                        <label className="block text-sm font-medium text-slate-600">Company Name</label>
-                        <input value={formState.companyName || ''} onChange={e => handleChange('companyName', e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                        <label className="block text-sm font-medium text-slate-600">Contact Name</label>
+                        <input value={formState.contactName} onChange={e => handleChange('contactName', e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-slate-600">Company</label>
+                        <input value={formState.companyName} onChange={e => handleChange('companyName', e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="Optional" />
                     </div>
                     <div>
                         <label className="block text-sm font-medium text-slate-600">Handle</label>
-                        <input value={formState.handle || ''} onChange={e => handleChange('handle', e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="autogenerate" />
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-slate-600">Contact Name</label>
-                        <input value={formState.contactName || ''} onChange={e => handleChange('contactName', e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                        <input value={formState.handle} onChange={e => handleChange('handle', e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="autogenerate" />
                     </div>
                     <div>
                         <label className="block text-sm font-medium text-slate-600">Email</label>
-                        <input value={formState.email || ''} onChange={e => handleChange('email', e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                        <input value={formState.email} onChange={e => handleChange('email', e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
                     </div>
                     <div>
                         <label className="block text-sm font-medium text-slate-600">Phone</label>
-                        <input value={formState.phone || ''} onChange={e => handleChange('phone', e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                        <input value={formState.phone} onChange={e => handleChange('phone', e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
                     </div>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                         <label className="block text-sm font-medium text-slate-600">Shipping Address</label>
-                        <textarea value={formState.shippingAddress || ''} onChange={e => handleChange('shippingAddress', e.target.value)} rows={2} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500"></textarea>
+                        <textarea value={formState.shippingAddress} onChange={e => handleChange('shippingAddress', e.target.value)} rows={2} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500"></textarea>
                         <div className="grid grid-cols-3 gap-2 mt-2">
-                            <input value={formState.shippingCity || ''} onChange={e => handleChange('shippingCity', e.target.value)} placeholder="City" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
-                            <input value={formState.shippingState || ''} onChange={e => handleChange('shippingState', e.target.value)} placeholder="State" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
-                            <input value={formState.shippingZipCode || ''} onChange={e => handleChange('shippingZipCode', e.target.value)} placeholder="Zip" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                            <input value={formState.shippingCity} onChange={e => handleChange('shippingCity', e.target.value)} placeholder="City" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                            <input value={formState.shippingState} onChange={e => handleChange('shippingState', e.target.value)} placeholder="State" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                            <input value={formState.shippingZipCode} onChange={e => handleChange('shippingZipCode', e.target.value)} placeholder="Zip" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
                         </div>
                     </div>
                     <div>
                         <label className="block text-sm font-medium text-slate-600">Billing Address</label>
-                        <textarea value={formState.billingAddress || ''} onChange={e => handleChange('billingAddress', e.target.value)} rows={2} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500"></textarea>
+                        <textarea value={formState.billingAddress} onChange={e => handleChange('billingAddress', e.target.value)} rows={2} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500"></textarea>
                         <div className="grid grid-cols-3 gap-2 mt-2">
-                            <input value={formState.billingCity || ''} onChange={e => handleChange('billingCity', e.target.value)} placeholder="City" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
-                            <input value={formState.billingState || ''} onChange={e => handleChange('billingState', e.target.value)} placeholder="State" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
-                            <input value={formState.billingZipCode || ''} onChange={e => handleChange('billingZipCode', e.target.value)} placeholder="Zip" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                            <input value={formState.billingCity} onChange={e => handleChange('billingCity', e.target.value)} placeholder="City" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                            <input value={formState.billingState} onChange={e => handleChange('billingState', e.target.value)} placeholder="State" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                            <input value={formState.billingZipCode} onChange={e => handleChange('billingZipCode', e.target.value)} placeholder="Zip" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
                         </div>
                     </div>
                 </div>
                 <ContactMentionTextarea
                     label="Internal Notes"
                     placeholder="Keep shared notes and mention teammates with @handle"
-                    value={formState.notes || ''}
+                    value={formState.notes}
                     onChange={value => handleChange('notes', value)}
                     contacts={contactsCatalog}
                     rows={4}
@@ -402,11 +510,12 @@ const ContactsApp = () => {
             try {
                 const response = await fetch('/api/contacts');
                 const data = await response.json();
-                setContacts(data);
-                if (data.length > 0) {
+                const sorted = sortContactsByName(data);
+                setContacts(sorted);
+                if (sorted.length > 0) {
                     const urlParams = new URLSearchParams(window.location.search);
                     const fromUrl = urlParams.get('contact_id');
-                    const initialId = fromUrl || data[0].id;
+                    const initialId = fromUrl || sorted[0].id;
                     setSelectedId(initialId);
                 }
             } catch (err) {
@@ -422,6 +531,10 @@ const ContactsApp = () => {
     useEffect(() => {
         if (!selectedId) {
             setContactDetail(null);
+            return;
+        }
+        if (selectedId === 'new') {
+            setContactDetail({ ...EMPTY_CONTACT });
             return;
         }
         const fetchDetail = async () => {
@@ -455,27 +568,70 @@ const ContactsApp = () => {
     }, [contacts, searchTerm]);
 
     const handleSaveContact = async (formState) => {
-        if (!formState?.id) return;
+        const payload = {
+            contactName: formState.contactName?.trim() || '',
+            companyName: formState.companyName?.trim() || '',
+            email: formState.email?.trim() || '',
+            phone: formState.phone?.trim() || '',
+            shippingAddress: formState.shippingAddress || '',
+            shippingCity: formState.shippingCity || '',
+            shippingState: formState.shippingState || '',
+            shippingZipCode: formState.shippingZipCode || '',
+            billingAddress: formState.billingAddress || '',
+            billingCity: formState.billingCity || '',
+            billingState: formState.billingState || '',
+            billingZipCode: formState.billingZipCode || '',
+            handle: formState.handle?.trim() || '',
+            notes: formState.notes || '',
+        };
+
         setIsSaving(true);
         try {
-            const response = await fetch(`/api/contacts/${formState.id}`, {
-                method: 'PUT',
+            if (formState?.id) {
+                const response = await fetch(`/api/contacts/${formState.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+                if (!response.ok) {
+                    throw new Error(result.message || 'Failed to save contact');
+                }
+                const updated = result.contact || {};
+                setContacts(prev => sortContactsByName(prev.map(contact => contact.id === updated.id ? { ...contact, ...updated } : contact)));
+                const mergedDetail = contactDetail && contactDetail.id === updated.id ? { ...contactDetail, ...updated } : { ...updated };
+                setContactDetail(prev => prev && prev.id === updated.id ? { ...prev, ...updated } : prev);
+                return mergedDetail;
+            }
+
+            const response = await fetch('/api/contacts', {
+                method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(formState)
+                body: JSON.stringify(payload)
             });
             const result = await response.json();
             if (!response.ok) {
-                throw new Error(result.message || 'Failed to save contact');
+                throw new Error(result.message || 'Failed to create contact');
             }
-            const updated = result.contact || formState;
-            setContactDetail(prev => prev && prev.id === updated.id ? { ...prev, ...updated } : prev);
-            setContacts(prev => prev.map(contact => contact.id === updated.id ? { ...contact, ...updated } : contact));
+            const created = result.contact;
+            setContacts(prev => sortContactsByName([created, ...prev.filter(contact => contact.id !== created.id)]));
+            const newDetail = { ...EMPTY_CONTACT, ...created, id: created.id, mentions: [], primaryOrders: [] };
+            setContactDetail(newDetail);
+            setSelectedId(created.id);
+            return newDetail;
         } catch (err) {
             console.error('Failed to save contact', err);
             alert(err.message || 'Failed to save contact');
+            return null;
         } finally {
             setIsSaving(false);
         }
+    };
+
+    const startCreateContact = () => {
+        setError(null);
+        setSelectedId('new');
+        setContactDetail({ ...EMPTY_CONTACT });
     };
 
     if (isLoading) {
@@ -486,78 +642,105 @@ const ContactsApp = () => {
         return <div className="min-h-[60vh] flex items-center justify-center text-red-500">{error}</div>;
     }
 
+    const isNewContactActive = selectedId === 'new';
+
     return (
-        <div className="space-y-8">
-            <section className="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
-                <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
-                    <div className="space-y-2">
-                        <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Customer Directory</p>
-                        <h1 className="text-3xl font-bold text-slate-800">Contacts Workspace</h1>
-                        <p className="text-slate-600 max-w-2xl text-sm">Review every client relationship, keep profile information current, and trace @mentions back to the orders they support.</p>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 w-full lg:w-auto">
-                        <div className="bg-orange-50 text-orange-700 rounded-lg px-4 py-3">
-                            <p className="text-xs uppercase tracking-wide">Contacts</p>
-                            <p className="text-2xl font-bold">{totalContacts}</p>
-                        </div>
-                        <div className="bg-slate-100 text-slate-700 rounded-lg px-4 py-3">
-                            <p className="text-xs uppercase tracking-wide">Handles Assigned</p>
-                            <p className="text-2xl font-bold">{contactsWithHandles}</p>
-                        </div>
-                        <div className="bg-slate-100 text-slate-700 rounded-lg px-4 py-3">
-                            <p className="text-xs uppercase tracking-wide">Handle Coverage</p>
-                            <p className="text-2xl font-bold">{percentWithHandles}%</p>
-                        </div>
-                    </div>
+        <div className="space-y-6">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <h1 className="text-3xl font-bold text-slate-800">Contacts</h1>
+                    <p className="text-sm text-slate-500">Manage every relationship and surface @mentions from orders and logs.</p>
                 </div>
-            </section>
+                <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+                    <button
+                        type="button"
+                        onClick={startCreateContact}
+                        disabled={isNewContactActive}
+                        className={`inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold shadow transition-colors ${isNewContactActive ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-orange-600 text-white hover:bg-orange-700'}`}
+                    >
+                        + New Contact
+                    </button>
+                </div>
+            </div>
+            <div className="flex flex-wrap gap-3">
+                <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                    <span className="text-slate-500">Total</span>
+                    <span className="text-base font-semibold text-slate-800">{totalContacts}</span>
+                </div>
+                <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                    <span className="text-slate-500">Handles</span>
+                    <span className="text-base font-semibold text-slate-800">{contactsWithHandles}</span>
+                </div>
+                <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                    <span className="text-slate-500">Coverage</span>
+                    <span className="text-base font-semibold text-slate-800">{percentWithHandles}%</span>
+                </div>
+            </div>
             {error && (
                 <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-lg text-sm">
                     {error}
                 </div>
             )}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <aside className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-                <div className="px-4 py-3 border-b border-slate-200">
-                    <h2 className="text-lg font-semibold text-slate-800">All Contacts</h2>
-                    <input
-                        type="search"
-                        value={searchTerm}
-                        onChange={e => setSearchTerm(e.target.value)}
-                        placeholder="Search by name, company, or handle"
-                        className="mt-2 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500"
-                    />
-                </div>
-                <div className="max-h-[70vh] overflow-y-auto">
-                    {filteredContacts.length === 0 && (
-                        <div className="px-4 py-6 text-sm text-slate-500">
-                            No contacts match "{searchTerm}".
+                <aside className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+                    <div className="px-4 py-3 border-b border-slate-200 space-y-3">
+                        <div className="flex items-center justify-between gap-3">
+                            <h2 className="text-lg font-semibold text-slate-800">All Contacts</h2>
+                            <button
+                                type="button"
+                                onClick={startCreateContact}
+                                disabled={isNewContactActive}
+                                className={`hidden sm:inline-flex items-center rounded-md px-3 py-1.5 text-xs font-semibold ${isNewContactActive ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : 'bg-slate-900 text-white hover:bg-slate-700'}`}
+                            >
+                                New
+                            </button>
+                        </div>
+                        <input
+                            type="search"
+                            value={searchTerm}
+                            onChange={e => setSearchTerm(e.target.value)}
+                            placeholder="Search by name, handle, or company"
+                            className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500"
+                        />
+                        <button
+                            type="button"
+                            onClick={startCreateContact}
+                            disabled={isNewContactActive}
+                            className={`inline-flex w-full items-center justify-center rounded-md px-3 py-2 text-sm font-semibold shadow transition-colors sm:hidden ${isNewContactActive ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-orange-600 text-white hover:bg-orange-700'}`}
+                        >
+                            + New Contact
+                        </button>
+                    </div>
+                    <div className="max-h-[70vh] overflow-y-auto">
+                        {filteredContacts.length === 0 && (
+                            <div className="px-4 py-6 text-sm text-slate-500">
+                                No contacts match "{searchTerm}".
+                            </div>
+                        )}
+                        {filteredContacts.map(contact => (
+                            <ContactListItem
+                                key={contact.id}
+                                contact={contact}
+                                isActive={contact.id === selectedId}
+                                onSelect={setSelectedId}
+                            />
+                        ))}
+                    </div>
+                </aside>
+                <section className="lg:col-span-2">
+                    {contactDetail ? (
+                        <ContactDetail
+                            contact={contactDetail}
+                            onSave={handleSaveContact}
+                            isSaving={isSaving}
+                            contactsCatalog={contacts}
+                        />
+                    ) : (
+                        <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-10 flex items-center justify-center text-slate-500">
+                            Select a contact to get started.
                         </div>
                     )}
-                    {filteredContacts.map(contact => (
-                        <ContactListItem
-                            key={contact.id}
-                            contact={contact}
-                            isActive={contact.id === selectedId}
-                            onSelect={setSelectedId}
-                        />
-                    ))}
-                </div>
-            </aside>
-            <section className="lg:col-span-2">
-                {contactDetail ? (
-                    <ContactDetail
-                        contact={contactDetail}
-                        onSave={handleSaveContact}
-                        isSaving={isSaving}
-                        contactsCatalog={contacts}
-                    />
-                ) : (
-                    <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-10 flex items-center justify-center text-slate-500">
-                        Select a contact to get started.
-                    </div>
-                )}
-            </section>
+                </section>
             </div>
         </div>
     );

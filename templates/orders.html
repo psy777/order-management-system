@@ -2295,15 +2295,11 @@ const App = () => {
         await saveOrder(finalPayload); 
     };
     
-    if (isLoading) {
-        return <div className="text-center p-8">Loading...</div>;
-    }
-
     const renderPage = () => {
         switch(page) {
-            case 'createOrder': 
+            case 'createOrder':
                 return <OrderForm navigateTo={navigateTo} saveOrder={saveOrder} allContacts={allContacts} allSelectableItems={allSelectableItems} itemData={itemData} packageData={packageData} fetchAndUpdateContacts={fetchAndUpdateContacts} setOrderForEmailModal={setOrderForEmailModal} />;
-            case 'viewOrder': 
+            case 'viewOrder':
                 // This case is now handled by a separate page, but we keep the OrderForm logic
                 // for when the user navigates back to edit from the view page via URL param.
                 return <OrderForm order={activeOrder} navigateTo={navigateTo} saveOrder={saveOrder} deleteOrder={deleteOrder} allContacts={allContacts} allSelectableItems={allSelectableItems} itemData={itemData} packageData={packageData} fetchAndUpdateContacts={fetchAndUpdateContacts} setOrderForEmailModal={setOrderForEmailModal} />;
@@ -2345,6 +2341,10 @@ const App = () => {
             delete window.fireCoastLogout;
         };
     }, [handleLogout]);
+
+    if (isLoading) {
+        return <div className="text-center p-8">Loading...</div>;
+    }
 
     return (
         <div className="bg-slate-50 min-h-screen font-sans">

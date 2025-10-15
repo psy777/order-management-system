@@ -106,13 +106,55 @@ def ensure_contact_handle(cursor, contact_id, fallback_text=""):
     return new_handle
 
 
+def serialize_contact_row(row):
+    if row is None:
+        return None
+    keys = set(row.keys()) if hasattr(row, "keys") else set()
+    contact = {
+        "id": row["id"],
+        "companyName": row["company_name"] if "company_name" in keys else None,
+        "contactName": row["contact_name"] if "contact_name" in keys else None,
+        "email": row["email"] if "email" in keys else None,
+        "phone": row["phone"] if "phone" in keys else None,
+        "billingAddress": row["billing_address"] if "billing_address" in keys else None,
+        "billingCity": row["billing_city"] if "billing_city" in keys else None,
+        "billingState": row["billing_state"] if "billing_state" in keys else None,
+        "billingZipCode": row["billing_zip_code"] if "billing_zip_code" in keys else None,
+        "shippingAddress": row["shipping_address"] if "shipping_address" in keys else None,
+        "shippingCity": row["shipping_city"] if "shipping_city" in keys else None,
+        "shippingState": row["shipping_state"] if "shipping_state" in keys else None,
+        "shippingZipCode": row["shipping_zip_code"] if "shipping_zip_code" in keys else None,
+        "handle": row["handle"] if "handle" in keys else None,
+        "notes": row["notes"] if "notes" in keys else None,
+    }
+    if "created_at" in keys:
+        contact["createdAt"] = row["created_at"]
+    if "updated_at" in keys:
+        contact["updatedAt"] = row["updated_at"]
+    return contact
+
+
 def update_or_create_contact(cursor, contact_info_payload):
-    if not contact_info_payload or not contact_info_payload.get("companyName"):
-        return contact_info_payload.get("id") if contact_info_payload else None
+    if not contact_info_payload:
+        return None
 
     provided_id = contact_info_payload.get("id")
-    company_name = contact_info_payload.get("companyName")
-    contact_name = contact_info_payload.get("contactName", "")
+    raw_company = contact_info_payload.get("companyName")
+    raw_contact = contact_info_payload.get("contactName")
+
+    if provided_id and (raw_company is None or raw_contact is None):
+        cursor.execute("SELECT company_name, contact_name FROM contacts WHERE id = ?", (provided_id,))
+        existing_names = cursor.fetchone()
+    else:
+        existing_names = None
+
+    company_name = (raw_company if raw_company is not None else (existing_names["company_name"] if existing_names else ""))
+    contact_name = (raw_contact if raw_contact is not None else (existing_names["contact_name"] if existing_names else ""))
+    company_name = (company_name or "").strip()
+    contact_name = (contact_name or "").strip()
+    if not company_name and not contact_name:
+        return provided_id
+
     email = contact_info_payload.get("email", "")
     phone = contact_info_payload.get("phone", "")
     billing_address = contact_info_payload.get("billingAddress", "")
@@ -197,9 +239,9 @@ def update_contact_by_id(cursor, contact_id, contact_data_payload):
             fields_to_update.append(f"{dn} = ?")
             values_to_update.append(value)
     if not fields_to_update:
-        cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes FROM contacts WHERE id = ?", (contact_id,))
+        cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes, created_at, updated_at FROM contacts WHERE id = ?", (contact_id,))
         cv = cursor.fetchone()
-        return dict(cv) if cv else None
+        return serialize_contact_row(cv) if cv else None
     sql_query = f"UPDATE contacts SET {', '.join(fields_to_update)}, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
     values_to_update.append(contact_id)
     try:
@@ -207,11 +249,11 @@ def update_contact_by_id(cursor, contact_id, contact_data_payload):
         if cursor.rowcount == 0:
             return None
         ensure_contact_handle(cursor, contact_id)
-        cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes FROM contacts WHERE id = ?", (contact_id,))
+        cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes, created_at, updated_at FROM contacts WHERE id = ?", (contact_id,))
         uvd = cursor.fetchone()
         if not uvd:
             return None
-        updated_contact = dict(uvd)
+        updated_contact = serialize_contact_row(uvd)
         if 'notes' in contact_data_payload:
             sync_contact_mentions(cursor, extract_contact_handles(updated_contact.get('notes')), 'contact_profile_note', f'note:{contact_id}', updated_contact.get('notes'))
         return updated_contact
@@ -967,13 +1009,19 @@ def delete_item(item_code_url):
 @app.route('/api/contacts', methods=['GET'])
 def get_contacts():
     conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes FROM contacts ORDER BY company_name COLLATE NOCASE ASC")
-    contacts_list = [{
-        "id": r["id"], "companyName": r["company_name"], "contactName": r["contact_name"], "email": r["email"], "phone": r["phone"],
-        "billingAddress": r["billing_address"], "billingCity": r["billing_city"], "billingState": r["billing_state"], "billingZipCode": r["billing_zip_code"],
-        "shippingAddress": r["shipping_address"], "shippingCity": r["shipping_city"], "shippingState": r["shipping_state"], "shippingZipCode": r["shipping_zip_code"],
-        "handle": r["handle"], "notes": r["notes"]
-    } for r in cursor.fetchall()]
+    cursor.execute(
+        """
+        SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code,
+               shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes
+        FROM contacts
+        ORDER BY
+            CASE
+                WHEN contact_name IS NULL OR TRIM(contact_name) = '' THEN company_name
+                ELSE contact_name
+            END COLLATE NOCASE ASC
+        """
+    )
+    contacts_list = [serialize_contact_row(r) for r in cursor.fetchall()]
     conn.close(); return jsonify(contacts_list)
 
 @app.route('/api/contacts/<string:contact_id>', methods=['GET'])
@@ -988,25 +1036,22 @@ def api_get_contact(contact_id):
         ensure_contact_handle(cursor, contact_id, contact_row['contact_name'] or contact_row['company_name'])
         cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes, created_at, updated_at FROM contacts WHERE id=?", (contact_id,))
         refreshed_row = cursor.fetchone()
-        base_contact = {
-            "id": refreshed_row["id"],
-            "companyName": refreshed_row["company_name"],
-            "contactName": refreshed_row["contact_name"],
-            "email": refreshed_row["email"],
-            "phone": refreshed_row["phone"],
-            "billingAddress": refreshed_row["billing_address"],
-            "billingCity": refreshed_row["billing_city"],
-            "billingState": refreshed_row["billing_state"],
-            "billingZipCode": refreshed_row["billing_zip_code"],
-            "shippingAddress": refreshed_row["shipping_address"],
-            "shippingCity": refreshed_row["shipping_city"],
-            "shippingState": refreshed_row["shipping_state"],
-            "shippingZipCode": refreshed_row["shipping_zip_code"],
-            "handle": refreshed_row["handle"],
-            "notes": refreshed_row["notes"],
-            "createdAt": refreshed_row["created_at"],
-            "updatedAt": refreshed_row["updated_at"],
-        }
+        base_contact = serialize_contact_row(refreshed_row)
+
+        cursor.execute(
+            "SELECT order_id, display_id, status, updated_at FROM orders WHERE contact_id = ? ORDER BY updated_at DESC",
+            (contact_id,)
+        )
+        primary_orders = [
+            {
+                "orderId": order_row["order_id"],
+                "orderDisplayId": order_row["display_id"] or order_row["order_id"],
+                "status": order_row["status"],
+                "updatedAt": order_row["updated_at"],
+            }
+            for order_row in cursor.fetchall()
+        ]
+        base_contact["primaryOrders"] = primary_orders
 
         cursor.execute("SELECT mention_id, context_type, context_id, snippet, created_at FROM contact_mentions WHERE contact_id = ? ORDER BY created_at DESC", (contact_id,))
         mentions = []
@@ -1031,17 +1076,22 @@ def api_get_contact(contact_id):
                     if log_row:
                         mention_entry['orderId'] = log_row['order_id']
                         mention_entry['logTimestamp'] = log_row['timestamp']
-                        cursor.execute("SELECT display_id FROM orders WHERE order_id = ?", (log_row['order_id'],))
+                        cursor.execute("SELECT display_id, contact_id, status, updated_at FROM orders WHERE order_id = ?", (log_row['order_id'],))
                         order_meta = cursor.fetchone()
                         if order_meta:
                             mention_entry['orderDisplayId'] = order_meta['display_id'] or log_row['order_id']
+                            mention_entry['orderStatus'] = order_meta['status']
+                            mention_entry['orderUpdatedAt'] = order_meta['updated_at']
+                            mention_entry['isPrimaryContact'] = order_meta['contact_id'] == contact_id
             elif context_type == 'order_note':
-                cursor.execute("SELECT order_id, display_id, updated_at FROM orders WHERE order_id = ?", (context_id,))
+                cursor.execute("SELECT order_id, display_id, updated_at, contact_id, status FROM orders WHERE order_id = ?", (context_id,))
                 order_row = cursor.fetchone()
                 if order_row:
                     mention_entry['orderId'] = order_row['order_id']
                     mention_entry['orderDisplayId'] = order_row['display_id'] or order_row['order_id']
                     mention_entry['orderUpdatedAt'] = order_row['updated_at']
+                    mention_entry['orderStatus'] = order_row['status']
+                    mention_entry['isPrimaryContact'] = order_row['contact_id'] == contact_id
             mentions.append(mention_entry)
         conn.close()
         return jsonify({"contact": base_contact, "mentions": mentions})
@@ -1067,16 +1117,18 @@ def api_update_contact(contact_id):
 @app.route('/api/contacts', methods=['POST'])
 def api_create_contact():
     payload=request.json
-    if not payload or not payload.get("companyName"): return jsonify({"message":"Missing companyName."}),400
+    if not payload or not (payload.get("companyName") or payload.get("contactName")):
+        return jsonify({"message":"Contact name or company is required."}),400
     conn=get_db_connection(); cursor=conn.cursor()
     try:
         contact_id=update_or_create_contact(cursor,payload)
         if not contact_id: conn.rollback(); conn.close(); return jsonify({"message":"Failed to process contact."}),500
-        cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes FROM contacts WHERE id=?",(contact_id,))
+        cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes, created_at, updated_at FROM contacts WHERE id=?",(contact_id,))
         contact_db=cursor.fetchone()
         if not contact_db: conn.rollback(); conn.close(); app.logger.error(f"Contact {contact_id} processed but not retrieved."); return jsonify({"message":"Contact processed but not retrieved."}),500
+        serialized_contact = serialize_contact_row(contact_db)
         conn.commit(); conn.close()
-        return jsonify({"message":"Contact processed.","contact":dict(contact_db)}),201
+        return jsonify({"message":"Contact processed.","contact":serialized_contact}),201
     except sqlite3.Error as e: conn.rollback(); conn.close(); app.logger.error(f"DB err create contact:{e}"); return jsonify({"message":"DB error."}),500
     except Exception as e_g: conn.rollback(); conn.close(); app.logger.error(f"Global err create contact:{e_g}"); return jsonify({"message":"Unexpected error."}),500
 
