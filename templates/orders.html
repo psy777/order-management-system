@@ -14,8 +14,70 @@
 <link rel="icon" href="/favicon.ico" type="image/x-icon">
 <link rel="stylesheet" href="../assets/css/styles.css">
 </head>
-<body>
-    <div id="root"></div>
+<body class="bg-slate-50 min-h-screen font-sans">
+    <nav class="bg-slate-900 text-white shadow">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex h-16 items-center justify-between">
+                <div class="flex items-center space-x-10">
+                    <a href="/admin" id="nav-home-link" class="text-lg font-semibold tracking-wide">FireCoast OMS</a>
+                    <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
+                        <a href="/orders" id="nav-orders-link" class="text-orange-300">Orders</a>
+                        <a href="/contacts" class="hover:text-orange-300 transition">Contacts</a>
+                        <a href="/analytics" class="hover:text-orange-300 transition">Analytics</a>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-3 text-sm font-medium">
+                    <a href="/settings" class="hover:text-orange-300 transition">Settings</a>
+                    <a href="#" id="nav-log-out" class="hover:text-orange-300 transition">Log Out</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const brandLink = document.getElementById('nav-home-link');
+            if (brandLink) {
+                brandLink.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    window.location.href = '/admin';
+                });
+            }
+
+            const ordersLink = document.getElementById('nav-orders-link');
+            if (ordersLink) {
+                ordersLink.addEventListener('click', (event) => {
+                    if (window.fireCoastNavigateTo) {
+                        event.preventDefault();
+                        window.fireCoastNavigateTo('dashboard');
+                    }
+                });
+            }
+            const logoutLink = document.getElementById('nav-log-out');
+            if (logoutLink) {
+                logoutLink.addEventListener('click', async (event) => {
+                    event.preventDefault();
+                    if (window.fireCoastLogout) {
+                        window.fireCoastLogout();
+                        return;
+                    }
+                    try {
+                        const response = await fetch('/shutdown', { method: 'POST' });
+                        if (response.ok) {
+                            document.body.innerHTML = '<div class="min-h-screen flex items-center justify-center text-slate-700 text-lg">Application has been shut down. You can now close this tab.</div>';
+                        } else {
+                            alert('Failed to log out.');
+                        }
+                    } catch (error) {
+                        console.error('Error logging out:', error);
+                        alert('Error attempting to log out.');
+                    }
+                });
+            }
+        });
+    </script>
+    <main class="py-10">
+        <div id="root" class="orders-app"></div>
+    </main>
     {% raw %}
     <script type="text/babel">
 // --- FORMATTERS ---
@@ -39,13 +101,152 @@ const Select = ({ value, onChange, disabled = false, children }) => (
 const Textarea = ({ label, placeholder, value, onChange, disabled = false, rows = 3, onFocus, onBlur }) => (
     <div><label className="block text-sm font-medium text-slate-600">{label}</label><textarea rows={rows} placeholder={placeholder} value={value} onChange={onChange} disabled={disabled} onFocus={onFocus} onBlur={onBlur} className="mt-1 block w-full text-sm px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 disabled:bg-slate-100 disabled:text-slate-500"></textarea></div>
 );
+
+const ContactMentionTextarea = ({ label, placeholder, value, onChange, disabled = false, rows = 3, contacts = [] }) => {
+    const { useState, useRef, useEffect } = React;
+    const textareaRef = useRef(null);
+    const [suggestions, setSuggestions] = useState([]);
+    const [isOpen, setIsOpen] = useState(false);
+    const [highlightIndex, setHighlightIndex] = useState(0);
+    const lastCaretRef = useRef(0);
+
+    const findMentionQuery = (text, caretPosition) => {
+        const uptoCaret = text.slice(0, caretPosition);
+        const match = uptoCaret.match(/@([a-z0-9_.-]*)$/i);
+        if (match) {
+            return match[1].toLowerCase();
+        }
+        return null;
+    };
+
+    const updateSuggestions = (text, caret) => {
+        const query = findMentionQuery(text, caret);
+        if (query === null) {
+            setSuggestions([]);
+            setIsOpen(false);
+            setHighlightIndex(0);
+            return;
+        }
+        const filtered = contacts
+            .filter(contact => contact.handle)
+            .filter(contact => {
+                if (!query) return true;
+                const handle = contact.handle.toLowerCase();
+                const name = (contact.contactName || '').toLowerCase();
+                const company = (contact.companyName || '').toLowerCase();
+                return handle.startsWith(query) || name.includes(query) || company.includes(query);
+            })
+            .slice(0, 8);
+        setSuggestions(filtered);
+        setIsOpen(filtered.length > 0);
+        setHighlightIndex(0);
+    };
+
+    const applyMention = (contact) => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+        const caret = textarea.selectionStart;
+        const text = textarea.value;
+        const uptoCaret = text.slice(0, caret);
+        const match = uptoCaret.match(/@([a-z0-9_.-]*)$/i);
+        if (!match) return;
+        const queryLength = match[1].length;
+        const insertionPoint = caret - queryLength;
+        const replacement = `@${contact.handle}`;
+        const newValue = text.slice(0, insertionPoint) + replacement + text.slice(caret);
+        onChange(newValue);
+        setTimeout(() => {
+            textarea.focus();
+            const newCaret = insertionPoint + replacement.length;
+            textarea.setSelectionRange(newCaret, newCaret);
+        }, 0);
+        setSuggestions([]);
+        setIsOpen(false);
+    };
+
+    const handleChange = (event) => {
+        const newValue = event.target.value;
+        onChange(newValue);
+        const caret = event.target.selectionStart;
+        lastCaretRef.current = caret;
+        updateSuggestions(newValue, caret);
+    };
+
+    const handleKeyDown = (event) => {
+        if (!isOpen || suggestions.length === 0) return;
+        if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            setHighlightIndex(prev => (prev + 1) % suggestions.length);
+        } else if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            setHighlightIndex(prev => (prev - 1 + suggestions.length) % suggestions.length);
+        } else if (event.key === 'Enter') {
+            const selected = suggestions[highlightIndex];
+            if (selected) {
+                event.preventDefault();
+                applyMention(selected);
+            }
+        } else if (event.key === 'Escape') {
+            setIsOpen(false);
+        }
+    };
+
+    useEffect(() => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+        const handler = () => {
+            const caret = textarea.selectionStart;
+            lastCaretRef.current = caret;
+            updateSuggestions(textarea.value, caret);
+        };
+        textarea.addEventListener('click', handler);
+        textarea.addEventListener('keyup', handler);
+        return () => {
+            textarea.removeEventListener('click', handler);
+            textarea.removeEventListener('keyup', handler);
+        };
+    }, [contacts]);
+
+    return (
+        <div className="relative">
+            {label !== undefined && label !== null && label !== '' && (
+                <label className="block text-sm font-medium text-slate-600">{label}</label>
+            )}
+            <textarea
+                ref={textareaRef}
+                rows={rows}
+                placeholder={placeholder}
+                value={value}
+                onChange={handleChange}
+                onKeyDown={handleKeyDown}
+                disabled={disabled}
+                className="mt-1 block w-full text-sm px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 disabled:bg-slate-100 disabled:text-slate-500"
+            />
+            {isOpen && suggestions.length > 0 && (
+                <div className="absolute z-20 mt-1 w-full max-h-56 overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg">
+                    {suggestions.map((contact, index) => (
+                        <button
+                            type="button"
+                            key={contact.id || contact.handle || index}
+                            onMouseDown={(event) => { event.preventDefault(); applyMention(contact); }}
+                            className={`w-full text-left px-3 py-2 text-sm ${highlightIndex === index ? 'bg-orange-100 text-orange-900' : 'text-slate-700 hover:bg-orange-50'}`}
+                        >
+                            <span className="font-semibold">@{contact.handle}</span>
+                            <span className="ml-2 text-xs text-slate-500">{contact.contactName || contact.companyName}</span>
+                        </button>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
 const TrashIcon = () => (<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clipRule="evenodd" /></svg>);
 const DollarSignIcon = () => (<svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8v1m0 8v1m-4-4h8m-4-4a8 8 0 100 16 8 8 0 000-16z" /></svg>);
 const ViewIcon = () => (<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>);
 const PdfIcon = () => (<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>);
 const EmailIcon = () => (<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>);
 
-const OrderLogsSection = ({ orderId, canEdit }) => {
+const OrderLogsSection = ({ orderId, canEdit, allContacts = [], onContactsChanged }) => {
     if (!orderId) return null;
 
     const { useState, useEffect, useRef } = React;
@@ -88,7 +289,10 @@ const OrderLogsSection = ({ orderId, canEdit }) => {
                 setNote('');
                 setAttachment(null);
                 if (fileInputRef.current) fileInputRef.current.value = '';
-                fetchLogs();
+                await fetchLogs();
+                if (typeof onContactsChanged === 'function') {
+                    try { await onContactsChanged(); } catch (error) { console.error('Failed to refresh mentioned contacts:', error); }
+                }
             } else {
                 const result = await response.json();
                 alert('Failed to add log entry: ' + result.message);
@@ -116,7 +320,10 @@ const OrderLogsSection = ({ orderId, canEdit }) => {
             if (response.ok) {
                 setEditingLog(null);
                 setEditedAttachment(null);
-                fetchLogs();
+                await fetchLogs();
+                if (typeof onContactsChanged === 'function') {
+                    try { await onContactsChanged(); } catch (error) { console.error('Failed to refresh mentioned contacts:', error); }
+                }
             } else {
                 const error = await response.json();
                 alert('Failed to update log: ' + error.message);
@@ -132,7 +339,10 @@ const OrderLogsSection = ({ orderId, canEdit }) => {
             try {
                 const response = await fetch(`/api/orders/${orderId}/logs/${logId}`, { method: 'DELETE' });
                 if (response.ok) {
-                    fetchLogs();
+                    await fetchLogs();
+                    if (typeof onContactsChanged === 'function') {
+                        try { await onContactsChanged(); } catch (error) { console.error('Failed to refresh mentioned contacts:', error); }
+                    }
                 } else {
                     const error = await response.json();
                     alert('Failed to delete log: ' + error.message);
@@ -150,7 +360,7 @@ const OrderLogsSection = ({ orderId, canEdit }) => {
                 <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
                     <div className="bg-white p-6 rounded-lg shadow-xl w-full max-w-lg">
                         <h2 className="text-xl font-bold mb-4">Edit Log Entry</h2>
-                        <Textarea label="Note" value={editedNote} onChange={(e) => setEditedNote(e.target.value)} />
+                        <ContactMentionTextarea label="Note" value={editedNote} onChange={setEditedNote} contacts={allContacts} />
                         <div className="mt-4">
                             <label className="block text-sm font-medium text-slate-600">Attachment</label>
                             <input type="file" onChange={handleEditedFileChange} className="mt-1 block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-orange-50 file:text-orange-700 hover:file:bg-orange-100" />
@@ -159,6 +369,36 @@ const OrderLogsSection = ({ orderId, canEdit }) => {
                             <button onClick={() => setEditingLog(null)} className="px-4 py-2 bg-slate-200 text-slate-800 rounded-md hover:bg-slate-300">Cancel</button>
                             <button onClick={handleUpdate} className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700">Update</button>
                         </div>
+                    </div>
+                </div>
+            )}
+            {canEdit && (
+                <div className="bg-white rounded-lg shadow-sm border border-slate-200 mb-6">
+                    <div className="p-6">
+                        <h2 className="text-xl font-semibold text-slate-700 mb-4">Add Log Entry</h2>
+                        <form onSubmit={handleSubmit} className="space-y-4">
+                            <ContactMentionTextarea
+                                label="Notes"
+                                placeholder="Share updates and mention teammates or clients with @handle"
+                                value={note}
+                                onChange={setNote}
+                                contacts={allContacts}
+                                rows={4}
+                            />
+                            <div>
+                                <label className="block text-sm font-medium text-slate-600 mb-1">Attachment</label>
+                                <input
+                                    type="file"
+                                    ref={fileInputRef}
+                                    onChange={handleFileChange}
+                                    className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-orange-50 file:text-orange-700 hover:file:bg-orange-100"
+                                />
+                            </div>
+                            <div className="flex justify-end space-x-3">
+                                <button type="submit" className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700">Post Log</button>
+                                <button type="button" onClick={() => { setNote(''); setAttachment(null); if (fileInputRef.current) fileInputRef.current.value=''; }} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-md hover:bg-slate-300">Clear</button>
+                            </div>
+                        </form>
                     </div>
                 </div>
             )}
@@ -246,7 +486,7 @@ const NameDropToggle = ({ value, onChange, disabled = false }) => {
 const generatePdf = (order, allItems, action = 'save') => {
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF();
-    const { vendorInfo, lineItems, notes, total, id, date, scentOption, estimatedShippingDate, estimatedShipping, nameDrop, signatureDataUrl } = order; // Added signatureDataUrl and estimatedShipping
+    const { contactInfo, lineItems, notes, total, id, date, scentOption, estimatedShippingDate, estimatedShipping, nameDrop, signatureDataUrl } = order; // Added signatureDataUrl and estimatedShipping
     const timeZone = "America/Chicago";
     const dateOptions = { year: 'numeric', month: 'long', day: 'numeric' };
     doc.setFontSize(20); doc.text("Purchase Order", 14, 22);
@@ -257,31 +497,31 @@ const generatePdf = (order, allItems, action = 'save') => {
     const leftColumnX = 14;
     const rightColumnX = 105; // Start addresses further to the right
 
-    // Vendor Info - Left Column
-    doc.setFontSize(12); doc.text("Vendor Information", leftColumnX, leftColumnY); 
+    // Contact Info - Left Column
+    doc.setFontSize(12); doc.text("Contact Information", leftColumnX, leftColumnY); 
     leftColumnY += 6;
     doc.setFontSize(10);
-    doc.text(`${vendorInfo.companyName}`, leftColumnX, leftColumnY); leftColumnY += 5;
-    doc.text(`${vendorInfo.contactName}`, leftColumnX, leftColumnY); leftColumnY += 5;
-    doc.text(`${vendorInfo.email}`, leftColumnX, leftColumnY); leftColumnY += 5;
-    doc.text(`${vendorInfo.phone}`, leftColumnX, leftColumnY); leftColumnY += 5;
+    doc.text(`${contactInfo.companyName}`, leftColumnX, leftColumnY); leftColumnY += 5;
+    doc.text(`${contactInfo.contactName}`, leftColumnX, leftColumnY); leftColumnY += 5;
+    doc.text(`${contactInfo.email}`, leftColumnX, leftColumnY); leftColumnY += 5;
+    doc.text(`${contactInfo.phone}`, leftColumnX, leftColumnY); leftColumnY += 5;
 
     // Billing Address - Right Column
-    if (vendorInfo.billingAddress || vendorInfo.billingCity) {
+    if (contactInfo.billingAddress || contactInfo.billingCity) {
         doc.setFontSize(10);
         doc.text("Billing Address:", rightColumnX, rightColumnY); rightColumnY += 5;
-        const ba = `${vendorInfo.billingAddress || ''}\n${vendorInfo.billingCity || ''}, ${vendorInfo.billingState || ''} ${vendorInfo.billingZipCode || ''}`;
+        const ba = `${contactInfo.billingAddress || ''}\n${contactInfo.billingCity || ''}, ${contactInfo.billingState || ''} ${contactInfo.billingZipCode || ''}`;
         const billingAddressLines = doc.splitTextToSize(ba, 90);
         doc.text(billingAddressLines, rightColumnX, rightColumnY);
         rightColumnY += (billingAddressLines.length * 4) + 2;
     }
 
     // Shipping Address - Right Column, below Billing
-    if (vendorInfo.shippingAddress || vendorInfo.shippingCity) {
-        if (vendorInfo.billingAddress || vendorInfo.billingCity) rightColumnY += 3;
+    if (contactInfo.shippingAddress || contactInfo.shippingCity) {
+        if (contactInfo.billingAddress || contactInfo.billingCity) rightColumnY += 3;
         doc.setFontSize(10);
         doc.text("Shipping Address:", rightColumnX, rightColumnY); rightColumnY += 5;
-        const sa = `${vendorInfo.shippingAddress || ''}\n${vendorInfo.shippingCity || ''}, ${vendorInfo.shippingState || ''} ${vendorInfo.shippingZipCode || ''}`;
+        const sa = `${contactInfo.shippingAddress || ''}\n${contactInfo.shippingCity || ''}, ${contactInfo.shippingState || ''} ${contactInfo.shippingZipCode || ''}`;
         const shippingAddressLines = doc.splitTextToSize(sa, 90);
         doc.text(shippingAddressLines, rightColumnX, rightColumnY);
         rightColumnY += (shippingAddressLines.length * 4) + 2;
@@ -646,9 +886,10 @@ const EmailModal = ({ order, onClose, allItems, onEmailClientOpened, appSettings
             let body = appSettings.default_email_body;
             // Replace placeholders
             // For [customerName], prefer contact name, fallback to company name.
-            body = body.replace(/\[customerName\]/g, order.vendorInfo.contactName || order.vendorInfo.companyName || '');
-            // For [vendorCompanyName], use company name.
-            body = body.replace(/\[vendorCompanyName\]/g, order.vendorInfo.companyName || '');
+            body = body.replace(/\[customerName\]/g, order.contactInfo.contactName || order.contactInfo.companyName || '');
+            // For [contactCompanyName], use company name.
+            body = body.replace(/\[contactCompanyName\]/g, order.contactInfo.companyName || '');
+            body = body.replace(/\[contactCompany\]/g, order.contactInfo.companyName || '');
             body = body.replace(/\[orderID\]/g, order.id || '');
             body = body.replace(/\[yourCompany\]/g, appSettings.company_name || 'Your Company');
             setEditableBody(body);
@@ -656,7 +897,7 @@ const EmailModal = ({ order, onClose, allItems, onEmailClientOpened, appSettings
             // Fallback if settings are not loaded or default_email_body is missing
             const fallbackYourCompanyName = appSettings?.company_name || "Your Company";
             setEditableBody(
-`Dear ${order.vendorInfo.contactName || order.vendorInfo.companyName},
+`Dear ${order.contactInfo.contactName || order.contactInfo.companyName},
 
 Please find attached the purchase order ${order.id} for your records.
 
@@ -668,7 +909,7 @@ ${fallbackYourCompanyName}`
 
     if (!order) return null;
 
-    const recipient = order.vendorInfo.email;
+    const recipient = order.contactInfo.email;
     const subjectText = `${appSettings?.company_name || "Your Company"} - Order Confirmation ${order.id}`;
     
     // mailtoHref will be constructed on click or when rendering the link to use the latest editableBody
@@ -679,7 +920,7 @@ ${fallbackYourCompanyName}`
         <div className="bg-white rounded-lg shadow-xl p-8 w-full max-w-2xl max-h-[90vh] overflow-y-auto modal-content">
                 <h2 className="text-2xl font-bold text-slate-800 mb-4">Send Order Confirmation</h2>
                 <div className="space-y-4">
-                    <Input label="To" value={order.vendorInfo.email} disabled />
+                    <Input label="To" value={order.contactInfo.email} disabled />
                     <Input label="Subject" value={subjectText} disabled />
                     <Textarea label="Email Body" value={editableBody} onChange={e => setEditableBody(e.target.value)} rows={8} disabled={false} />
                     <div className="bg-orange-50 p-4 rounded-md border border-orange-200">
@@ -768,7 +1009,7 @@ ${fallbackYourCompanyName}`
                             setIsSending(true);
                             const emailPayload = {
                                 order: order,
-                                recipientEmail: order.vendorInfo.email,
+                                recipientEmail: order.contactInfo.email,
                                 subject: subjectText,
                                 body: editableBody,
                                 attachments: attachments.map(a => ({ original: a.original, unique: a.unique })),
@@ -918,17 +1159,88 @@ const ShippedStatusBadge = ({ statusText }) => {
     );
 };
 
+const getContactDisplayName = (contact) => {
+    if (!contact) {
+        return 'Unnamed contact';
+    }
+    const name = contact.contactName && contact.contactName.trim();
+    const company = contact.companyName && contact.companyName.trim();
+    const email = contact.email && contact.email.trim();
+    const handle = contact.handle && contact.handle.trim();
+    return name || company || email || (handle ? `@${handle}` : 'Unnamed contact');
+};
+
+const formatContactAddress = (address, city, state, zip) => {
+    const parts = [];
+    if (address) parts.push(address);
+    const cityState = [city, state].filter(Boolean).join(', ');
+    if (cityState) parts.push(cityState);
+    if (zip) parts.push(zip);
+    return parts.length > 0 ? parts.join(' ') : 'Not provided';
+};
+
+const ContactSummaryCard = ({ contact }) => {
+    if (!contact) {
+        return (
+            <div className="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500">
+                Select a primary contact to see their details here.
+            </div>
+        );
+    }
+
+    return (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
+            <div>
+                <p className="text-lg font-semibold text-slate-800">{getContactDisplayName(contact)}</p>
+                {contact.companyName && contact.companyName.trim() && (
+                    <p className="text-sm text-slate-500">{contact.companyName}</p>
+                )}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm text-slate-600">
+                <div>
+                    <p className="font-medium text-slate-700">Email</p>
+                    <p>{contact.email || 'Not provided'}</p>
+                </div>
+                <div>
+                    <p className="font-medium text-slate-700">Phone</p>
+                    <p>{contact.phone || 'Not provided'}</p>
+                </div>
+                <div className="sm:col-span-2">
+                    <p className="font-medium text-slate-700">Shipping</p>
+                    <p>{formatContactAddress(contact.shippingAddress, contact.shippingCity, contact.shippingState, contact.shippingZipCode)}</p>
+                </div>
+            </div>
+            {contact.handle && (
+                <span className="inline-flex items-center rounded-full bg-orange-100 px-2.5 py-1 text-xs font-semibold text-orange-700">
+                    @{contact.handle}
+                </span>
+            )}
+        </div>
+    );
+};
+
 // --- COMPONENTS ---
-const Dashboard = ({ orders, navigateTo, viewOrder, allVendors, allSelectableItems, setOrderForEmailModal }) => {
+const Dashboard = ({ orders, navigateTo, viewOrder, allContacts, allSelectableItems, setOrderForEmailModal }) => {
     const { useState, useEffect, useMemo, useRef } = React;
     const [filteredOrders, setFilteredOrders] = useState(orders);
     const [searchPills, setSearchPills] = useState([]);
     const [inputValue, setInputValue] = useState('');
     const [dashboardStats, setDashboardStats] = useState({ totalRevenue: 0, averageOrderRevenue: 0, totalOrders: 0 });
     const searchInputRef = useRef(null);
+    const searchAbortRef = useRef(null);
     const [showCalendar, setShowCalendar] = useState(false);
     const [calendarPosition, setCalendarPosition] = useState({ top: 0, left: 0 });
     const [dateKeyword, setDateKeyword] = useState('');
+    const [isSearching, setIsSearching] = useState(false);
+    const [searchError, setSearchError] = useState(null);
+
+    useEffect(() => {
+        return () => {
+            if (searchAbortRef.current) {
+                searchAbortRef.current.abort();
+            }
+        };
+    }, []);
 
     const handleDateSelect = (date) => {
         const dateString = date.toISOString().split('T')[0];
@@ -940,16 +1252,17 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allVendors, allSelectableIte
         setInputValue(newInputValue);
         setSearchPills(prev => [...prev, newPill]);
         setShowCalendar(false);
-        
-        // Focus the input and trigger search after state update
-        setTimeout(() => {
-            searchInputRef.current.focus();
-            handleSearch([...searchPills, newPill].join(' '));
-        }, 0);
+        setDateKeyword('');
+
+        requestAnimationFrame(() => {
+            if (searchInputRef.current) {
+                searchInputRef.current.focus();
+            }
+        });
     };
 
     const parseInputToPills = (value) => {
-        const keywords = ['from', 'vendor', 'customer', 'status', 'item', 'note', 'log', 'before', 'after', 'during'];
+        const keywords = ['from', 'contact', 'customer', 'status', 'item', 'note', 'log', 'before', 'after', 'during'];
         const keywordPattern = `(?:${keywords.join('|')}):`;
         const structuredPattern = new RegExp(`(\\b(?:${keywordPattern})(?:"[^"]+"|\S+))|(\\btotal\\s*(?:>=|<=|<>|!=|=|<|>)\\s*\\d+\\.?\\d*)`, 'g');
         
@@ -964,28 +1277,28 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allVendors, allSelectableIte
 
     const handleInputChange = (e) => {
         const { value } = e.target;
-        const dateKeywords = ['before:', 'after:', 'during:'];
-        const activeKeyword = dateKeywords.find(kw => value.includes(kw));
-    
-        if (activeKeyword) {
+        const keywordMatch = value.match(/(?:^|\s)(before|after|during):([^\s]*)$/i);
+
+        if (keywordMatch && keywordMatch[2] === '') {
+            const keyword = `${keywordMatch[1].toLowerCase()}:`;
+            setDateKeyword(keyword);
+            const inputRect = e.target.getBoundingClientRect();
+            setCalendarPosition({ top: inputRect.bottom + window.scrollY, left: inputRect.left + window.scrollX });
             if (!showCalendar) {
-                setDateKeyword(activeKeyword);
-                const inputRect = e.target.getBoundingClientRect();
-                setCalendarPosition({ top: inputRect.bottom + window.scrollY, left: inputRect.left + window.scrollX });
                 setShowCalendar(true);
             }
+        } else if (showCalendar) {
+            setShowCalendar(false);
+            setDateKeyword('');
         }
-        
+
         setInputValue(value);
     };
     
     const handleKeyDown = (e) => {
         if (e.key === 'Enter') {
             e.preventDefault();
-            // Parse any remaining text into pills before searching
             parseInputToPills(inputValue);
-            // Use a timeout to allow state to update before searching
-            setTimeout(() => handleSearch(), 0);
         } else if (e.key === 'Backspace' && inputValue === '' && searchPills.length > 0) {
             e.preventDefault();
             setSearchPills(searchPills.slice(0, -1));
@@ -996,23 +1309,68 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allVendors, allSelectableIte
         setSearchPills(searchPills.filter((_, index) => index !== indexToRemove));
     };
 
-    const handleSearch = async (query) => {
-        const fullQuery = query || [...searchPills, inputValue].join(' ').trim();
-        if (fullQuery === '') {
-            setFilteredOrders(orders);
-            return;
+    const clearSearch = () => {
+        setSearchPills([]);
+        setInputValue('');
+        setSearchError(null);
+    };
+
+    const buildSearchQuery = () => {
+        const fragments = [...searchPills];
+        if (inputValue && inputValue.trim()) {
+            fragments.push(inputValue.trim());
         }
-        try {
-            const response = await fetch(`/api/search-orders?query=${encodeURIComponent(fullQuery)}`);
-            const data = await response.json();
-            setFilteredOrders(data);
-        } catch (error) {
-            console.error("Failed to fetch search results:", error);
-        }
+        return fragments.join(' ').trim();
     };
 
     useEffect(() => {
-        setFilteredOrders(orders);
+        const query = buildSearchQuery();
+
+        if (searchAbortRef.current) {
+            searchAbortRef.current.abort();
+            searchAbortRef.current = null;
+        }
+
+        if (!query) {
+            setFilteredOrders(orders);
+            setIsSearching(false);
+            setSearchError(null);
+            return;
+        }
+
+        const controller = new AbortController();
+        searchAbortRef.current = controller;
+        setIsSearching(true);
+        setSearchError(null);
+
+        const timeoutId = setTimeout(async () => {
+            try {
+                const response = await fetch(`/api/search-orders?query=${encodeURIComponent(query)}`, { signal: controller.signal });
+                if (!response.ok) {
+                    throw new Error('Search request failed');
+                }
+                const data = await response.json();
+                setFilteredOrders(Array.isArray(data) ? data : []);
+                setSearchError(null);
+            } catch (error) {
+                if (error.name === 'AbortError') {
+                    return;
+                }
+                console.error("Failed to fetch search results:", error);
+                setSearchError('Search failed. Showing all orders.');
+                setFilteredOrders(orders);
+            } finally {
+                setIsSearching(false);
+            }
+        }, 200);
+
+        return () => {
+            controller.abort();
+            clearTimeout(timeoutId);
+        };
+    }, [searchPills, inputValue, orders]);
+
+    useEffect(() => {
         const fetchDashboardStats = async () => {
             try {
                 const response = await fetch('/api/dashboard-stats');
@@ -1045,7 +1403,7 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allVendors, allSelectableIte
                 <Calendar
                     onSelectDate={handleDateSelect}
                     position={calendarPosition}
-                    onClose={() => setShowCalendar(false)}
+                    onClose={() => { setShowCalendar(false); setDateKeyword(''); }}
                 />
             )}
             {/* EmailModal is now handled globally or by OrderForm, so removed from here directly */}
@@ -1058,8 +1416,8 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allVendors, allSelectableIte
             <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
                 <div className="flex justify-between items-center mb-4">
                     <h2 className="text-xl font-semibold text-slate-700">All Orders</h2>
-                    <div className="flex items-center space-x-2">
-                        <div 
+                    <div className="flex flex-wrap items-center gap-3">
+                        <div
                             className="flex items-center flex-wrap gap-2 w-full max-w-md bg-white border border-slate-300 rounded-md shadow-sm p-1.5 focus-within:ring-2 focus-within:ring-orange-500 focus-within:border-orange-500"
                             onClick={() => searchInputRef.current && searchInputRef.current.focus()}
                         >
@@ -1089,15 +1447,25 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allVendors, allSelectableIte
                                 className="flex-grow p-1 bg-transparent focus:outline-none min-w-[100px]"
                             />
                         </div>
-                        <button onClick={() => { parseInputToPills(inputValue); setTimeout(() => handleSearch(), 0); }} className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors">Search</button>
+                        {(searchPills.length > 0 || inputValue.trim()) && (
+                            <button
+                                type="button"
+                                onClick={clearSearch}
+                                className="px-3 py-2 text-sm font-semibold text-slate-600 border border-slate-300 rounded-md hover:bg-slate-100 transition-colors"
+                            >
+                                Clear
+                            </button>
+                        )}
+                        {isSearching && <span className="text-sm text-slate-500">Searching…</span>}
                     </div>
                 </div>
+                {searchError && <p className="text-xs text-red-600 -mt-2 mb-4 text-right">{searchError}</p>}
                 <div className="overflow-x-auto"><table className="w-full text-sm text-left text-slate-500"><thead className="text-xs text-slate-700 uppercase bg-slate-100"><tr><th className="px-4 py-3">Order ID</th><th className="px-4 py-3">Customer</th><th className="px-4 py-3">Date</th><th className="px-4 py-3">Total</th><th className="px-4 py-3">Status</th><th className="px-4 py-3 text-center">Actions</th></tr></thead>
                     <tbody>{filteredOrders.map(order => {
                         const timeZone = "America/Chicago";
                         const dateOptions = { year: 'numeric', month: 'long', day: 'numeric' };
                         return (<tr key={order.id} onClick={() => viewOrder(order)} className="bg-white border-b hover:bg-slate-50 cursor-pointer">
-                        <td className="px-4 py-3 font-medium text-slate-800">{order.display_id || order.id}</td><td className="px-4 py-3">{order.vendorInfo.companyName}</td>
+                        <td className="px-4 py-3 font-medium text-slate-800">{order.display_id || order.id}</td><td className="px-4 py-3">{getContactDisplayName(order.primaryContact || order.contactInfo)}</td>
                         <td className="px-4 py-3">{formatInTimeZone(order.date, timeZone, dateOptions)}</td><td className="px-4 py-3">${parseFloat(order.total || 0).toFixed(2)}</td>
                         <td className="px-4 py-3">
                             {order.status === 'Shipped' ? (
@@ -1139,25 +1507,83 @@ const UnsavedChangesModal = ({ onCancel, onDelete, onSaveAndClose }) => {
     );
 };
 
-const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allVendors, allSelectableItems, itemData, packageData, fetchAndUpdateVendors, setOrderForEmailModal }) => { // Added setOrderForEmailModal
-    const { useState, useMemo, useEffect, useRef } = React;
+const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, allSelectableItems, itemData, packageData, fetchAndUpdateContacts, setOrderForEmailModal }) => { // Added setOrderForEmailModal
+    const { useState, useMemo, useEffect, useRef, useCallback } = React;
+    const defaultOrderState = {
+        display_id: '',
+        contactInfo: {},
+        additionalContacts: [],
+        lineItems: [],
+        notes: '',
+        estimatedShippingDate: '',
+        estimatedShipping: '',
+        scentOption: 'Scented',
+        nameDrop: false,
+        signatureDataUrl: null,
+        statusHistory: [{ status: 'Draft', date: new Date().toISOString() }],
+        status: 'Draft',
+        shippingAddress: '',
+        shippingCity: '',
+        shippingState: '',
+        shippingZipCode: '',
+    };
+
+    const deriveInitialFormState = (incomingOrder) => {
+        if (!incomingOrder) {
+            return { ...defaultOrderState };
+        }
+        return {
+            ...defaultOrderState,
+            ...incomingOrder,
+            display_id: incomingOrder.display_id || '',
+            additionalContacts: incomingOrder.additionalContacts || [],
+            estimatedShipping: incomingOrder.estimatedShipping || '',
+            scentOption: incomingOrder.scentOption || 'Scented',
+            shippingAddress: incomingOrder.shippingAddress || '',
+            shippingCity: incomingOrder.shippingCity || '',
+            shippingState: incomingOrder.shippingState || '',
+            shippingZipCode: incomingOrder.shippingZipCode || '',
+            lineItems: incomingOrder.lineItems || [],
+            notes: incomingOrder.notes || '',
+            statusHistory: incomingOrder.statusHistory || defaultOrderState.statusHistory,
+            status: incomingOrder.status || 'Draft',
+            signatureDataUrl: incomingOrder.signatureDataUrl || null,
+        };
+    };
+
     const [isEditing, setIsEditing] = useState(!order || order.status === 'Draft');
-    const [formData, setFormData] = useState(order ? {...order, display_id: order.display_id || '', estimatedShipping: order.estimatedShipping || '', scentOption: order.scentOption || 'Scented'} : { display_id: '', vendorInfo: { companyName: '', contactName: '', email: '', phone: '', billingAddress: '', billingCity: '', billingState: '', billingZipCode: '', shippingAddress: '', shippingCity: '', shippingState: '', shippingZipCode: '' }, lineItems: [], notes: "", estimatedShippingDate: '', estimatedShipping: '', scentOption: 'Scented', nameDrop: false, signatureDataUrl: null, statusHistory: [{ status: 'Draft', date: new Date().toISOString() }], status: 'Draft' });
-    const [vendorSuggestions, setVendorSuggestions] = useState([]);
+    const [formData, setFormData] = useState(deriveInitialFormState(order));
+    const [primaryContactId, setPrimaryContactId] = useState(order?.primaryContactId || order?.contactInfo?.id || '');
+    const [primaryContactSummary, setPrimaryContactSummary] = useState(() => order?.primaryContact || order?.contactInfo || null);
     const [showUnsavedChangesModal, setShowUnsavedChangesModal] = useState(false);
-    // orderToEmail state is removed, setOrderForEmailModal prop will be used directly
     const [scanInput, setScanInput] = useState('');
     const scanInputRef = React.useRef(null);
-    const [sameAsShipping, setSameAsShipping] = useState(true);
-    const [isAutofilledVendorActive, setIsAutofilledVendorActive] = useState(false); // Renamed
-    const [initialVendorInfoAfterAutofill, setInitialVendorInfoAfterAutofill] = useState(null); // New state
-    const [isEditingAutofilledVendor, setIsEditingAutofilledVendor] = useState(false);
-    const [isVendorInputActive, setIsVendorInputActive] = useState(false);
-    const hideSuggestionsTimeoutRef = React.useRef(null);
-    // fetchAndUpdateVendors is now directly available from props destructuring
+    const [isSelectingPrimary, setIsSelectingPrimary] = useState(false);
+    const [primarySearchTerm, setPrimarySearchTerm] = useState('');
+    const [showNewContactModal, setShowNewContactModal] = useState(false);
+
+    useEffect(() => {
+        setFormData(deriveInitialFormState(order));
+        setIsEditing(!order || order.status === 'Draft');
+        setPrimaryContactId(order?.primaryContactId || order?.contactInfo?.id || '');
+        setPrimaryContactSummary(order?.primaryContact || order?.contactInfo || null);
+    }, [order]);
+
+    useEffect(() => {
+        if (!primaryContactId) {
+            setPrimaryContactSummary(null);
+            return;
+        }
+        const match = allContacts.find(contact => contact.id === primaryContactId);
+        if (match) {
+            setPrimaryContactSummary(prev => ({ ...prev, ...match }));
+        }
+    }, [primaryContactId, allContacts]);
+
+    const mentionedContacts = formData.additionalContacts || [];
 
     const handleReturnToDashboard = () => {
-        const isNewUnsavedDraft = !order && (formData.lineItems.length > 0 || (formData.vendorInfo && formData.vendorInfo.companyName));
+        const isNewUnsavedDraft = !order && (formData.lineItems.length > 0 || Boolean(primaryContactId));
 
         if (isNewUnsavedDraft) {
             setShowUnsavedChangesModal(true);
@@ -1166,45 +1592,12 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allVendors, allS
         }
     };
 
-    useEffect(() => {
-        // Debounce function
-        const debounce = (func, delay) => {
-            let timeoutId;
-            return (...args) => {
-                clearTimeout(timeoutId);
-                timeoutId = setTimeout(() => {
-                    func.apply(this, args);
-                }, delay);
-            };
-        };
-
-        const debouncedFetchShipping = debounce(fetchEstimatedShipping, 750); // 750ms debounce
-
-        if (formData.vendorInfo.shippingZipCode && formData.lineItems) {
-             // Only call if zip is 5 digits and there are items
-            if (formData.vendorInfo.shippingZipCode.length === 5 && /^\d{5}$/.test(formData.vendorInfo.shippingZipCode) && formData.lineItems.length > 0) {
-                debouncedFetchShipping(formData.vendorInfo.shippingZipCode, formData.lineItems);
-            } else if (formData.vendorInfo.shippingZipCode.length === 5 && /^\d{5}$/.test(formData.vendorInfo.shippingZipCode) && formData.lineItems.length === 0) {
-                // If valid zip but no items, set shipping to 0
-                setFormData(prev => ({ ...prev, estimatedShipping: '0.00' }));
-            }
-        }
-    }, [formData.vendorInfo.shippingZipCode, formData.lineItems]);
-
-
-
-
-
     const fetchEstimatedShipping = async (zipCode, items) => {
-        if (!zipCode || zipCode.length !== 5 || !/^\d{5}$/.test(zipCode)) {
-            // console.log("Skipping shipping calculation: Invalid ZIP code format.");
-            // Optionally set shipping to 0 or a specific state if ZIP is invalid
-            // setFormData(prev => ({ ...prev, estimatedShipping: '' })); // Clear if zip is invalid
+        if (!zipCode || !/^\d{5}$/.test(zipCode)) {
             return;
         }
         if (!items || items.length === 0) {
-            // console.log("Skipping shipping calculation: No items.");
-            setFormData(prev => ({ ...prev, estimatedShipping: '0.00' })); // No items, no shipping cost
+            setFormData(prev => ({ ...prev, estimatedShipping: '0.00' }));
             return;
         }
 
@@ -1218,64 +1611,133 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allVendors, allS
             if (response.ok) {
                 setFormData(prev => ({ ...prev, estimatedShipping: data.estimatedShipping.toString() }));
             } else {
-                console.error("Failed to fetch shipping estimate:", data.message);
-                // setFormData(prev => ({ ...prev, estimatedShipping: '' })); // Clear or set to error state
+                console.error('Failed to fetch shipping estimate:', data.message);
             }
         } catch (error) {
-            console.error("Error fetching shipping estimate:", error);
-            // setFormData(prev => ({ ...prev, estimatedShipping: '' })); // Clear or set to error state
+            console.error('Error fetching shipping estimate:', error);
         }
     };
-    
+
     useEffect(() => {
-        // Debounce function
-        const debounce = (func, delay) => {
-            let timeoutId;
-            return (...args) => {
-                clearTimeout(timeoutId);
-                timeoutId = setTimeout(() => {
-                    func.apply(this, args);
-                }, delay);
-            };
-        };
+        if (!formData.shippingZipCode || !/^\d{5}$/.test(formData.shippingZipCode)) {
+            return;
+        }
+        if (!formData.lineItems || formData.lineItems.length === 0) {
+            setFormData(prev => ({ ...prev, estimatedShipping: '0.00' }));
+            return;
+        }
+        const timeoutId = setTimeout(() => {
+            fetchEstimatedShipping(formData.shippingZipCode, formData.lineItems);
+        }, 750);
+        return () => clearTimeout(timeoutId);
+    }, [formData.shippingZipCode, formData.lineItems]);
 
-        const debouncedFetchShipping = debounce(fetchEstimatedShipping, 750); // 750ms debounce
+    let nextId = useMemo(() => formData.lineItems.length > 0 ? Math.max(...formData.lineItems.map(i => i.id || 0)) + 1 : 1, [formData.lineItems]);
 
-        if (formData.vendorInfo.shippingZipCode && formData.lineItems) {
-             // Only call if zip is 5 digits and there are items
-            if (formData.vendorInfo.shippingZipCode.length === 5 && /^\d{5}$/.test(formData.vendorInfo.shippingZipCode) && formData.lineItems.length > 0) {
-                debouncedFetchShipping(formData.vendorInfo.shippingZipCode, formData.lineItems);
-            } else if (formData.vendorInfo.shippingZipCode.length === 5 && /^\d{5}$/.test(formData.vendorInfo.shippingZipCode) && formData.lineItems.length === 0) {
-                // If valid zip but no items, set shipping to 0
-                setFormData(prev => ({ ...prev, estimatedShipping: '0.00' }));
+    const handlePrimaryContactSelect = (contact) => {
+        setPrimaryContactId(contact.id);
+        setPrimaryContactSummary(contact);
+        setIsSelectingPrimary(false);
+        setPrimarySearchTerm('');
+        setFormData(prev => ({
+            ...prev,
+            contactInfo: { ...contact },
+            shippingAddress: prev.shippingAddress || contact.shippingAddress || '',
+            shippingCity: prev.shippingCity || contact.shippingCity || '',
+            shippingState: prev.shippingState || contact.shippingState || '',
+            shippingZipCode: prev.shippingZipCode || contact.shippingZipCode || ''
+        }));
+    };
+
+    const filteredPrimaryContacts = useMemo(() => {
+        const query = primarySearchTerm.trim().toLowerCase();
+        if (!query) return allContacts;
+        return allContacts.filter(contact => {
+            const name = (contact.contactName || '').toLowerCase();
+            const company = (contact.companyName || '').toLowerCase();
+            const email = (contact.email || '').toLowerCase();
+            const handle = (contact.handle || '').toLowerCase();
+            return name.includes(query) || company.includes(query) || email.includes(query) || handle.includes(query);
+        });
+    }, [allContacts, primarySearchTerm]);
+
+    const handleApplyContactShipping = () => {
+        if (!primaryContactSummary) return;
+        setFormData(prev => ({
+            ...prev,
+            shippingAddress: primaryContactSummary.shippingAddress || '',
+            shippingCity: primaryContactSummary.shippingCity || '',
+            shippingState: primaryContactSummary.shippingState || '',
+            shippingZipCode: primaryContactSummary.shippingZipCode || ''
+        }));
+    };
+
+    const refreshMentionedContacts = useCallback(async () => {
+        if (!formData.id) return;
+        try {
+            const response = await fetch(`/api/orders/${formData.id}`);
+            if (!response.ok) {
+                console.error('Failed to refresh mentioned contacts for order', formData.id);
+                return;
             }
+            const updatedOrder = await response.json();
+            setFormData(prev => ({ ...prev, additionalContacts: updatedOrder.additionalContacts || [] }));
+        } catch (error) {
+            console.error('Failed to refresh mentioned contacts:', error);
         }
-    }, [formData.vendorInfo.shippingZipCode, formData.lineItems]);
+    }, [formData.id]);
 
+    const [newContactForm, setNewContactForm] = useState({ contactName: '', companyName: '', email: '', phone: '' });
+    const [isCreatingContact, setIsCreatingContact] = useState(false);
 
-    const formatPhoneNumber = (value) => {
-        if (!value) return value;
-        const phoneNumber = value.replace(/[^\d]/g, '');
-        const phoneNumberLength = phoneNumber.length;
-        if (phoneNumberLength < 4) return phoneNumber;
-        if (phoneNumberLength < 7) {
-            return `(${phoneNumber.slice(0, 3)}) ${phoneNumber.slice(3)}`;
+    const resetNewContactForm = () => setNewContactForm({ contactName: '', companyName: '', email: '', phone: '' });
+
+    const handleCreateContact = async (event) => {
+        event.preventDefault();
+        if (!newContactForm.contactName.trim() && !newContactForm.companyName.trim()) {
+            alert('Please provide at least a contact name or company name.');
+            return;
         }
-        return `(${phoneNumber.slice(0, 3)}) ${phoneNumber.slice(3, 6)}-${phoneNumber.slice(6, 10)}`;
-    };
 
-    let nextId = useMemo(() => formData.lineItems.length > 0 ? Math.max(...formData.lineItems.map(i => i.id)) + 1 : 1, [formData.lineItems]);
-
-    const handleVendorInputFocus = () => {
-        clearTimeout(hideSuggestionsTimeoutRef.current);
-        setIsVendorInputActive(true);
-    };
-
-    const handleVendorInputBlur = () => {
-        // Use a timeout to allow click on suggestion list before it disappears
-        hideSuggestionsTimeoutRef.current = setTimeout(() => {
-            setIsVendorInputActive(false);
-        }, 150); 
+        setIsCreatingContact(true);
+        try {
+            const response = await fetch('/api/contacts', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contactName: newContactForm.contactName.trim(),
+                    companyName: newContactForm.companyName.trim(),
+                    email: newContactForm.email.trim(),
+                    phone: newContactForm.phone.trim()
+                })
+            });
+            const result = await response.json();
+            if (!response.ok) {
+                alert(result.message || 'Failed to create contact');
+                return;
+            }
+            const created = result.contact;
+            if (fetchAndUpdateContacts) {
+                await fetchAndUpdateContacts();
+            }
+            setPrimaryContactId(created.id);
+            setPrimaryContactSummary(created);
+            setFormData(prev => ({
+                ...prev,
+                contactInfo: { ...created },
+                shippingAddress: prev.shippingAddress || created.shippingAddress || '',
+                shippingCity: prev.shippingCity || created.shippingCity || '',
+                shippingState: prev.shippingState || created.shippingState || '',
+                shippingZipCode: prev.shippingZipCode || created.shippingZipCode || ''
+            }));
+            setShowNewContactModal(false);
+            resetNewContactForm();
+        } catch (error) {
+            console.error('Failed to create contact', error);
+            alert('Failed to create contact');
+        } finally {
+            setIsCreatingContact(false);
+        }
     };
     
 const unpackPackage = (id, pkgCode) => {
@@ -1344,125 +1806,6 @@ const unpackPackage = (id, pkgCode) => {
     const addEmptyLineItem = () => { setFormData(prev => ({ ...prev, lineItems: [...prev.lineItems, { id: nextId++, item: '-- Select Item --', style: '', type: '', quantity: 1, price: 0 }] })); };
     const removeLineItem = (id) => { setFormData(prev => ({ ...prev, lineItems: prev.lineItems.filter(item => item.id !== id) })); };
 
-    const handleVendorInfoChange = (field, value) => {
-        let processedValue = value;
-        if (field === 'phone') {
-            processedValue = formatPhoneNumber(value);
-        }
-        const newVendorInfo = {...formData.vendorInfo, [field]: processedValue};
-        if (field === 'billingAddress' && sameAsBilling) {
-            newVendorInfo.shippingAddress = processedValue; // if billing address is phone, this would be an issue, but it's not
-        }
-        // Special handling if 'billingAddress' is being updated and 'sameAsBilling' is true
-        if (field === 'billingAddress' && sameAsBilling) {
-            newVendorInfo.shippingAddress = newVendorInfo.billingAddress;
-        }
-
-        setFormData(prev => ({ ...prev, vendorInfo: newVendorInfo }));
-
-        if (isAutofilledVendorActive) {
-            // Compare current form vendor info with the initial info after autofill
-            const currentVendorString = JSON.stringify(newVendorInfo);
-            const initialVendorString = JSON.stringify(initialVendorInfoAfterAutofill);
-            if (currentVendorString !== initialVendorString) {
-                setIsEditingAutofilledVendor(true);
-            } else {
-                setIsEditingAutofilledVendor(false);
-            }
-        } else {
-            setIsEditingAutofilledVendor(false); // If not an active autofilled vendor, not editing one
-        }
-
-        if (value.length > 1 && (field === 'companyName' || field === 'contactName' || field === 'email')) { // Only suggest for certain fields
-            const searchResults = allVendors.filter(vendor => {
-                const searchLower = value.toLowerCase();
-                return (vendor.companyName && vendor.companyName.toLowerCase().includes(searchLower)) ||
-                       (vendor.contactName && vendor.contactName.toLowerCase().includes(searchLower)) ||
-                       (vendor.email && vendor.email.toLowerCase().includes(searchLower));
-            });
-            setVendorSuggestions(searchResults);
-        } else { setVendorSuggestions([]); }
-    };
-
-    const handleSameAsShippingChange = (e) => {
-        const isChecked = e.target.checked;
-        setSameAsShipping(isChecked);
-        setFormData(prev => ({
-            ...prev,
-            vendorInfo: {
-                ...prev.vendorInfo,
-                billingAddress: isChecked ? prev.vendorInfo.shippingAddress : '',
-                billingCity: isChecked ? prev.vendorInfo.shippingCity : '',
-                billingState: isChecked ? prev.vendorInfo.shippingState : '',
-                billingZipCode: isChecked ? prev.vendorInfo.shippingZipCode : ''
-            }
-        }));
-    };
-    
-    useEffect(() => {
-        // Initialize sameAsShipping based on whether shipping and billing addresses are identical when an order is loaded
-        if (order && order.vendorInfo) {
-            if (order.vendorInfo.shippingAddress && order.vendorInfo.shippingAddress === order.vendorInfo.billingAddress) {
-                setSameAsShipping(true);
-            } else if (order.vendorInfo.shippingAddress && !order.vendorInfo.billingAddress) {
-                 // If billing is empty but shipping is not, assume sameAsShipping should be true initially
-                setSameAsShipping(true);
-                setFormData(prev => ({
-                    ...prev,
-                    vendorInfo: {
-                        ...prev.vendorInfo,
-                        billingAddress: prev.vendorInfo.shippingAddress,
-                        billingCity: prev.vendorInfo.shippingCity,
-                        billingState: prev.vendorInfo.shippingState,
-                        billingZipCode: prev.vendorInfo.shippingZipCode
-                    }
-                }));
-            }
-            else {
-                setSameAsShipping(false);
-            }
-        } else {
-            // For new orders, default to true
-            setSameAsShipping(true);
-             setFormData(prev => ({ // ensure billing address is copied if shipping has a default
-                ...prev,
-                vendorInfo: {
-                    ...prev.vendorInfo,
-                    billingAddress: prev.vendorInfo.shippingAddress,
-                    billingCity: prev.vendorInfo.shippingCity,
-                    billingState: prev.vendorInfo.shippingState,
-                    billingZipCode: prev.vendorInfo.shippingZipCode
-                }
-            }));
-        }
-    }, [order]);
-
-
-    const selectVendor = (vendor) => {
-        clearTimeout(hideSuggestionsTimeoutRef.current); // Clear any pending hide
-        setFormData(prev => {
-            const newVendorInfo = {...vendor};
-            if (sameAsShipping) {
-                newVendorInfo.billingAddress = newVendorInfo.shippingAddress;
-                newVendorInfo.billingCity = newVendorInfo.shippingCity;
-                newVendorInfo.billingState = newVendorInfo.shippingState;
-                newVendorInfo.billingZipCode = newVendorInfo.shippingZipCode;
-            } else {
-                // If not sameAsShipping, retain existing billingAddress from form or set to empty if vendor doesn't have one
-                newVendorInfo.billingAddress = prev.vendorInfo.billingAddress || vendor.billingAddress || '';
-                newVendorInfo.billingCity = prev.vendorInfo.billingCity || vendor.billingCity || '';
-                newVendorInfo.billingState = prev.vendorInfo.billingState || vendor.billingState || '';
-                newVendorInfo.billingZipCode = prev.vendorInfo.billingZipCode || vendor.billingZipCode || '';
-            }
-            return {...prev, vendorInfo: newVendorInfo};
-        }); 
-        setVendorSuggestions([]);
-        setInitialVendorInfoAfterAutofill(JSON.parse(JSON.stringify(vendor))); // Store a deep copy
-        setIsAutofilledVendorActive(true);
-        setIsEditingAutofilledVendor(false);
-        setIsVendorInputActive(false); // Hide suggestions immediately after selection
-    }
-    
     const orderTotals = useMemo(() => {
         const subtotal = formData.lineItems.reduce((acc, item) => acc + (item.quantity * item.price), 0);
         let nameDropSurcharge = 0;
@@ -1494,11 +1837,20 @@ const unpackPackage = (id, pkgCode) => {
     const isDraft = formData.status === 'Draft';
     const canEdit = isEditing || isDraft;
     
-    const handleStatusChange = (newStatus) => {
+    const handleStatusChange = async (newStatus) => {
         const newStatusHistory = [...formData.statusHistory, { status: newStatus, date: new Date().toISOString() }];
         const updatedOrder = { ...formData, status: newStatus, statusHistory: newStatusHistory };
         setFormData(updatedOrder);
-        saveOrder(updatedOrder);
+        try {
+            const saved = await saveOrder(updatedOrder);
+            if (saved) {
+                setFormData(deriveInitialFormState(saved));
+                setPrimaryContactId(saved.primaryContactId || saved.contactInfo?.id || '');
+                setPrimaryContactSummary(saved.primaryContact || saved.contactInfo || null);
+            }
+        } catch (error) {
+            console.error('Failed to update order status:', error);
+        }
     };
     
     const createOrderObject = (status) => {
@@ -1522,27 +1874,34 @@ const unpackPackage = (id, pkgCode) => {
         const estimatedShippingInCents = Math.round((parseFloat(formData.estimatedShipping) || 0) * 100);
         const finalTotal = subtotal + nameDropSurcharge + estimatedShippingInCents;
 
-        return { 
-            ...formData, 
+        return {
+            ...formData,
             lineItems: filteredLineItems, // Use the filtered list
-            id: formData.id || `PO-${Date.now()}`, 
-            date: isNewOrder ? (formData.date || new Date().toISOString()) : formData.date, 
-            status: finalStatus, 
-            statusHistory: newStatusHistory, 
+            id: formData.id || `PO-${Date.now()}`,
+            date: isNewOrder ? (formData.date || new Date().toISOString()) : formData.date,
+            status: finalStatus,
+            statusHistory: newStatusHistory,
             total: finalTotal, // Use the recalculated total
-            signatureDataUrl: formData.signatureDataUrl 
+            signatureDataUrl: formData.signatureDataUrl,
+            primaryContactId,
+            contactInfo: primaryContactSummary ? { ...primaryContactSummary, id: primaryContactId } : { id: primaryContactId }
         };
     };
 
     const handleSaveDraft = async () => {
-        if (!formData.vendorInfo.companyName) {
-            console.log("Order save failed: Please select a vendor.");
+        if (!primaryContactId) {
+            console.log("Order save failed: Please select a primary contact.");
             return;
         }
         const newOrder = createOrderObject('Draft');
         try {
-            await saveOrder(newOrder);
-            navigateTo('dashboard');
+            const saved = await saveOrder(newOrder);
+            if (saved) {
+                setFormData(deriveInitialFormState(saved));
+                setPrimaryContactId(saved.primaryContactId || saved.contactInfo?.id || '');
+                setPrimaryContactSummary(saved.primaryContact || saved.contactInfo || null);
+                navigateTo('dashboard');
+            }
         } catch (error) {
             // Error is already logged by saveOrder, just log to console here
             console.log(`Failed to save draft: ${error.message}`);
@@ -1550,13 +1909,24 @@ const unpackPackage = (id, pkgCode) => {
     };
     
     const handleSaveAndSend = async () => {
-        if (!formData.vendorInfo.companyName || !formData.vendorInfo.email) { console.log("Order save failed: Please select a vendor with a valid email address."); return; }
+        if (!primaryContactId || !primaryContactSummary?.email) {
+            console.log("Order save failed: Please select a contact with a valid email address.");
+            return;
+        }
         const newOrder = createOrderObject('Sent'); // Order status is 'Sent'
-        await saveOrder(newOrder); // Save the order
-        
-        // Instead of direct mailto and navigate, trigger the EmailModal
-        // The EmailModal's onEmailClientOpened callback (passed from App component) will handle navigation.
-        setOrderForEmailModal(newOrder); 
+        try {
+            const saved = await saveOrder(newOrder); // Save the order
+            if (saved) {
+                setFormData(deriveInitialFormState(saved));
+                setPrimaryContactId(saved.primaryContactId || saved.contactInfo?.id || '');
+                setPrimaryContactSummary(saved.primaryContact || saved.contactInfo || null);
+                // Instead of direct mailto and navigate, trigger the EmailModal
+                // The EmailModal's onEmailClientOpened callback (passed from App component) will handle navigation.
+                setOrderForEmailModal(saved);
+            }
+        } catch (error) {
+            console.error('Failed to save order before sending email:', error);
+        }
     };
 
     const handlePreviewPdf = () => { const tempOrder = createOrderObject(); generatePdf(tempOrder, allSelectableItems, 'preview'); };
@@ -1569,7 +1939,7 @@ const unpackPackage = (id, pkgCode) => {
 
         const orderId = formData.id;
         const orderStatus = formData.status;
-        const companyName = formData.vendorInfo?.companyName || "";
+        const companyName = primaryContactSummary?.companyName || primaryContactSummary?.contactName || "";
         const cleanedOrderId = orderId.replace("PO-", "");
         let orderIdDigitsForConfirmation = "";
 
@@ -1636,93 +2006,6 @@ const unpackPackage = (id, pkgCode) => {
         }
     };
 
-    const handleCancelVendorEdit = () => {
-        if (initialVendorInfoAfterAutofill) {
-            setFormData(prev => ({ ...prev, vendorInfo: JSON.parse(JSON.stringify(initialVendorInfoAfterAutofill)) }));
-        }
-        setIsEditingAutofilledVendor(false);
-        // isAutofilledVendorActive remains true because we reverted to the autofilled state
-    };
-
-    const handleSaveVendorEdits = async () => {
-        if (!initialVendorInfoAfterAutofill || !initialVendorInfoAfterAutofill.id) {
-            console.log("Cannot save edits: Original vendor ID is missing.");
-            return;
-        }
-        const vendorIdToUpdate = initialVendorInfoAfterAutofill.id;
-        const payload = { ...formData.vendorInfo }; // Current form data for vendor
-        // Ensure ID in payload matches, or remove it if backend prefers ID only in URL
-        payload.id = vendorIdToUpdate; 
-
-        try {
-            const response = await fetch(`/api/vendors/${vendorIdToUpdate}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            const result = await response.json();
-            if (response.ok && result.status === 'success') {
-                setInitialVendorInfoAfterAutofill(JSON.parse(JSON.stringify(result.vendor))); // Update with data from server
-                setFormData(prev => ({ ...prev, vendorInfo: JSON.parse(JSON.stringify(result.vendor)) }));
-                setIsEditingAutofilledVendor(false);
-                if (fetchAndUpdateVendors) fetchAndUpdateVendors(); // Refresh global vendor list
-                console.log("Vendor edits saved successfully.");
-            } else {
-                console.log(`Failed to save vendor edits: ${result.message || 'Unknown error'}`);
-            }
-        } catch (error) {
-            console.error("Error saving vendor edits:", error);
-            console.log(`Error saving vendor edits: ${error.message}`);
-        }
-    };
-
-    const handleCreateNewVendorRecord = async () => {
-        const currentVendorData = { ...formData.vendorInfo };
-        // Remove 'id' to ensure a new record is created by the backend
-        delete currentVendorData.id; 
-
-        if (!currentVendorData.companyName) {
-            console.log("Company name is required to create a new vendor record.");
-            return;
-        }
-
-        try {
-            const response = await fetch('/api/vendors', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(currentVendorData)
-            });
-            const result = await response.json();
-            if (response.ok && result.status === 'success' && result.vendor) {
-                const newVendorFromServer = result.vendor;
-                setFormData(prev => ({ ...prev, vendorInfo: JSON.parse(JSON.stringify(newVendorFromServer)) }));
-                setInitialVendorInfoAfterAutofill(JSON.parse(JSON.stringify(newVendorFromServer)));
-                setIsAutofilledVendorActive(true); // Now it's an "autofilled" (newly created) record
-                setIsEditingAutofilledVendor(false);
-                if (fetchAndUpdateVendors) fetchAndUpdateVendors(); // Refresh global vendor list
-                console.log(`New vendor "${newVendorFromServer.companyName}" created successfully with ID: ${newVendorFromServer.id}`);
-            } else {
-                console.log(`Failed to create new vendor record: ${result.message || 'Unknown error'}`);
-            }
-        } catch (error) {
-            console.error("Error creating new vendor record:", error);
-            console.log(`Error creating new vendor record: ${error.message}`);
-        }
-    };
-
-    const handleClearAllVendorInputs = () => { // Renamed
-        setFormData(prev => ({
-            ...prev,
-            vendorInfo: { companyName: '', contactName: '', email: '', phone: '', billingAddress: '', shippingAddress: '' }
-        }));
-        // If clearing inputs, it's no longer an "autofilled" scenario in its original sense for editing purposes.
-        // However, if the user *then* types something identical to a known vendor, suggestions should still work.
-        // The key is that `isEditingAutofilledVendor` should be false.
-        setInitialVendorInfoAfterAutofill(null); // No specific "initial" state to compare against after clearing.
-        setIsAutofilledVendorActive(false); // It's effectively a new entry or cleared state.
-        setIsEditingAutofilledVendor(false);
-    };
-
     return (
         <>
             {showUnsavedChangesModal && (
@@ -1743,69 +2026,144 @@ const unpackPackage = (id, pkgCode) => {
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 <div className="lg:col-span-2 space-y-6">
                     <div className="relative">
-                         <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200 mb-6">
-                            <Input label="Custom Order ID" value={formData.display_id} onChange={e => setFormData(prev => ({...prev, display_id: e.target.value}))} disabled={!canEdit} />
-                        </div>
-                        <div className={`bg-white p-6 rounded-lg shadow-sm border ${isEditingAutofilledVendor ? 'border-red-500 shadow-red-300/50 ring-2 ring-red-500' : 'border-slate-200'}`}>
-                            <h2 className="text-xl font-semibold text-slate-700 border-b pb-3 mb-4">Vendor Information</h2>
-                            {isEditingAutofilledVendor && (
-                                <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-center">
-                                    <p className="text-sm font-medium text-red-700">You are editing a vendor record.</p>
-                                    <div className="mt-3 flex flex-wrap justify-center gap-2">
-                                        <button onClick={handleCancelVendorEdit} className="px-3 py-1.5 text-xs bg-gray-500 text-white font-semibold rounded-md hover:bg-gray-600">Cancel</button>
-                                        <button onClick={handleSaveVendorEdits} className="px-3 py-1.5 text-xs bg-green-600 text-white font-semibold rounded-md hover:bg-green-700">Save Edits</button>
-                                        <button onClick={handleClearAllVendorInputs} className="px-3 py-1.5 text-xs bg-slate-500 text-white font-semibold rounded-md hover:bg-slate-600">Clear All Inputs</button>
-                                        <button onClick={handleCreateNewVendorRecord} className="px-3 py-1.5 text-xs bg-blue-600 text-white font-semibold rounded-md hover:bg-blue-700">Create New Record</button>
-                                    </div>
+                        <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200 space-y-6">
+                            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                                <div>
+                                    <h2 className="text-xl font-semibold text-slate-700">Primary Contact</h2>
+                                    <p className="text-sm text-slate-500 mt-1">Assign the main point of contact for this order.</p>
                                 </div>
-                            )}
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <div className="space-y-4">
-                                    <Input label="Company Name" value={formData.vendorInfo.companyName} onChange={e => handleVendorInfoChange('companyName', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
-                                    <Input label="Contact Name" value={formData.vendorInfo.contactName} onChange={e => handleVendorInfoChange('contactName', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
-                                    <Input label="Email" value={formData.vendorInfo.email} onChange={e => handleVendorInfoChange('email', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
-                                    <Input label="Phone" value={formData.vendorInfo.phone} onChange={e => handleVendorInfoChange('phone', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
-                                </div>
-                                <div className="space-y-4">
-                                    <Input label="Shipping Address" value={formData.vendorInfo.shippingAddress} onChange={e => handleVendorInfoChange('shippingAddress', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                        <Input label="City" value={formData.vendorInfo.shippingCity} onChange={e => handleVendorInfoChange('shippingCity', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
-                                        <Input label="State" value={formData.vendorInfo.shippingState} onChange={e => handleVendorInfoChange('shippingState', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
-                                        <Input label="Zip Code" value={formData.vendorInfo.shippingZipCode} onChange={e => handleVendorInfoChange('shippingZipCode', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
-                                    </div>
-                                    <label className="block text-sm font-medium text-slate-600 pt-4">Billing Address</label>
-                                    <div className="flex items-center">
-                                        <input id="sameAsShipping" type="checkbox" checked={sameAsShipping} onChange={handleSameAsShippingChange} disabled={!canEdit} className="h-4 w-4 text-orange-600 border-slate-300 rounded focus:ring-orange-500 disabled:opacity-50" />
-                                        <label htmlFor="sameAsShipping" className="ml-2 block text-sm text-slate-700">Same as Shipping Address</label>
-                                    </div>
-                                    {!sameAsShipping && (
-                                        <div className="space-y-4">
-                                            <Input label="Billing Address" value={formData.vendorInfo.billingAddress} onChange={e => handleVendorInfoChange('billingAddress', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
-                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                                <Input label="City" value={formData.vendorInfo.billingCity} onChange={e => handleVendorInfoChange('billingCity', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
-                                                <Input label="State" value={formData.vendorInfo.billingState} onChange={e => handleVendorInfoChange('billingState', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
-                                                <Input label="Zip Code" value={formData.vendorInfo.billingZipCode} onChange={e => handleVendorInfoChange('billingZipCode', e.target.value)} disabled={!canEdit} onFocus={handleVendorInputFocus} onBlur={handleVendorInputBlur} />
-                                            </div>
-                                        </div>
+                                <div className="flex flex-wrap gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => { if (!canEdit) return; setIsSelectingPrimary(true); setPrimarySearchTerm(''); }}
+                                        disabled={!canEdit}
+                                        className={`px-4 py-2 rounded-md text-sm font-semibold shadow ${canEdit ? 'bg-slate-900 text-white hover:bg-slate-700' : 'bg-slate-200 text-slate-500 cursor-not-allowed'}`}
+                                    >
+                                        {primaryContactId ? 'Change Contact' : 'Select Contact'}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => { if (!canEdit) return; resetNewContactForm(); setShowNewContactModal(true); }}
+                                        disabled={!canEdit}
+                                        className={`px-4 py-2 rounded-md text-sm font-semibold ${canEdit ? 'bg-orange-600 text-white hover:bg-orange-700' : 'bg-slate-200 text-slate-500 cursor-not-allowed'}`}
+                                    >
+                                        + New Contact
+                                    </button>
+                                    {primaryContactId && (
+                                        <a
+                                            href={`/contacts?contact_id=${primaryContactId}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="px-4 py-2 rounded-md text-sm font-semibold text-slate-700 border border-slate-300 hover:bg-slate-100"
+                                        >
+                                            Open in Contacts
+                                        </a>
                                     )}
                                 </div>
                             </div>
+                            <ContactSummaryCard contact={primaryContactSummary} />
+                            <div className="space-y-4 border-t border-slate-200 pt-6">
+                                <div className="flex items-center justify-between">
+                                    <h3 className="text-lg font-semibold text-slate-700">Shipping Details</h3>
+                                    {primaryContactSummary && canEdit && (
+                                        <button
+                                            type="button"
+                                            onClick={handleApplyContactShipping}
+                                            className="text-sm font-semibold text-orange-600 hover:text-orange-700"
+                                        >
+                                            Use contact address
+                                        </button>
+                                    )}
+                                </div>
+                                <Textarea
+                                    label="Shipping Address"
+                                    rows={2}
+                                    value={formData.shippingAddress}
+                                    onChange={e => setFormData(prev => ({ ...prev, shippingAddress: e.target.value }))}
+                                    disabled={!canEdit}
+                                />
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <Input label="City" value={formData.shippingCity} onChange={e => setFormData(prev => ({ ...prev, shippingCity: e.target.value }))} disabled={!canEdit} />
+                                    <Input label="State" value={formData.shippingState} onChange={e => setFormData(prev => ({ ...prev, shippingState: e.target.value }))} disabled={!canEdit} />
+                                    <Input label="Zip Code" value={formData.shippingZipCode} onChange={e => setFormData(prev => ({ ...prev, shippingZipCode: e.target.value }))} disabled={!canEdit} />
+                                </div>
+                            </div>
+                            <div className="border-t border-slate-200 pt-6 space-y-3">
+                                <div className="flex items-center justify-between">
+                                    <h3 className="text-lg font-semibold text-slate-700">Mentioned Contacts</h3>
+                                </div>
+                                <p className="text-sm text-slate-500">Mention teammates or customers in notes and logs with <span className="font-semibold text-slate-700">@handle</span>. They’ll appear here automatically.</p>
+                                {mentionedContacts.length === 0 ? (
+                                    <p className="text-sm text-slate-500">No other contacts have been mentioned yet.</p>
+                                ) : (
+                                    <div className="flex flex-wrap gap-2">
+                                        {mentionedContacts.map(contact => (
+                                            <span key={contact.id} className="inline-flex items-center rounded-full bg-slate-200 px-3 py-1 text-sm font-medium text-slate-700">
+                                                {getContactDisplayName(contact)}
+                                            </span>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
                         </div>
-                        {vendorSuggestions.length > 0 && canEdit && isVendorInputActive && (
-                            <div className="absolute z-10 w-full mt-1 bg-white border border-slate-300 rounded-lg shadow-lg">
-                                <ul className="py-1 max-h-60 overflow-y-auto">
-                                    {vendorSuggestions.map(vendor => (
-                                        <li key={vendor.id} onClick={() => selectVendor(vendor)} className="px-4 py-2 hover:bg-orange-100 cursor-pointer">
-                                            <p className="font-semibold text-slate-800">{vendor.companyName}</p>
-                                            <p className="text-sm text-slate-500">{vendor.contactName} - {vendor.email}</p>
-                                        </li>
-                                    ))}
-                                </ul>
+                        {isSelectingPrimary && (
+                            <div className="absolute inset-0 z-20 flex items-start justify-center bg-black/20 px-4 py-10">
+                                <div className="w-full max-w-lg rounded-lg bg-white p-6 shadow-xl space-y-4">
+                                    <div className="flex items-center justify-between">
+                                        <h3 className="text-lg font-semibold text-slate-800">Select Primary Contact</h3>
+                                        <button type="button" onClick={() => { setIsSelectingPrimary(false); setPrimarySearchTerm(''); }} className="text-slate-400 hover:text-slate-600 text-xl leading-none">&times;</button>
+                                    </div>
+                                    <input
+                                        type="search"
+                                        value={primarySearchTerm}
+                                        onChange={e => setPrimarySearchTerm(e.target.value)}
+                                        placeholder="Search by name, handle, or company"
+                                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500"
+                                    />
+                                    <div className="max-h-64 overflow-y-auto space-y-2">
+                                        {filteredPrimaryContacts.length === 0 ? (
+                                            <p className="text-sm text-slate-500">No contacts match "{primarySearchTerm}".</p>
+                                        ) : (
+                                            filteredPrimaryContacts.map(contact => (
+                                                <button
+                                                    key={contact.id}
+                                                    type="button"
+                                                    onClick={() => handlePrimaryContactSelect(contact)}
+                                                    className="w-full rounded-md border border-slate-200 px-3 py-2 text-left hover:border-orange-400 hover:bg-orange-50"
+                                                >
+                                                    <p className="font-semibold text-slate-800">{getContactDisplayName(contact)}</p>
+                                                    {contact.companyName && <p className="text-sm text-slate-500">{contact.companyName}</p>}
+                                                    {contact.email && <p className="text-xs text-slate-400">{contact.email}</p>}
+                                                </button>
+                                            ))
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                        {showNewContactModal && (
+                            <div className="absolute inset-0 z-30 flex items-start justify-center bg-black/30 px-4 py-10">
+                                <form onSubmit={handleCreateContact} className="w-full max-w-lg rounded-lg bg-white p-6 shadow-xl space-y-4">
+                                    <div className="flex items-center justify-between">
+                                        <h3 className="text-lg font-semibold text-slate-800">Create New Contact</h3>
+                                        <button type="button" onClick={() => { setShowNewContactModal(false); resetNewContactForm(); }} className="text-slate-400 hover:text-slate-600 text-xl leading-none">&times;</button>
+                                    </div>
+                                    <div className="grid grid-cols-1 gap-4">
+                                        <Input label="Contact Name" value={newContactForm.contactName} onChange={e => setNewContactForm(prev => ({ ...prev, contactName: e.target.value }))} disabled={isCreatingContact} />
+                                        <Input label="Company" value={newContactForm.companyName} onChange={e => setNewContactForm(prev => ({ ...prev, companyName: e.target.value }))} disabled={isCreatingContact} />
+                                        <Input label="Email" value={newContactForm.email} onChange={e => setNewContactForm(prev => ({ ...prev, email: e.target.value }))} disabled={isCreatingContact} />
+                                        <Input label="Phone" value={newContactForm.phone} onChange={e => setNewContactForm(prev => ({ ...prev, phone: e.target.value }))} disabled={isCreatingContact} />
+                                    </div>
+                                    <div className="flex items-center justify-end gap-3">
+                                        <button type="button" onClick={() => { setShowNewContactModal(false); resetNewContactForm(); }} className="px-4 py-2 text-sm font-semibold text-slate-600 hover:text-slate-800">Cancel</button>
+                                        <button type="submit" disabled={isCreatingContact} className={`px-4 py-2 rounded-md text-sm font-semibold text-white ${isCreatingContact ? 'bg-orange-300 cursor-not-allowed' : 'bg-orange-600 hover:bg-orange-700'}`}>{isCreatingContact ? 'Creating…' : 'Create Contact'}</button>
+                                    </div>
+                                </form>
                             </div>
                         )}
                     </div>
 
-                    <OrderLogsSection orderId={formData.id} canEdit={canEdit} />
+                    <OrderLogsSection orderId={formData.id} canEdit={canEdit} allContacts={allContacts} onContactsChanged={refreshMentionedContacts} />
 
                     <div className="bg-white rounded-lg shadow-sm border border-slate-200"><div className="p-6 border-b"><h2 className="text-xl font-semibold text-slate-700 mb-4">Line Items</h2>{canEdit && (<div className="flex gap-2"><input ref={scanInputRef} type="text" value={scanInput} onChange={e => setScanInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { handleScanAddItem(e); } }} placeholder="Scan or Enter Item Code" className="flex-grow block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm" /><button onClick={handleScanAddItem} className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors">Add</button></div>)}</div><div className="overflow-x-auto"><table className="w-full text-sm text-left text-slate-500"><thead className="text-xs text-slate-700 uppercase bg-slate-100"><tr><th scope="col" className="px-4 py-3">Item</th><th scope="col" className="px-4 py-3">Style</th><th scope="col" className="px-4 py-3 text-center">Qty</th><th scope="col" className="px-4 py-3 text-right">Unit Price</th><th scope="col" className="px-4 py-3 text-right">Total</th>{canEdit && <th scope="col" className="px-2 py-3"></th>}</tr></thead><tbody>{formData.lineItems.map(item => (<tr key={item.id} className="border-b align-middle"><td className="px-4 py-2"><Select value={item.item} onChange={e => handleLineItemChange(item.id, 'item', e.target.value)} disabled={!canEdit}><option value="-- Select Item --">-- Select Item --</option>{Object.entries(allSelectableItems).map(([id, details]) => (<option key={id} value={id}>{details.name}</option>))}</Select></td><td className="px-4 py-2"><Select value={item.style} onChange={e => handleLineItemChange(item.id, 'style', e.target.value)} disabled={!canEdit}>{(allSelectableItems[item.item]?.styles || []).map(name => (<option key={name} value={name}>{name}</option>))}</Select></td><td className="px-4 py-2"><input type="number" min="0" value={item.quantity} onChange={e => handleLineItemChange(item.id, 'quantity', Number(e.target.value))} className="w-16 sm:w-20 text-center bg-white border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm p-2" disabled={!canEdit} /></td><td className="px-4 py-2 text-right"><PriceInput value={item.price} onChange={newPrice => handleLineItemChange(item.id, 'price', newPrice)} disabled={!canEdit}/></td><td className="px-4 py-2 text-right font-medium text-slate-800">${((item.quantity * item.price) / 100).toFixed(2)}</td>{canEdit && <td className="px-2 py-2 text-center"><button onClick={() => removeLineItem(item.id)} className="text-slate-400 hover:text-red-600 p-1 rounded-full hover:bg-red-100 transition-colors"><TrashIcon /></button></td>}</tr>))}</tbody></table></div>{canEdit && <div className="p-6 border-t"><button onClick={addEmptyLineItem} className="w-full text-center px-4 py-2 bg-orange-100 text-orange-700 font-semibold rounded-md hover:bg-orange-200 transition-colors">+ Add Line Item</button></div>}</div>
                 </div>
@@ -1820,7 +2178,18 @@ const unpackPackage = (id, pkgCode) => {
                             disabled={!canEdit}
                         />
                     </div>
-                    <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200"><h2 className="text-xl font-semibold text-slate-700 mb-3">Notes</h2><Textarea value={formData.notes} onChange={e => setFormData(p => ({...p, notes: e.target.value}))} rows={4} disabled={!canEdit} /></div>
+                    <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
+                        <h2 className="text-xl font-semibold text-slate-700 mb-3">Notes</h2>
+                        <ContactMentionTextarea
+                            value={formData.notes}
+                            onChange={value => setFormData(p => ({...p, notes: value}))}
+                            rows={4}
+                            disabled={!canEdit}
+                            contacts={allContacts}
+                            placeholder="Capture order notes and use @handle to mention key contacts"
+                            label=""
+                        />
+                    </div>
                     <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
                         <h2 className="text-xl font-semibold text-slate-700 mb-4">Order Summary</h2>
                         <div className="space-y-3">
@@ -1844,7 +2213,26 @@ const unpackPackage = (id, pkgCode) => {
                         {isDraft && <button onClick={handleSaveAndSend} className="w-full text-center px-6 py-3 bg-orange-600 text-white font-bold rounded-md hover:bg-orange-700">Save and Send</button>}
                         {!isDraft && !isEditing && <button onClick={() => setOrderForEmailModal(formData)} className="w-full text-center px-6 py-3 bg-orange-600 text-white font-bold rounded-md hover:bg-orange-700">Resend Email</button>}
                         {isDraft && <button onClick={handleSaveDraft} className="w-full text-center px-6 py-3 bg-slate-600 text-white font-bold rounded-md hover:bg-slate-700">Save as Draft</button>}
-                        {isEditing && !isDraft && <button onClick={() => {saveOrder(createOrderObject()); setIsEditing(false);}} className="w-full text-center px-6 py-3 bg-slate-600 text-white font-bold rounded-md hover:bg-slate-700">Save Changes</button>}
+                        {isEditing && !isDraft && (
+                            <button
+                                onClick={async () => {
+                                    try {
+                                        const saved = await saveOrder(createOrderObject());
+                                        if (saved) {
+                                            setFormData(deriveInitialFormState(saved));
+                                            setPrimaryContactId(saved.primaryContactId || saved.contactInfo?.id || '');
+                                            setPrimaryContactSummary(saved.primaryContact || saved.contactInfo || null);
+                                            setIsEditing(false);
+                                        }
+                                    } catch (error) {
+                                        console.error('Failed to save order changes:', error);
+                                    }
+                                }}
+                                className="w-full text-center px-6 py-3 bg-slate-600 text-white font-bold rounded-md hover:bg-slate-700"
+                            >
+                                Save Changes
+                            </button>
+                        )}
                         <button onClick={handlePreviewPdf} className="w-full text-center px-6 py-3 bg-white text-slate-700 font-bold rounded-md hover:bg-slate-100 border border-slate-300">Preview PDF</button>
                         {!isDraft && !isEditing && <button onClick={() => setIsEditing(true)} className="w-full text-center px-6 py-3 bg-blue-100 text-blue-700 font-bold rounded-md hover:bg-blue-200">Edit Order</button>}
                         {/* Always show delete button if order exists (formData.id) */}
@@ -1865,12 +2253,12 @@ const unpackPackage = (id, pkgCode) => {
 
 // --- MAIN APP COMPONENT (Router) ---
 const App = () => {
-    const { useState, useEffect } = React;
+    const { useState, useEffect, useCallback } = React;
     const [page, setPage] = useState('dashboard');
     const [orders, setOrders] = useState([]);
     const [activeOrder, setActiveOrder] = useState(null);
     const [isLoading, setIsLoading] = useState(true);
-    const [allVendors, setAllVendors] = useState([]);
+    const [allContacts, setAllContacts] = useState([]);
     const [allSelectableItems, setAllSelectableItems] = useState({});
     const [itemData, setItemData] = useState({});
     const [packageData, setPackageData] = useState({});
@@ -1892,13 +2280,13 @@ const App = () => {
         });
     };
 
-    const fetchAndUpdateVendors = async () => {
+    const fetchAndUpdateContacts = async () => {
         try {
-            const vendorsRes = await fetch('/api/vendors');
-            const vendorsData = await vendorsRes.json();
-            setAllVendors(vendorsData);
+            const contactsRes = await fetch('/api/contacts');
+            const contactsData = await contactsRes.json();
+            setAllContacts(contactsData);
         } catch (error) {
-            console.error("Failed to re-fetch vendors:", error);
+            console.error("Failed to re-fetch contacts:", error);
         }
     };
 
@@ -1906,9 +2294,9 @@ const App = () => {
         const fetchData = async () => {
             setIsLoading(true);
             try {
-            const [ordersRes, vendorsRes, itemsRes, packagesRes, settingsRes] = await Promise.all([
+            const [ordersRes, contactsRes, itemsRes, packagesRes, settingsRes] = await Promise.all([
                 fetch('/api/orders'),
-                fetch('/api/vendors'),
+                fetch('/api/contacts'),
                 fetch('/api/items'),
                 fetch('/api/packages'),
                 fetch('/api/settings') // Fetch settings
@@ -1917,7 +2305,7 @@ const App = () => {
             const ordersData   = await ordersRes.json();
             const settingsData = await settingsRes.json(); // Get settings data
             setAppSettings(settingsData); // Set app settings
-            const vendorsData  = await vendorsRes.json();
+            const contactsData  = await contactsRes.json();
             const itemsDataArray    = await itemsRes.json(); // Renamed to itemsDataArray
             const packagesData = await packagesRes.json();
 
@@ -1928,7 +2316,7 @@ const App = () => {
             }, {});
 
             setOrders(ordersData);
-            setAllVendors(vendorsData);
+            setAllContacts(contactsData);
             // Combine items (now itemsDataById) and packages for the dropdown
             const combinedSelectableItems = { ...itemsDataById }; // Spread the object
             for (const pkgId in packagesData) {
@@ -1951,6 +2339,11 @@ const App = () => {
                     setActiveOrder(orderToEdit);
                     setPage('viewOrder');
                 }
+            } else {
+                const viewParam = urlParams.get('view');
+                if (viewParam === 'create') {
+                    setPage('createOrder');
+                }
             }
 
             } catch (error) {
@@ -1963,7 +2356,13 @@ const App = () => {
     }, []);
 
     
-    const navigateTo = (pageName) => { setPage(pageName); };
+    const navigateTo = (pageName) => {
+        if (pageName === 'settings') {
+            window.location.href = '/settings';
+            return;
+        }
+        setPage(pageName);
+    };
 
     const viewOrder = (order) => {
         window.location.href = `/order/${order.id}`;
@@ -1991,6 +2390,7 @@ const App = () => {
                         return [savedOrderFromServer, ...prevOrders.filter(o => o.id !== savedOrderFromServer.id)];
                     }
                 });
+                return savedOrderFromServer;
             } else {
                 console.error("Failed to save order - server response:", result.message || "Unknown server error");
                 throw new Error(result.message || "Failed to save order on server.");
@@ -2041,27 +2441,21 @@ const App = () => {
         await saveOrder(finalPayload); 
     };
     
-    if (isLoading) {
-        return <div className="text-center p-8">Loading...</div>;
-    }
-
     const renderPage = () => {
         switch(page) {
-            case 'createOrder': 
-                return <OrderForm navigateTo={navigateTo} saveOrder={saveOrder} allVendors={allVendors} allSelectableItems={allSelectableItems} itemData={itemData} packageData={packageData} fetchAndUpdateVendors={fetchAndUpdateVendors} setOrderForEmailModal={setOrderForEmailModal} />;
-            case 'viewOrder': 
+            case 'createOrder':
+                return <OrderForm navigateTo={navigateTo} saveOrder={saveOrder} allContacts={allContacts} allSelectableItems={allSelectableItems} itemData={itemData} packageData={packageData} fetchAndUpdateContacts={fetchAndUpdateContacts} setOrderForEmailModal={setOrderForEmailModal} />;
+            case 'viewOrder':
                 // This case is now handled by a separate page, but we keep the OrderForm logic
                 // for when the user navigates back to edit from the view page via URL param.
-                return <OrderForm order={activeOrder} navigateTo={navigateTo} saveOrder={saveOrder} deleteOrder={deleteOrder} allVendors={allVendors} allSelectableItems={allSelectableItems} itemData={itemData} packageData={packageData} fetchAndUpdateVendors={fetchAndUpdateVendors} setOrderForEmailModal={setOrderForEmailModal} />;
-            case 'settings': 
-                return <iframe src="/settings" style={{ width: '100%', height: 'calc(100vh - 100px)', border: 'none' }}></iframe>;
-            case 'dashboard': 
-            default: 
-                return <Dashboard orders={orders} navigateTo={navigateTo} viewOrder={viewOrder} allVendors={allVendors} allSelectableItems={allSelectableItems} setOrderForEmailModal={setOrderForEmailModal} />;
+                return <OrderForm order={activeOrder} navigateTo={navigateTo} saveOrder={saveOrder} deleteOrder={deleteOrder} allContacts={allContacts} allSelectableItems={allSelectableItems} itemData={itemData} packageData={packageData} fetchAndUpdateContacts={fetchAndUpdateContacts} setOrderForEmailModal={setOrderForEmailModal} />;
+            case 'dashboard':
+            default:
+                return <Dashboard orders={orders} navigateTo={navigateTo} viewOrder={viewOrder} allContacts={allContacts} allSelectableItems={allSelectableItems} setOrderForEmailModal={setOrderForEmailModal} />;
         }
     }
 
-    const handleLogout = async () => {
+    const handleLogout = useCallback(async () => {
         try {
             const response = await fetch('/shutdown', { method: 'POST' });
             if (response.ok) {
@@ -2077,7 +2471,26 @@ const App = () => {
             console.error('Error during shutdown attempt:', error);
             alert('Error attempting to shut down the server. Please use Task Manager to stop the task.');
         }
-    };
+    }, []);
+
+    useEffect(() => {
+        window.fireCoastNavigateTo = (target) => {
+            if (target === 'createOrder') {
+                setPage('createOrder');
+            } else if (target === 'dashboard') {
+                setPage('dashboard');
+            }
+        };
+        window.fireCoastLogout = handleLogout;
+        return () => {
+            delete window.fireCoastNavigateTo;
+            delete window.fireCoastLogout;
+        };
+    }, [handleLogout]);
+
+    if (isLoading) {
+        return <div className="text-center p-8">Loading...</div>;
+    }
 
     return (
         <div className="bg-slate-50 min-h-screen font-sans">
@@ -2098,8 +2511,7 @@ const App = () => {
             <div className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
                 {renderPage()}
             </div>
-            {/* New Settings/Logout Button - Conditionally render based on page */}
-            {page !== 'settings' && (
+            {/* Quick access menu for settings and shutdown actions */}
             <div className="fixed bottom-4 left-4 z-50">
                 <button
                     onClick={() => setShowSettingsMenu(!showSettingsMenu)}
@@ -2109,7 +2521,7 @@ const App = () => {
                     <CogIcon />
                 </button>
                 {showSettingsMenu && (
-                    <div 
+                    <div
                         className="absolute bottom-full left-0 mb-2 w-48 bg-white rounded-md shadow-lg py-1 ring-1 ring-black ring-opacity-5 focus:outline-none"
                         role="menu"
                         aria-orientation="vertical"
@@ -2117,19 +2529,15 @@ const App = () => {
                     >
                         <a
                             href="/admin"
-                            target="_blank"
+                            onClick={() => setShowSettingsMenu(false)}
                             className="block px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 hover:text-slate-900"
                             role="menuitem"
                         >
                             Admin Dashboard
                         </a>
                         <a
-                            href="#"
-                            onClick={(e) => {
-                                e.preventDefault();
-                                navigateTo('settings');
-                                setShowSettingsMenu(false);
-                            }}
+                            href="/settings"
+                            onClick={() => setShowSettingsMenu(false)}
                             className="block px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 hover:text-slate-900"
                             role="menuitem"
                         >

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Manage Customers - Order Manager</title>
+    <title>Manage Contacts - Order Manager</title>
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
     <link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png">
     <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32x32.png">
@@ -29,7 +29,7 @@
 <body>
     <div class="container mt-4">
         <a href="/settings" target="_top" class="back-to-settings-button">&larr; Back to Settings</a>
-        <h1>Manage Customers</h1>
+        <h1>Manage Contacts</h1>
         <hr>
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
@@ -39,13 +39,13 @@
             {% endif %}
         {% endwith %}
 
-        <button type="button" class="btn btn-primary mb-3" data-toggle="modal" data-target="#customerModal" onclick="prepareAddCustomerModal()">
-            Add New Customer
+        <button type="button" class="btn btn-primary mb-3" data-toggle="modal" data-target="#contactModal" onclick="prepareAddContactModal()">
+            Add New Contact
         </button>
 
         <hr>
-        <h5>Import Customers from CSV</h5>
-        <form id="importCsvForm" action="/api/import-customers-csv" method="post" enctype="multipart/form-data" class="form-inline mb-3">
+        <h5>Import Contacts from CSV</h5>
+        <form id="importCsvForm" action="/api/import-contacts-csv" method="post" enctype="multipart/form-data" class="form-inline mb-3">
             <div class="form-group mr-2">
                 <input type="file" class="form-control-file" name="csv_file" id="csv_file" accept=".csv" required>
             </div>
@@ -63,59 +63,59 @@
                     <th>Actions</th>
                 </tr>
             </thead>
-            <tbody id="customersTableBody">
-                <!-- Customers will be loaded here by JavaScript -->
+            <tbody id="contactsTableBody">
+                <!-- Contacts will be loaded here by JavaScript -->
             </tbody>
         </table>
     </div>
 
-    <!-- Customer Modal (Add/Edit) -->
-    <div class="modal fade" id="customerModal" tabindex="-1" role="dialog" aria-labelledby="customerModalLabel" aria-hidden="true">
+    <!-- Contact Modal (Add/Edit) -->
+    <div class="modal fade" id="contactModal" tabindex="-1" role="dialog" aria-labelledby="contactModalLabel" aria-hidden="true">
         <div class="modal-dialog modal-lg" role="document">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title" id="customerModalLabel">Add Customer</h5>
+                    <h5 class="modal-title" id="contactModalLabel">Add Contact</h5>
                     <button type="button" class="close" data-dismiss="modal" aria-label="Close">
                         <span aria-hidden="true">&times;</span>
                     </button>
                 </div>
                 <div class="modal-body">
-                    <form id="customerForm">
-                        <input type="hidden" id="customerId">
+                    <form id="contactForm">
+                        <input type="hidden" id="contactId">
                         <div class="form-group">
-                            <label for="customerCompanyName">Company Name</label>
-                            <input type="text" class="form-control" id="customerCompanyName" required>
+                            <label for="contactCompanyName">Company Name</label>
+                            <input type="text" class="form-control" id="contactCompanyName" required>
                         </div>
                         <div class="form-group">
-                            <label for="customerContactName">Contact Name</label>
-                            <input type="text" class="form-control" id="customerContactName">
+                            <label for="contactContactName">Contact Name</label>
+                            <input type="text" class="form-control" id="contactContactName">
                         </div>
                         <div class="form-group">
-                            <label for="customerEmail">Email</label>
-                            <input type="email" class="form-control" id="customerEmail">
+                            <label for="contactEmail">Email</label>
+                            <input type="email" class="form-control" id="contactEmail">
                         </div>
                         <div class="form-group">
-                            <label for="customerPhone">Phone</label>
-                            <input type="tel" class="form-control" id="customerPhone">
+                            <label for="contactPhone">Phone</label>
+                            <input type="tel" class="form-control" id="contactPhone">
                         </div>
                         <div class="form-row">
                             <div class="form-group col-md-12">
-                                <label for="customerShippingAddress">Shipping Address</label>
-                                <input type="text" class="form-control" id="customerShippingAddress">
+                                <label for="contactShippingAddress">Shipping Address</label>
+                                <input type="text" class="form-control" id="contactShippingAddress">
                             </div>
                         </div>
                         <div class="form-row">
                             <div class="form-group col-md-6">
-                                <label for="customerShippingCity">City</label>
-                                <input type="text" class="form-control" id="customerShippingCity">
+                                <label for="contactShippingCity">City</label>
+                                <input type="text" class="form-control" id="contactShippingCity">
                             </div>
                             <div class="form-group col-md-4">
-                                <label for="customerShippingState">State</label>
-                                <input type="text" class="form-control" id="customerShippingState">
+                                <label for="contactShippingState">State</label>
+                                <input type="text" class="form-control" id="contactShippingState">
                             </div>
                             <div class="form-group col-md-2">
-                                <label for="customerShippingZipCode">Zip Code</label>
-                                <input type="text" class="form-control" id="customerShippingZipCode">
+                                <label for="contactShippingZipCode">Zip Code</label>
+                                <input type="text" class="form-control" id="contactShippingZipCode">
                             </div>
                         </div>
                         <div class="form-check mb-3">
@@ -127,22 +127,22 @@
                         <div id="billingAddressSection">
                             <div class="form-row">
                                 <div class="form-group col-md-12">
-                                    <label for="customerBillingAddress">Billing Address</label>
-                                    <input type="text" class="form-control" id="customerBillingAddress">
+                                    <label for="contactBillingAddress">Billing Address</label>
+                                    <input type="text" class="form-control" id="contactBillingAddress">
                                 </div>
                             </div>
                         <div class="form-row">
                             <div class="form-group col-md-6">
-                                <label for="customerBillingCity">City</label>
-                                <input type="text" class="form-control" id="customerBillingCity">
+                                <label for="contactBillingCity">City</label>
+                                <input type="text" class="form-control" id="contactBillingCity">
                             </div>
                             <div class="form-group col-md-4">
-                                <label for="customerBillingState">State</label>
-                                <input type="text" class="form-control" id="customerBillingState">
+                                <label for="contactBillingState">State</label>
+                                <input type="text" class="form-control" id="contactBillingState">
                             </div>
                             <div class="form-group col-md-2">
-                                <label for="customerBillingZipCode">Zip Code</label>
-                                <input type="text" class="form-control" id="customerBillingZipCode">
+                                <label for="contactBillingZipCode">Zip Code</label>
+                                <input type="text" class="form-control" id="contactBillingZipCode">
                             </div>
                         </div>
                         </div>
@@ -150,7 +150,7 @@
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
-                    <button type="button" class="btn btn-primary" onclick="saveCustomer()">Save Customer</button>
+                    <button type="button" class="btn btn-primary" onclick="saveContact()">Save Contact</button>
                 </div>
             </div>
         </div>
@@ -161,108 +161,108 @@
     <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
     <script>
         $(document).ready(function() {
-            loadCustomers();
+            loadContacts();
         });
 
-        let allCustomers = []; // To store customers for editing
+        let allContacts = []; // To store contacts for editing
 
-        function loadCustomers() {
-            fetch('/api/vendors')
+        function loadContacts() {
+            fetch('/api/contacts')
                 .then(response => response.json())
                 .then(data => {
-                    allCustomers = data; // Store for later use
-                    const tableBody = $('#customersTableBody');
+                    allContacts = data; // Store for later use
+                    const tableBody = $('#contactsTableBody');
                     tableBody.empty(); 
-                    allCustomers.forEach(customer => {
+                    allContacts.forEach(contact => {
                         const row = `
                             <tr>
-                                <td>${customer.companyName || 'N/A'}</td>
-                                <td>${customer.contactName || 'N/A'}</td>
-                                <td>${customer.email || 'N/A'}</td>
-                                <td>${customer.phone || 'N/A'}</td>
+                                <td>${contact.companyName || 'N/A'}</td>
+                                <td>${contact.contactName || 'N/A'}</td>
+                                <td>${contact.email || 'N/A'}</td>
+                                <td>${contact.phone || 'N/A'}</td>
                                 <td class="action-buttons">
-                                    <button class="btn btn-sm btn-info" onclick="prepareEditCustomerModal('${customer.id}')">Edit</button>
-                                    <button class="btn btn-sm btn-danger" onclick="deleteCustomer('${customer.id}')">Delete</button>
+                                    <button class="btn btn-sm btn-info" onclick="prepareEditContactModal('${contact.id}')">Edit</button>
+                                    <button class="btn btn-sm btn-danger" onclick="deleteContact('${contact.id}')">Delete</button>
                                 </td>
                             </tr>
                         `;
                         tableBody.append(row);
                     });
                 })
-                .catch(error => console.error('Error loading customers:', error));
+                .catch(error => console.error('Error loading contacts:', error));
         }
 
-        function prepareAddCustomerModal() {
-            $('#customerModalLabel').text('Add New Customer');
-            $('#customerForm')[0].reset();
-            $('#customerId').val('');
+        function prepareAddContactModal() {
+            $('#contactModalLabel').text('Add New Contact');
+            $('#contactForm')[0].reset();
+            $('#contactId').val('');
         }
 
-        function prepareEditCustomerModal(customerId) {
-            const customer = allCustomers.find(c => c.id === customerId);
-            if (customer) {
-                $('#customerModalLabel').text('Edit Customer');
-                $('#customerId').val(customer.id);
-                $('#customerCompanyName').val(customer.companyName || '');
-                $('#customerContactName').val(customer.contactName || '');
-                $('#customerEmail').val(customer.email || '');
-                $('#customerPhone').val(customer.phone || '');
-                $('#customerShippingAddress').val(customer.shippingAddress || '');
-                $('#customerShippingCity').val(customer.shippingCity || '');
-                $('#customerShippingState').val(customer.shippingState || '');
-                $('#customerShippingZipCode').val(customer.shippingZipCode || '');
+        function prepareEditContactModal(contactId) {
+            const contact = allContacts.find(c => c.id === contactId);
+            if (contact) {
+                $('#contactModalLabel').text('Edit Contact');
+                $('#contactId').val(contact.id);
+                $('#contactCompanyName').val(contact.companyName || '');
+                $('#contactContactName').val(contact.contactName || '');
+                $('#contactEmail').val(contact.email || '');
+                $('#contactPhone').val(contact.phone || '');
+                $('#contactShippingAddress').val(contact.shippingAddress || '');
+                $('#contactShippingCity').val(contact.shippingCity || '');
+                $('#contactShippingState').val(contact.shippingState || '');
+                $('#contactShippingZipCode').val(contact.shippingZipCode || '');
 
-                const sameAsShipping = customer.shippingAddress === customer.billingAddress &&
-                                     customer.shippingCity === customer.billingCity &&
-                                     customer.shippingState === customer.billingState &&
-                                     customer.shippingZipCode === customer.billingZipCode;
+                const sameAsShipping = contact.shippingAddress === contact.billingAddress &&
+                                     contact.shippingCity === contact.billingCity &&
+                                     contact.shippingState === contact.billingState &&
+                                     contact.shippingZipCode === contact.billingZipCode;
 
                 $('#sameAsShipping').prop('checked', sameAsShipping);
                 toggleBillingAddress(sameAsShipping);
 
                 if (!sameAsShipping) {
-                    $('#customerBillingAddress').val(customer.billingAddress || '');
-                    $('#customerBillingCity').val(customer.billingCity || '');
-                    $('#customerBillingState').val(customer.billingState || '');
-                    $('#customerBillingZipCode').val(customer.billingZipCode || '');
+                    $('#contactBillingAddress').val(contact.billingAddress || '');
+                    $('#contactBillingCity').val(contact.billingCity || '');
+                    $('#contactBillingState').val(contact.billingState || '');
+                    $('#contactBillingZipCode').val(contact.billingZipCode || '');
                 }
 
-                $('#customerModal').modal('show');
+                $('#contactModal').modal('show');
             } else {
-                alert('Customer not found for editing.');
+                alert('Contact not found for editing.');
             }
         }
 
-        function saveCustomer() {
-            const customerId = $('#customerId').val();
+        function saveContact() {
+            const contactId = $('#contactId').val();
             const sameAsShipping = $('#sameAsShipping').is(':checked');
-            const customerData = {
-                companyName: $('#customerCompanyName').val().trim(),
-                contactName: $('#customerContactName').val().trim(),
-                email: $('#customerEmail').val().trim(),
-                phone: $('#customerPhone').val().trim(),
-                shippingAddress: $('#customerShippingAddress').val().trim(),
-                shippingCity: $('#customerShippingCity').val().trim(),
-                shippingState: $('#customerShippingState').val().trim(),
-                shippingZipCode: $('#customerShippingZipCode').val().trim(),
-                billingAddress: sameAsShipping ? $('#customerShippingAddress').val().trim() : $('#customerBillingAddress').val().trim(),
-                billingCity: sameAsShipping ? $('#customerShippingCity').val().trim() : $('#customerBillingCity').val().trim(),
-                billingState: sameAsShipping ? $('#customerShippingState').val().trim() : $('#customerBillingState').val().trim(),
-                billingZipCode: sameAsShipping ? $('#customerShippingZipCode').val().trim() : $('#customerBillingZipCode').val().trim(),
+            const contactData = {
+                companyName: $('#contactCompanyName').val().trim(),
+                contactName: $('#contactContactName').val().trim(),
+                email: $('#contactEmail').val().trim(),
+                phone: $('#contactPhone').val().trim(),
+                shippingAddress: $('#contactShippingAddress').val().trim(),
+                shippingCity: $('#contactShippingCity').val().trim(),
+                shippingState: $('#contactShippingState').val().trim(),
+                shippingZipCode: $('#contactShippingZipCode').val().trim(),
+                billingAddress: sameAsShipping ? $('#contactShippingAddress').val().trim() : $('#contactBillingAddress').val().trim(),
+                billingCity: sameAsShipping ? $('#contactShippingCity').val().trim() : $('#contactBillingCity').val().trim(),
+                billingState: sameAsShipping ? $('#contactShippingState').val().trim() : $('#contactBillingState').val().trim(),
+                billingZipCode: sameAsShipping ? $('#contactShippingZipCode').val().trim() : $('#contactBillingZipCode').val().trim(),
             };
 
-            if (!customerData.companyName) {
+            if (!contactData.companyName) {
                 alert('Company Name is required.');
                 return;
             }
 
-            let url = '/api/vendors';
+            let url = '/api/contacts';
             let method = 'POST';
 
-            if (customerId) { // If customerId exists, it's an update (PUT)
-                url = `/api/vendors/${customerId}`;
+            if (contactId) { // If contactId exists, it's an update (PUT)
+                url = `/api/contacts/${contactId}`;
                 method = 'PUT';
-                customerData.id = customerId; 
+                contactData.id = contactId; 
             }
 
             fetch(url, {
@@ -270,44 +270,44 @@
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify(customerData),
+                body: JSON.stringify(contactData),
             })
             .then(response => response.json().then(data => ({ status: response.status, body: data })))
             .then(result => {
                 if (result.status === 200 || result.status === 201) {
-                    $('#customerModal').modal('hide');
-                    loadCustomers(); 
-                    alert(result.body.message || 'Customer saved successfully!');
+                    $('#contactModal').modal('hide');
+                    loadContacts(); 
+                    alert(result.body.message || 'Contact saved successfully!');
                 } else {
-                    alert('Error saving customer: ' + (result.body.message || 'Unknown error'));
+                    alert('Error saving contact: ' + (result.body.message || 'Unknown error'));
                 }
             })
             .catch(error => {
-                console.error('Error saving customer:', error);
-                alert('Error saving customer. See console for details.');
+                console.error('Error saving contact:', error);
+                alert('Error saving contact. See console for details.');
             });
         }
 
-        function deleteCustomer(customerId) {
-            if (!confirm('Are you sure you want to delete this customer? This action cannot be undone.')) {
+        function deleteContact(contactId) {
+            if (!confirm('Are you sure you want to delete this contact? This action cannot be undone.')) {
                 return;
             }
 
-            fetch(`/api/vendors/${customerId}`, {
+            fetch(`/api/contacts/${contactId}`, {
                 method: 'DELETE',
             })
             .then(response => response.json().then(data => ({ status: response.status, body: data })))
             .then(result => {
                 if (result.status === 200) {
-                    loadCustomers(); 
-                    alert(result.body.message || 'Customer deleted successfully!');
+                    loadContacts(); 
+                    alert(result.body.message || 'Contact deleted successfully!');
                 } else {
-                    alert('Error deleting customer: ' + (result.body.message || 'Unknown error'));
+                    alert('Error deleting contact: ' + (result.body.message || 'Unknown error'));
                 }
             })
             .catch(error => {
-                console.error('Error deleting customer:', error);
-                alert('Error deleting customer. See console for details.');
+                console.error('Error deleting contact:', error);
+                alert('Error deleting contact. See console for details.');
             });
         }
 
