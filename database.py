@@ -86,7 +86,11 @@ def init_db():
     if 'contact_id' not in order_columns and 'vendor_id' in order_columns:
         cursor.execute("ALTER TABLE orders RENAME COLUMN vendor_id TO contact_id")
 
-    cursor.execute("CREATE TABLE IF NOT EXISTS orders (order_id TEXT PRIMARY KEY NOT NULL, display_id TEXT UNIQUE, contact_id TEXT, order_date TEXT, status TEXT, notes TEXT, estimated_shipping_date TEXT, shipping_address TEXT, shipping_city TEXT, shipping_state TEXT, shipping_zip_code TEXT, estimated_shipping_cost REAL, scent_option TEXT, name_drop INTEGER, signature_data_url TEXT, total_amount REAL, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (contact_id) REFERENCES contacts (id) ON DELETE SET NULL);")
+    if 'title' not in order_columns:
+        if 'orders' in existing_tables:
+            cursor.execute("ALTER TABLE orders ADD COLUMN title TEXT")
+
+    cursor.execute("CREATE TABLE IF NOT EXISTS orders (order_id TEXT PRIMARY KEY NOT NULL, display_id TEXT UNIQUE, contact_id TEXT, order_date TEXT, status TEXT, notes TEXT, estimated_shipping_date TEXT, shipping_address TEXT, shipping_city TEXT, shipping_state TEXT, shipping_zip_code TEXT, estimated_shipping_cost REAL, scent_option TEXT, name_drop INTEGER, signature_data_url TEXT, total_amount REAL, title TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (contact_id) REFERENCES contacts (id) ON DELETE SET NULL);")
     cursor.execute("CREATE TRIGGER IF NOT EXISTS update_orders_updated_at AFTER UPDATE ON orders FOR EACH ROW BEGIN UPDATE orders SET updated_at = CURRENT_TIMESTAMP WHERE order_id = OLD.order_id; END;")
     cursor.execute("CREATE TABLE IF NOT EXISTS order_line_items (line_item_id INTEGER PRIMARY KEY AUTOINCREMENT, order_id TEXT NOT NULL, item_code TEXT NOT NULL, package_code TEXT, quantity INTEGER NOT NULL, price_per_unit_cents INTEGER NOT NULL, style_chosen TEXT, item_type TEXT, FOREIGN KEY (order_id) REFERENCES orders (order_id) ON DELETE CASCADE, FOREIGN KEY (item_code) REFERENCES items (item_code) ON DELETE RESTRICT);")
     cursor.execute("CREATE TABLE IF NOT EXISTS order_status_history (history_id INTEGER PRIMARY KEY AUTOINCREMENT, order_id TEXT NOT NULL, status TEXT NOT NULL, status_date TEXT NOT NULL, FOREIGN KEY (order_id) REFERENCES orders (order_id) ON DELETE CASCADE);")

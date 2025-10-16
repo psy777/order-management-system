@@ -8,6 +8,8 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.23/jspdf.plugin.autotable.min.js"></script>
     <link rel="stylesheet" href="/assets/css/styles.css">
 </head>
 <body>
@@ -25,19 +27,152 @@
             }
         };
 
-        const AddLogModal = ({ orderId, onClose, onLogAdded }) => {
+        const ContactMentionTextarea = ({ label, placeholder, value, onChange, rows = 3, contacts = [] }) => {
+            const { useState, useRef, useEffect } = React;
+            const textareaRef = useRef(null);
+            const [suggestions, setSuggestions] = useState([]);
+            const [isOpen, setIsOpen] = useState(false);
+            const [highlightIndex, setHighlightIndex] = useState(0);
+
+            const findMentionQuery = (text, caretPosition) => {
+                const uptoCaret = text.slice(0, caretPosition);
+                const match = uptoCaret.match(/@([a-z0-9_.-]*)$/i);
+                if (match) {
+                    return match[1].toLowerCase();
+                }
+                return null;
+            };
+
+            const updateSuggestions = (text, caret) => {
+                const query = findMentionQuery(text, caret);
+                if (query === null) {
+                    setSuggestions([]);
+                    setIsOpen(false);
+                    setHighlightIndex(0);
+                    return;
+                }
+                const filtered = contacts
+                    .filter(contact => contact.handle)
+                    .filter(contact => {
+                        if (!query) return true;
+                        const handle = contact.handle.toLowerCase();
+                        const name = (contact.contactName || '').toLowerCase();
+                        const company = (contact.companyName || '').toLowerCase();
+                        return handle.startsWith(query) || name.includes(query) || company.includes(query);
+                    })
+                    .slice(0, 8);
+                setSuggestions(filtered);
+                setIsOpen(filtered.length > 0);
+                setHighlightIndex(0);
+            };
+
+            const applyMention = (contact) => {
+                const textarea = textareaRef.current;
+                if (!textarea) return;
+                const caret = textarea.selectionStart;
+                const text = textarea.value;
+                const uptoCaret = text.slice(0, caret);
+                const match = uptoCaret.match(/@([a-z0-9_.-]*)$/i);
+                if (!match) return;
+                const queryLength = match[1].length;
+                const insertionPoint = caret - queryLength;
+                const replacement = `@${contact.handle}`;
+                const newValue = text.slice(0, insertionPoint) + replacement + text.slice(caret);
+                onChange(newValue);
+                setTimeout(() => {
+                    textarea.focus();
+                    const newCaret = insertionPoint + replacement.length;
+                    textarea.setSelectionRange(newCaret, newCaret);
+                }, 0);
+                setSuggestions([]);
+                setIsOpen(false);
+            };
+
+            const handleChange = (event) => {
+                const newValue = event.target.value;
+                onChange(newValue);
+                const caret = event.target.selectionStart;
+                updateSuggestions(newValue, caret);
+            };
+
+            const handleKeyDown = (event) => {
+                if (!isOpen || suggestions.length === 0) return;
+                if (event.key === 'ArrowDown') {
+                    event.preventDefault();
+                    setHighlightIndex(prev => (prev + 1) % suggestions.length);
+                } else if (event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    setHighlightIndex(prev => (prev - 1 + suggestions.length) % suggestions.length);
+                } else if (event.key === 'Enter') {
+                    const selected = suggestions[highlightIndex];
+                    if (selected) {
+                        event.preventDefault();
+                        applyMention(selected);
+                    }
+                } else if (event.key === 'Escape') {
+                    setIsOpen(false);
+                }
+            };
+
+            useEffect(() => {
+                const textarea = textareaRef.current;
+                if (!textarea) return;
+                const handler = () => {
+                    const caret = textarea.selectionStart;
+                    updateSuggestions(textarea.value, caret);
+                };
+                textarea.addEventListener('click', handler);
+                textarea.addEventListener('keyup', handler);
+                return () => {
+                    textarea.removeEventListener('click', handler);
+                    textarea.removeEventListener('keyup', handler);
+                };
+            }, [contacts]);
+
+            return (
+                <div className="relative">
+                    {label && <label className="block text-sm font-medium text-slate-700">{label}</label>}
+                    <textarea
+                        ref={textareaRef}
+                        rows={rows}
+                        placeholder={placeholder}
+                        value={value}
+                        onChange={handleChange}
+                        onKeyDown={handleKeyDown}
+                        className="mt-1 block w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500"
+                    />
+                    {isOpen && suggestions.length > 0 && (
+                        <div className="absolute z-20 mt-1 w-full max-h-56 overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg">
+                            {suggestions.map((contact, index) => (
+                                <button
+                                    type="button"
+                                    key={contact.id || contact.handle || index}
+                                    onMouseDown={(event) => { event.preventDefault(); applyMention(contact); }}
+                                    className={`w-full text-left px-3 py-2 text-sm ${highlightIndex === index ? 'bg-orange-100 text-orange-900' : 'text-slate-700 hover:bg-orange-50'}`}
+                                >
+                                    <span className="font-semibold">@{contact.handle}</span>
+                                    <span className="ml-2 text-xs text-slate-500">{contact.contactName || contact.companyName}</span>
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const AddLogModal = ({ orderId, onClose, onLogAdded, contacts }) => {
             const { useState, useRef } = React;
             const [action, setAction] = useState('Manual Entry');
             const [details, setDetails] = useState('');
             const [isSubmitting, setIsSubmitting] = useState(false);
             const fileInputRef = useRef(null);
 
-            const isStatusUpdate = action === 'status';
+            const isStatusUpdate = ['status update', 'status'].includes(action.toLowerCase());
 
             const handleSubmit = async (e) => {
                 e.preventDefault();
                 setIsSubmitting(true);
-                
+
                 const formData = new FormData();
                 formData.append('action', action);
                 formData.append('details', details);
@@ -74,7 +209,7 @@
                                 <label htmlFor="action" className="block text-sm font-medium text-slate-700">Action</label>
                                 <select id="action" value={action} onChange={e => setAction(e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500">
                                     <option value="Manual Entry">Manual Entry</option>
-                                    <option value="status">Status Update</option>
+                                    <option value="Status Update">Status Update</option>
                                     <option value="Phone Call">Phone Call</option>
                                     <option value="Email">Email</option>
                                     <option value="Internal Note">Internal Note</option>
@@ -82,7 +217,14 @@
                             </div>
                             <div className="mb-4">
                                 <label htmlFor="details" className="block text-sm font-medium text-slate-700">{isStatusUpdate ? 'New Status' : 'Details'}</label>
-                                <textarea id="details" value={details} onChange={e => setDetails(e.target.value)} rows="3" placeholder={isStatusUpdate ? 'Enter the new status...' : 'Enter details about the log...'} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500"></textarea>
+                                <ContactMentionTextarea
+                                    label={isStatusUpdate ? 'New Status' : 'Details'}
+                                    value={details}
+                                    onChange={setDetails}
+                                    placeholder={isStatusUpdate ? 'Enter the new status...' : 'Enter details about the log...'}
+                                    rows={3}
+                                    contacts={contacts}
+                                />
                             </div>
                             <div className="mb-4">
                                 <label htmlFor="attachment" className="block text-sm font-medium text-slate-700">Attachment</label>
@@ -98,11 +240,223 @@
             );
         };
 
+        const generateInvoicePdf = (order, itemsIndex = {}) => {
+            if (!order) return;
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+            const safeItems = itemsIndex || {};
+            const safeOrder = order || {};
+            const displayId = typeof safeOrder.display_id === 'string' ? safeOrder.display_id : null;
+            const orderId = safeOrder.id || '';
+            const orderTitle = (safeOrder.title || '').trim();
+            const orderNumber = (displayId && displayId.trim()) || orderId;
+            const timeZone = "America/Chicago";
+            const dateOptions = { year: 'numeric', month: 'long', day: 'numeric' };
+            const formattedDate = safeOrder.date ? formatInTimeZone(safeOrder.date, timeZone, dateOptions) : '—';
+
+            const baseContact = safeOrder.contactInfo || {};
+            const contactInfo = {
+                companyName: '',
+                contactName: '',
+                email: '',
+                phone: '',
+                billingAddress: '',
+                billingCity: '',
+                billingState: '',
+                billingZipCode: '',
+                shippingAddress: '',
+                shippingCity: '',
+                shippingState: '',
+                shippingZipCode: '',
+                ...baseContact
+            };
+
+            const renderBlock = (label, lines, x, y, wrapWidth = null) => {
+                doc.setFontSize(12);
+                doc.text(label, x, y);
+                y += 6;
+                doc.setFontSize(10);
+                if (!lines.length) {
+                    doc.text('—', x, y);
+                    return y + 7;
+                }
+                if (wrapWidth) {
+                    const wrapped = doc.splitTextToSize(lines.join('\n'), wrapWidth);
+                    doc.text(wrapped, x, y);
+                    return y + (wrapped.length * 4) + 2;
+                }
+                lines.forEach((line) => {
+                    doc.text(line, x, y);
+                    y += 5;
+                });
+                return y + 2;
+            };
+
+            const buildAddressLines = (address, city, state, zip) => {
+                const lines = [];
+                if (address) lines.push(address);
+                const locality = [city, state].filter(Boolean).join(', ');
+                const postalLine = [locality, zip].filter(Boolean).join(' ');
+                if (postalLine.trim()) lines.push(postalLine.trim());
+                return lines;
+            };
+
+            doc.setFontSize(20);
+            doc.text("Invoice", 14, 22);
+            doc.setFontSize(12);
+            let headerY = 30;
+            doc.text(`Order #: ${orderNumber || '—'}`, 14, headerY);
+            if (orderTitle) {
+                headerY += 6;
+                doc.text(`Title: ${orderTitle}`, 14, headerY);
+            }
+            headerY += 6;
+            doc.text(`Date: ${formattedDate}`, 14, headerY);
+
+            let leftColumnY = headerY + 14;
+            let rightColumnY = headerY + 14;
+            const leftColumnX = 14;
+            const rightColumnX = 105;
+
+            const customerLines = [contactInfo.companyName, contactInfo.contactName, contactInfo.email, contactInfo.phone].filter(Boolean);
+            leftColumnY = renderBlock("Bill To", customerLines, leftColumnX, leftColumnY);
+
+            const billingLines = buildAddressLines(contactInfo.billingAddress, contactInfo.billingCity, contactInfo.billingState, contactInfo.billingZipCode);
+            if (billingLines.length) {
+                rightColumnY = renderBlock("Billing Address", billingLines, rightColumnX, rightColumnY, 90);
+            }
+
+            const shippingLines = buildAddressLines(contactInfo.shippingAddress, contactInfo.shippingCity, contactInfo.shippingState, contactInfo.shippingZipCode);
+            if (shippingLines.length) {
+                rightColumnY = renderBlock("Shipping Address", shippingLines, rightColumnX, rightColumnY, 90);
+            }
+
+            let tableStartY = Math.max(leftColumnY, rightColumnY, headerY + 20) + 5;
+
+            const safeLineItems = Array.isArray(safeOrder.lineItems) ? safeOrder.lineItems : [];
+            const tableHead = ["Item", "Style", "Quantity", "Unit Price", "Total"];
+            const tableBody = safeLineItems.map((item) => {
+                const itemLookup = item?.item ? safeItems[item.item] : null;
+                const itemName = (itemLookup && itemLookup.name) || item?.item || 'Item';
+                const quantity = Number(item?.quantity) || 0;
+                const unitPriceCents = Number(item?.price) || 0;
+                const lineTotalCents = quantity * unitPriceCents;
+                return [
+                    itemName,
+                    item?.style || '',
+                    String(quantity),
+                    `$${(unitPriceCents / 100).toFixed(2)}`,
+                    `$${(lineTotalCents / 100).toFixed(2)}`
+                ];
+            });
+
+            doc.autoTable({ head: [tableHead], body: tableBody, startY: tableStartY });
+
+            const subtotalCents = safeLineItems.reduce((acc, item) => {
+                const quantity = Number(item?.quantity) || 0;
+                const unitPriceCents = Number(item?.price) || 0;
+                return acc + (quantity * unitPriceCents);
+            }, 0);
+
+            let nameDropSurchargeCents = 0;
+            if (safeOrder.nameDrop) {
+                safeLineItems.forEach((item) => {
+                    if (item?.type === 'cross') {
+                        const quantity = Number(item?.quantity) || 0;
+                        nameDropSurchargeCents += quantity * 100;
+                    }
+                });
+            }
+
+            const estimatedShippingValue = typeof safeOrder.estimatedShipping === 'number'
+                ? safeOrder.estimatedShipping
+                : parseFloat(safeOrder.estimatedShipping || '0');
+            const estimatedShippingCents = Math.round((Number.isFinite(estimatedShippingValue) ? estimatedShippingValue : 0) * 100);
+            const totalCents = subtotalCents + nameDropSurchargeCents + estimatedShippingCents;
+
+            const tableResult = doc.lastAutoTable;
+            let summaryY = (tableResult ? tableResult.finalY : tableStartY) + 10;
+
+            doc.setFontSize(10);
+            doc.text(`Subtotal: $${(subtotalCents / 100).toFixed(2)}`, 14, summaryY);
+            summaryY += 7;
+
+            if (nameDropSurchargeCents > 0) {
+                doc.text(`Name Drop Surcharge: $${(nameDropSurchargeCents / 100).toFixed(2)}`, 14, summaryY);
+                summaryY += 7;
+            }
+
+            if (estimatedShippingCents > 0) {
+                doc.text(`Est. Shipping Cost: $${(estimatedShippingCents / 100).toFixed(2)}`, 14, summaryY);
+                summaryY += 7;
+            }
+
+            doc.setFontSize(12);
+            doc.text(`Total: $${(totalCents / 100).toFixed(2)}`, 14, summaryY);
+            summaryY += 10;
+
+            doc.setFontSize(10);
+            const scentLabel = safeOrder.scentOption || 'Scented';
+            doc.text(`Scent Option: ${scentLabel}`, 14, summaryY);
+            summaryY += 5;
+
+            if (safeOrder.estimatedShippingDate) {
+                doc.text(`Est. Ship Date: ${formatInTimeZone(safeOrder.estimatedShippingDate, timeZone, dateOptions)}`, 14, summaryY);
+                summaryY += 5;
+            }
+
+            const trimmedNotes = (safeOrder.notes || '').trim();
+            if (trimmedNotes) {
+                summaryY += 5;
+                doc.text("Notes:", 14, summaryY);
+                summaryY += 5;
+                const wrappedNotes = doc.splitTextToSize(trimmedNotes, 180);
+                doc.text(wrappedNotes, 14, summaryY);
+                summaryY += wrappedNotes.length * 4;
+            }
+
+            summaryY += 15;
+            if (summaryY > 260) {
+                doc.addPage();
+                summaryY = 20;
+            }
+
+            doc.setFontSize(10);
+            doc.text("Authorized Signature:", 14, summaryY);
+
+            const signatureDataUrl = safeOrder.signatureDataUrl;
+            if (signatureDataUrl) {
+                try {
+                    if (signatureDataUrl.startsWith('data:image')) {
+                        const base64Data = signatureDataUrl.substring(signatureDataUrl.indexOf(',') + 1);
+                        if (base64Data.length > 150) {
+                            const signatureImgWidth = 70;
+                            const signatureImgHeight = 20;
+                            doc.addImage(signatureDataUrl, 'PNG', 50, summaryY - (signatureImgHeight / 2) + 2, signatureImgWidth, signatureImgHeight);
+                        } else {
+                            doc.line(50, summaryY, 120, summaryY);
+                        }
+                    } else {
+                        doc.line(50, summaryY, 120, summaryY);
+                    }
+                } catch (error) {
+                    console.error('Error rendering signature image for PDF:', error);
+                    doc.line(50, summaryY, 120, summaryY);
+                }
+            } else {
+                doc.line(50, summaryY, 120, summaryY);
+            }
+
+            doc.save(`${orderId || 'order'}-invoice.pdf`);
+        };
+
         const ViewOrderPage = ({ orderId }) => {
             const { useState, useEffect } = React;
             const [order, setOrder] = useState(null);
             const [isLoading, setIsLoading] = useState(true);
             const [isLogModalOpen, setIsLogModalOpen] = useState(false);
+            const [contacts, setContacts] = useState([]);
+            const [itemsIndex, setItemsIndex] = useState({});
 
             const fetchOrder = async () => {
                 try {
@@ -123,6 +477,36 @@
                 fetchOrder();
             }, [orderId]);
 
+            useEffect(() => {
+                const fetchContactsAndItems = async () => {
+                    try {
+                        const [contactsRes, itemsRes] = await Promise.all([
+                            fetch('/api/contacts'),
+                            fetch('/api/items')
+                        ]);
+                        if (contactsRes.ok) {
+                            const contactsData = await contactsRes.json();
+                            setContacts(Array.isArray(contactsData) ? contactsData : []);
+                        }
+                        if (itemsRes.ok) {
+                            const itemsData = await itemsRes.json();
+                            const nextIndex = {};
+                            if (Array.isArray(itemsData)) {
+                                itemsData.forEach(item => {
+                                    if (item && item.item_code) {
+                                        nextIndex[item.item_code] = item;
+                                    }
+                                });
+                            }
+                            setItemsIndex(nextIndex);
+                        }
+                    } catch (error) {
+                        console.error('Failed to fetch contacts or items:', error);
+                    }
+                };
+                fetchContactsAndItems();
+            }, []);
+
             if (isLoading) {
                 return <div className="text-center p-8">Loading order details...</div>;
             }
@@ -131,9 +515,8 @@
                 return <div className="text-center p-8 text-red-500">Failed to load order. It may not exist.</div>;
             }
 
-            const handleLogAdded = (newLog) => {
-                const updatedLogs = [newLog, ...order.orderLogs];
-                setOrder({ ...order, orderLogs: updatedLogs });
+            const handleLogAdded = () => {
+                fetchOrder();
             };
 
             const orderTotals = {
@@ -148,16 +531,28 @@
             };
             orderTotals.total = orderTotals.subtotal + orderTotals.nameDropSurcharge + Math.round(orderTotals.estimatedShipping * 100);
 
+            const orderTitle = order.title || order.display_id || order.id;
+
 
             return (
                 <div className="bg-slate-50 min-h-screen font-sans">
                 <div className="max-w-4xl mx-auto p-4 sm:p-6 lg:p-8">
-                    <div className="mb-6 flex justify-between items-center">
+                    <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                         <div>
-                            <a href="/orders" className="text-orange-600 hover:text-orange-800 font-semibold">&larr; Back to Dashboard</a>
-                            <h1 className="text-3xl font-bold text-slate-800 mt-2">View Order: {order.id}</h1>
+                            <a href="/orders" className="text-orange-600 hover:text-orange-800 font-semibold">&larr; Back to Orders</a>
+                            <h1 className="text-3xl font-bold text-slate-800 mt-2">View Order: {orderTitle}</h1>
+                            <p className="text-sm text-slate-500 mt-1">Order ID: {order.id}</p>
                         </div>
-                        <a href={`/orders?order_id=${order.id}&mode=edit`} className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors shadow">Edit Order</a>
+                        <div className="flex flex-wrap gap-3">
+                            <button
+                                type="button"
+                                onClick={() => generateInvoicePdf(order, itemsIndex)}
+                                className="px-4 py-2 bg-white text-slate-700 font-semibold rounded-md border border-slate-300 hover:bg-slate-100 transition-colors shadow-sm"
+                            >
+                                Preview Invoice
+                            </button>
+                            <a href={`/orders?order_id=${order.id}&mode=edit`} className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors shadow">Edit Order</a>
+                        </div>
                     </div>
 
                         <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200 mb-6">
@@ -165,28 +560,50 @@
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                 <div>
                                     <p className="text-sm font-medium text-slate-500">Company Name</p>
-                                    <p className="text-slate-800">{order.contactInfo.companyName}</p>
+                                    <p className="text-slate-800">{order.contactInfo.companyName || '—'}</p>
                                 </div>
                                 <div>
                                     <p className="text-sm font-medium text-slate-500">Contact Name</p>
-                                    <p className="text-slate-800">{order.contactInfo.contactName}</p>
+                                    <p className="text-slate-800">{order.contactInfo.contactName || '—'}</p>
                                 </div>
                                 <div>
                                     <p className="text-sm font-medium text-slate-500">Email</p>
-                                    <p className="text-slate-800">{order.contactInfo.email}</p>
+                                    <p className="text-slate-800">{order.contactInfo.email || '—'}</p>
                                 </div>
                                 <div>
                                     <p className="text-sm font-medium text-slate-500">Phone</p>
-                                    <p className="text-slate-800">{order.contactInfo.phone}</p>
+                                    <p className="text-slate-800">{order.contactInfo.phone || '—'}</p>
                                 </div>
                                 <div>
                                     <p className="text-sm font-medium text-slate-500">Shipping Address</p>
-                                    <p className="text-slate-800">{`${order.contactInfo.shippingAddress}, ${order.contactInfo.shippingCity}, ${order.contactInfo.shippingState} ${order.contactInfo.shippingZipCode}`}</p>
+                                    <p className="text-slate-800">{
+                                        [order.contactInfo.shippingAddress, order.contactInfo.shippingCity, order.contactInfo.shippingState, order.contactInfo.shippingZipCode]
+                                            .filter(Boolean)
+                                            .join(', ') || '—'
+                                    }</p>
                                 </div>
                                  <div>
                                     <p className="text-sm font-medium text-slate-500">Billing Address</p>
-                                    <p className="text-slate-800">{`${order.contactInfo.billingAddress}, ${order.contactInfo.billingCity}, ${order.contactInfo.billingState} ${order.contactInfo.billingZipCode}`}</p>
+                                    <p className="text-slate-800">{
+                                        [order.contactInfo.billingAddress, order.contactInfo.billingCity, order.contactInfo.billingState, order.contactInfo.billingZipCode]
+                                            .filter(Boolean)
+                                            .join(', ') || '—'
+                                    }</p>
                                 </div>
+                            </div>
+                            <div className="border-t border-slate-200 pt-4 mt-6">
+                                <h3 className="text-lg font-semibold text-slate-700 mb-2">Mentioned Contacts</h3>
+                                {order.additionalContacts && order.additionalContacts.length > 0 ? (
+                                    <div className="flex flex-wrap gap-2">
+                                        {order.additionalContacts.map(contact => (
+                                            <span key={contact.id} className="inline-flex items-center rounded-full bg-slate-200 px-3 py-1 text-sm font-medium text-slate-700">
+                                                {contact.displayName || contact.contactName || contact.companyName || contact.email || `@${contact.handle}`}
+                                            </span>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="text-sm text-slate-500">No additional contacts have been mentioned yet.</p>
+                                )}
                             </div>
                         </div>
 
@@ -209,11 +626,11 @@
                                         <tbody>
                                             {order.orderLogs.map(log => (
                                                 <tr key={log.log_id} className="bg-white border-b hover:bg-slate-50">
-                                                    <td className="px-4 py-3 font-medium text-slate-800">{new Date(log.timestamp).toLocaleString()}</td>
-                                                    <td className="px-4 py-3">{log.action}</td>
-                                                    <td className="px-4 py-3">{log.details || ''}</td>
+                                                    <td className="px-4 py-3 font-medium text-slate-800">{log.timestamp ? new Date(log.timestamp).toLocaleString() : '—'}</td>
+                                                    <td className="px-4 py-3">{log.action || '—'}</td>
+                                                    <td className="px-4 py-3 whitespace-pre-wrap">{log.details || log.note || ''}</td>
                                                     <td className="px-4 py-3">
-                                                        {log.attachment_path ? 
+                                                        {log.attachment_path ?
                                                             <a href={`/data/${log.attachment_path}`} target="_blank" className="text-orange-600 hover:underline">View File</a> : ''}
                                                     </td>
                                                 </tr>
@@ -224,7 +641,7 @@
                             ) : <p className="text-slate-500 italic">No logs for this order yet.</p>}
                         </div>
 
-                        {isLogModalOpen && <AddLogModal orderId={order.id} onClose={() => setIsLogModalOpen(false)} onLogAdded={handleLogAdded} />}
+                        {isLogModalOpen && <AddLogModal orderId={order.id} onClose={() => setIsLogModalOpen(false)} onLogAdded={handleLogAdded} contacts={contacts} />}
 
                         <div className="bg-white rounded-lg shadow-sm border border-slate-200">
                             <div className="p-6 border-b"><h2 className="text-xl font-semibold text-slate-700">Line Items</h2></div>
@@ -242,8 +659,8 @@
                                     <tbody>
                                         {order.lineItems.map((item, index) => (
                                             <tr key={index} className="border-b align-middle">
-                                                <td className="px-4 py-2">{item.item}</td>
-                                                <td className="px-4 py-2">{item.style}</td>
+                                                <td className="px-4 py-2">{itemsIndex[item.item]?.name || item.item}</td>
+                                                <td className="px-4 py-2">{item.style || '—'}</td>
                                                 <td className="px-4 py-2 text-center">{item.quantity}</td>
                                                 <td className="px-4 py-2 text-right">${(item.price / 100).toFixed(2)}</td>
                                                 <td className="px-4 py-2 text-right font-medium text-slate-800">${((item.quantity * item.price) / 100).toFixed(2)}</td>

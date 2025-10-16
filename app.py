@@ -249,6 +249,8 @@ def serialize_order(cursor, order_row, user_timezone, include_logs=False):
     order_dict['additionalContacts'] = additional_contacts
     order_dict['additionalContactIds'] = [contact['id'] for contact in additional_contacts if contact]
 
+    title_value = order_dict.pop('title', None)
+    order_dict['title'] = title_value or ''
     order_dict['id'] = order_dict.pop('order_id')
     order_dict['display_id'] = order_dict.pop('display_id')
     order_dict['date'] = order_dict.pop('order_date')
@@ -511,9 +513,14 @@ def handle_order_logs(order_id):
 
     if request.method == 'POST':
         # Handles multipart/form-data
-        action = request.form.get('action', 'Manual Entry')
+        action_raw = request.form.get('action', 'Manual Entry')
+        action = action_raw.strip() if isinstance(action_raw, str) else 'Manual Entry'
+        if not action:
+            action = 'Manual Entry'
+        normalized_action = action.lower()
         details = request.form.get('details')
         note = request.form.get('note')
+        log_body = (details if details is not None else note) or ''
         file = request.files.get('attachment')
         attachment_path = None
 
@@ -530,11 +537,11 @@ def handle_order_logs(order_id):
         try:
             cursor.execute(
                 "INSERT INTO order_logs (order_id, user, action, details, note, attachment_path) VALUES (?, ?, ?, ?, ?, ?)",
-                (order_id, "system", action, details, note, attachment_path)
+                (order_id, "system", action, log_body, log_body, attachment_path)
             )
             log_id = cursor.lastrowid
-            handles = extract_contact_handles(note)
-            sync_contact_mentions(cursor, handles, 'order_log', log_id, note)
+            handles = extract_contact_handles(log_body)
+            sync_contact_mentions(cursor, handles, 'order_log', log_id, log_body)
             cursor.execute("SELECT contact_id FROM orders WHERE order_id = ?", (order_id,))
             primary_row = cursor.fetchone()
             primary_contact_for_order = primary_row['contact_id'] if primary_row else None
@@ -554,11 +561,11 @@ def handle_order_logs(order_id):
                 utc_date = pytz.utc.localize(naive_date)
                 new_log_dict['timestamp'] = utc_date.astimezone(user_timezone).isoformat()
 
-            if action == 'status' and details:
+            if normalized_action in {'status update', 'status'} and log_body:
                 try:
-                    cursor.execute("UPDATE orders SET status = ? WHERE order_id = ?", (details, order_id))
+                    cursor.execute("UPDATE orders SET status = ? WHERE order_id = ?", (log_body, order_id))
                     cursor.execute("INSERT INTO order_status_history (order_id, status, status_date) VALUES (?, ?, ?)",
-                                   (order_id, details, datetime.now(timezone.utc).isoformat()))
+                                   (order_id, log_body, datetime.now(timezone.utc).isoformat()))
                     conn.commit()
                 except sqlite3.Error as e:
                     conn.rollback()
@@ -584,6 +591,8 @@ def handle_order_logs(order_id):
     logs = []
     for log_row in logs_from_db:
         log_dict = dict(log_row)
+        if not log_dict.get('details') and log_dict.get('note'):
+            log_dict['details'] = log_dict['note']
         if log_dict.get('timestamp'):
             # Timestamps from DB are naive, so we assume they are UTC
             naive_date = dateutil_parse(log_dict['timestamp'])
@@ -608,6 +617,9 @@ def handle_specific_order_log(order_id, log_id):
 
     if request.method == 'POST':  # Using POST for update to handle multipart/form-data
         note = request.form.get('note')
+        details = request.form.get('details')
+        action_override = request.form.get('action')
+        log_body = (details if details is not None else note) or ''
         file = request.files.get('attachment')
 
         attachment_path = log['attachment_path']
@@ -622,13 +634,14 @@ def handle_specific_order_log(order_id, log_id):
             unique_filename = f"{uuid.uuid4().hex[:8]}_{filename}"
             attachment_path = unique_filename
             file.save(os.path.join(app.config['UPLOAD_FOLDER'], unique_filename))
-        
+
+        updated_action = action_override.strip() if action_override and action_override.strip() else log['action']
         cursor.execute(
-            "UPDATE order_logs SET note = ?, attachment_path = ? WHERE log_id = ?",
-            (note, attachment_path, log_id)
+            "UPDATE order_logs SET action = ?, details = ?, note = ?, attachment_path = ? WHERE log_id = ?",
+            (updated_action, log_body, log_body, attachment_path, log_id)
         )
-        handles = extract_contact_handles(note)
-        sync_contact_mentions(cursor, handles, 'order_log', log_id, note)
+        handles = extract_contact_handles(log_body)
+        sync_contact_mentions(cursor, handles, 'order_log', log_id, log_body)
         cursor.execute("SELECT contact_id FROM orders WHERE order_id = ?", (order_id,))
         primary_row = cursor.fetchone()
         primary_contact_for_order = primary_row['contact_id'] if primary_row else None
@@ -721,6 +734,7 @@ def search_orders():
               'contact': {'join': "LEFT JOIN contacts v ON o.contact_id = v.id", 'condition': "(v.company_name LIKE ? OR v.contact_name LIKE ?)", 'params': [f'%{value}%', f'%{value}%']},
               'customer': {'join': "LEFT JOIN contacts v ON o.contact_id = v.id", 'condition': "(v.company_name LIKE ? OR v.contact_name LIKE ?)", 'params': [f'%{value}%', f'%{value}%']},
               'status': {'condition': "o.status LIKE ?", 'params': [f'%{value}%']},
+              'title': {'condition': "o.title LIKE ?", 'params': [f'%{value}%']},
               'item': {'join': "LEFT JOIN order_line_items oli ON o.order_id = oli.order_id LEFT JOIN items i ON oli.item_code = i.item_code", 'condition': "(i.name LIKE ? OR oli.style_chosen LIKE ?)", 'params': [f'%{value}%', f'%{value}%']},
               'note': {'condition': "o.notes LIKE ?", 'params': [f'%{value}%']},
               'log': {'join': "LEFT JOIN order_logs ol ON o.order_id = ol.order_id", 'condition': "(ol.details LIKE ? OR ol.note LIKE ?)", 'params': [f'%{value}%', f'%{value}%']},
@@ -748,7 +762,7 @@ def search_orders():
             if term:
                 term_param = f'%{term}%'
                 text_conditions = [
-                    "o.order_id LIKE ?", "o.display_id LIKE ?", "o.status LIKE ?", "o.notes LIKE ?",
+                    "o.order_id LIKE ?", "o.display_id LIKE ?", "o.title LIKE ?", "o.status LIKE ?", "o.notes LIKE ?",
                     "v.company_name LIKE ?", "v.contact_name LIKE ?", "i.name LIKE ?", "oli.style_chosen LIKE ?",
                     "ol.details LIKE ?", "ol.note LIKE ?"
                 ]
@@ -898,22 +912,28 @@ def save_order():
 
         new_order_payload['total'] = final_total_dollars
         
+        title_value = new_order_payload.get('title', '')
+        if isinstance(title_value, str):
+            title_value = title_value.strip()
+        else:
+            title_value = ''
+        new_order_payload['title'] = title_value
+
         display_id = new_order_payload.get('display_id')
         if isinstance(display_id, str):
             display_id = display_id.strip()
         display_id = display_id or None
 
         if current_order_id_for_db_ops:
-            cursor.execute("UPDATE orders SET display_id=?, contact_id=?, order_date=?, status=?, notes=?, estimated_shipping_date=?, shipping_address=?, shipping_city=?, shipping_state=?, shipping_zip_code=?, estimated_shipping_cost=?, scent_option=?, name_drop=?, signature_data_url=?, total_amount=?, updated_at=CURRENT_TIMESTAMP WHERE order_id=?",
-                           (display_id, db_processed_contact_id, new_order_payload.get('date', datetime.now(timezone.utc).isoformat()+"Z"), new_order_payload.get('status','Draft'), new_order_payload.get('notes'), new_order_payload.get('estimatedShippingDate'), new_order_payload.get('shippingAddress'), new_order_payload.get('shippingCity'), new_order_payload.get('shippingState'), new_order_payload.get('shippingZipCode'), estimated_shipping_cost_dollars, new_order_payload.get('scentOption'), 1 if new_order_payload.get('nameDrop') else 0, new_order_payload.get('signatureDataUrl'), final_total_dollars, current_order_id_for_db_ops))
+            cursor.execute("UPDATE orders SET display_id=?, contact_id=?, order_date=?, status=?, notes=?, estimated_shipping_date=?, shipping_address=?, shipping_city=?, shipping_state=?, shipping_zip_code=?, estimated_shipping_cost=?, scent_option=?, name_drop=?, signature_data_url=?, total_amount=?, title=?, updated_at=CURRENT_TIMESTAMP WHERE order_id=?",
+                           (display_id, db_processed_contact_id, new_order_payload.get('date', datetime.now(timezone.utc).isoformat()+"Z"), new_order_payload.get('status','Draft'), new_order_payload.get('notes'), new_order_payload.get('estimatedShippingDate'), new_order_payload.get('shippingAddress'), new_order_payload.get('shippingCity'), new_order_payload.get('shippingState'), new_order_payload.get('shippingZipCode'), estimated_shipping_cost_dollars, new_order_payload.get('scentOption'), 1 if new_order_payload.get('nameDrop') else 0, new_order_payload.get('signatureDataUrl'), final_total_dollars, title_value, current_order_id_for_db_ops))
             cursor.execute("DELETE FROM order_line_items WHERE order_id = ?", (current_order_id_for_db_ops,))
             cursor.execute("DELETE FROM order_status_history WHERE order_id = ?", (current_order_id_for_db_ops,))
         else:
-            timestamp_ms = int(time.time() * 1000)
-            current_order_id_for_db_ops = f"PO-{timestamp_ms}"
+            current_order_id_for_db_ops = f"ORD-{uuid.uuid4()}"
             new_order_payload['id'] = current_order_id_for_db_ops
-            cursor.execute("INSERT INTO orders (order_id, display_id, contact_id, order_date, status, notes, estimated_shipping_date, shipping_address, shipping_city, shipping_state, shipping_zip_code, estimated_shipping_cost, scent_option, name_drop, signature_data_url, total_amount) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                           (current_order_id_for_db_ops, display_id, db_processed_contact_id, new_order_payload.get('date', datetime.now(timezone.utc).isoformat()+"Z"), new_order_payload.get('status','Draft'), new_order_payload.get('notes'), new_order_payload.get('estimatedShippingDate'), new_order_payload.get('shippingAddress'), new_order_payload.get('shippingCity'), new_order_payload.get('shippingState'), new_order_payload.get('shippingZipCode'), estimated_shipping_cost_dollars, new_order_payload.get('scentOption'), 1 if new_order_payload.get('nameDrop') else 0, new_order_payload.get('signatureDataUrl'), final_total_dollars))
+            cursor.execute("INSERT INTO orders (order_id, display_id, contact_id, order_date, status, notes, estimated_shipping_date, shipping_address, shipping_city, shipping_state, shipping_zip_code, estimated_shipping_cost, scent_option, name_drop, signature_data_url, total_amount, title) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                           (current_order_id_for_db_ops, display_id, db_processed_contact_id, new_order_payload.get('date', datetime.now(timezone.utc).isoformat()+"Z"), new_order_payload.get('status','Draft'), new_order_payload.get('notes'), new_order_payload.get('estimatedShippingDate'), new_order_payload.get('shippingAddress'), new_order_payload.get('shippingCity'), new_order_payload.get('shippingState'), new_order_payload.get('shippingZipCode'), estimated_shipping_cost_dollars, new_order_payload.get('scentOption'), 1 if new_order_payload.get('nameDrop') else 0, new_order_payload.get('signatureDataUrl'), final_total_dollars, title_value))
         
         processed_order_id = current_order_id_for_db_ops 
         app.logger.info(f"DB-OP: processed_order_id is now set to: '{processed_order_id}' before line item processing.")

@@ -251,160 +251,149 @@ const OrderLogsSection = ({ orderId, canEdit, allContacts = [], onContactsChange
 
     const { useState, useEffect, useRef } = React;
     const [logs, setLogs] = useState([]);
-    const [note, setNote] = useState('');
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [action, setAction] = useState('Manual Entry');
+    const [details, setDetails] = useState('');
     const [attachment, setAttachment] = useState(null);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [errorMessage, setErrorMessage] = useState(null);
     const fileInputRef = useRef(null);
-    const [editingLog, setEditingLog] = useState(null);
-    const [editedNote, setEditedNote] = useState('');
-    const [editedAttachment, setEditedAttachment] = useState(null);
+
+    const resetModalState = () => {
+        setAction('Manual Entry');
+        setDetails('');
+        setAttachment(null);
+        setIsSubmitting(false);
+        setErrorMessage(null);
+        if (fileInputRef.current) {
+            fileInputRef.current.value = '';
+        }
+    };
 
     const fetchLogs = async () => {
         try {
             const response = await fetch(`/api/orders/${orderId}/logs`);
             const data = await response.json();
-            setLogs(data);
+            setLogs(Array.isArray(data) ? data : []);
         } catch (error) {
             console.error("Failed to fetch logs:", error);
         }
     };
 
     useEffect(() => {
-        if (orderId) {
-            fetchLogs();
-        }
+        fetchLogs();
     }, [orderId]);
 
-    const handleFileChange = (e) => setAttachment(e.target.files[0]);
-    const handleEditedFileChange = (e) => setEditedAttachment(e.target.files[0]);
+    const handleSubmit = async (event) => {
+        event.preventDefault();
+        setIsSubmitting(true);
+        setErrorMessage(null);
 
-    const handleSubmit = async (e) => {
-        e.preventDefault();
         const formData = new FormData();
-        formData.append('note', note);
-        if (attachment) formData.append('attachment', attachment);
+        formData.append('action', action);
+        formData.append('details', details);
+        if (attachment) {
+            formData.append('attachment', attachment);
+        }
 
         try {
             const response = await fetch(`/api/orders/${orderId}/logs`, { method: 'POST', body: formData });
-            if (response.ok) {
-                setNote('');
-                setAttachment(null);
-                if (fileInputRef.current) fileInputRef.current.value = '';
-                await fetchLogs();
-                if (typeof onContactsChanged === 'function') {
-                    try { await onContactsChanged(); } catch (error) { console.error('Failed to refresh mentioned contacts:', error); }
-                }
-            } else {
-                const result = await response.json();
-                alert('Failed to add log entry: ' + result.message);
+            if (!response.ok) {
+                const result = await response.json().catch(() => ({ message: 'Failed to add log entry.' }));
+                throw new Error(result.message || 'Failed to add log entry.');
             }
+            await fetchLogs();
+            if (typeof onContactsChanged === 'function') {
+                try { await onContactsChanged(); } catch (error) { console.error('Failed to refresh mentioned contacts:', error); }
+            }
+            setIsModalOpen(false);
+            resetModalState();
         } catch (error) {
             console.error('Error adding log entry:', error);
-            alert('An error occurred while adding the log entry.');
-        }
-    };
-
-    const handleEditClick = (log) => {
-        setEditingLog(log);
-        setEditedNote(log.note || '');
-        setEditedAttachment(null);
-    };
-
-    const handleUpdate = async () => {
-        if (!editingLog) return;
-        const formData = new FormData();
-        formData.append('note', editedNote);
-        if (editedAttachment) formData.append('attachment', editedAttachment);
-
-        try {
-            const response = await fetch(`/api/orders/${orderId}/logs/${editingLog.log_id}`, { method: 'POST', body: formData });
-            if (response.ok) {
-                setEditingLog(null);
-                setEditedAttachment(null);
-                await fetchLogs();
-                if (typeof onContactsChanged === 'function') {
-                    try { await onContactsChanged(); } catch (error) { console.error('Failed to refresh mentioned contacts:', error); }
-                }
-            } else {
-                const error = await response.json();
-                alert('Failed to update log: ' + error.message);
-            }
-        } catch (error) {
-            console.error('Error updating log:', error);
-            alert('An error occurred while updating the log.');
+            setErrorMessage(error.message || 'An unexpected error occurred while saving the log.');
+        } finally {
+            setIsSubmitting(false);
         }
     };
 
     const handleDelete = async (logId) => {
-        if (confirm('Are you sure you want to delete this log entry?')) {
-            try {
-                const response = await fetch(`/api/orders/${orderId}/logs/${logId}`, { method: 'DELETE' });
-                if (response.ok) {
-                    await fetchLogs();
-                    if (typeof onContactsChanged === 'function') {
-                        try { await onContactsChanged(); } catch (error) { console.error('Failed to refresh mentioned contacts:', error); }
-                    }
-                } else {
-                    const error = await response.json();
-                    alert('Failed to delete log: ' + error.message);
-                }
-            } catch (error) {
-                console.error('Error deleting log:', error);
-                alert('An error occurred while deleting the log entry.');
+        if (!confirm('Are you sure you want to delete this log entry?')) {
+            return;
+        }
+        try {
+            const response = await fetch(`/api/orders/${orderId}/logs/${logId}`, { method: 'DELETE' });
+            if (!response.ok) {
+                const result = await response.json().catch(() => ({ message: 'Failed to delete log entry.' }));
+                throw new Error(result.message || 'Failed to delete log entry.');
             }
+            await fetchLogs();
+            if (typeof onContactsChanged === 'function') {
+                try { await onContactsChanged(); } catch (error) { console.error('Failed to refresh mentioned contacts:', error); }
+            }
+        } catch (error) {
+            console.error('Error deleting log:', error);
+            alert(error.message || 'An unexpected error occurred while deleting the log.');
         }
     };
 
     return (
         <>
-            {editingLog && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
-                    <div className="bg-white p-6 rounded-lg shadow-xl w-full max-w-lg">
-                        <h2 className="text-xl font-bold mb-4">Edit Log Entry</h2>
-                        <ContactMentionTextarea label="Note" value={editedNote} onChange={setEditedNote} contacts={allContacts} />
-                        <div className="mt-4">
-                            <label className="block text-sm font-medium text-slate-600">Attachment</label>
-                            <input type="file" onChange={handleEditedFileChange} className="mt-1 block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-orange-50 file:text-orange-700 hover:file:bg-orange-100" />
-                        </div>
-                        <div className="mt-6 flex justify-end space-x-3">
-                            <button onClick={() => setEditingLog(null)} className="px-4 py-2 bg-slate-200 text-slate-800 rounded-md hover:bg-slate-300">Cancel</button>
-                            <button onClick={handleUpdate} className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700">Update</button>
-                        </div>
-                    </div>
-                </div>
-            )}
-            {canEdit && (
-                <div className="bg-white rounded-lg shadow-sm border border-slate-200 mb-6">
-                    <div className="p-6">
-                        <h2 className="text-xl font-semibold text-slate-700 mb-4">Add Log Entry</h2>
+            {isModalOpen && (
+                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
+                    <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6">
+                        <h2 className="text-xl font-bold text-slate-800 mb-4">Add Order Log</h2>
                         <form onSubmit={handleSubmit} className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700">Action</label>
+                                <select value={action} onChange={e => setAction(e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500">
+                                    <option value="Manual Entry">Manual Entry</option>
+                                    <option value="Status Update">Status Update</option>
+                                    <option value="Phone Call">Phone Call</option>
+                                    <option value="Email">Email</option>
+                                    <option value="Internal Note">Internal Note</option>
+                                </select>
+                            </div>
                             <ContactMentionTextarea
-                                label="Notes"
+                                label="Details"
                                 placeholder="Share updates and mention teammates or clients with @handle"
-                                value={note}
-                                onChange={setNote}
+                                value={details}
+                                onChange={setDetails}
                                 contacts={allContacts}
                                 rows={4}
                             />
                             <div>
-                                <label className="block text-sm font-medium text-slate-600 mb-1">Attachment</label>
+                                <label className="block text-sm font-medium text-slate-700">Attachment</label>
                                 <input
-                                    type="file"
                                     ref={fileInputRef}
-                                    onChange={handleFileChange}
-                                    className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-orange-50 file:text-orange-700 hover:file:bg-orange-100"
+                                    type="file"
+                                    onChange={event => setAttachment(event.target.files[0] || null)}
+                                    className="mt-1 block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-orange-50 file:text-orange-700 hover:file:bg-orange-100"
                                 />
                             </div>
-                            <div className="flex justify-end space-x-3">
-                                <button type="submit" className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700">Post Log</button>
-                                <button type="button" onClick={() => { setNote(''); setAttachment(null); if (fileInputRef.current) fileInputRef.current.value=''; }} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-md hover:bg-slate-300">Clear</button>
+                            {errorMessage && <p className="text-sm text-red-600">{errorMessage}</p>}
+                            <div className="flex justify-end gap-3 pt-2">
+                                <button type="button" onClick={() => { setIsModalOpen(false); resetModalState(); }} className="px-4 py-2 rounded-md bg-slate-200 text-slate-700 font-medium hover:bg-slate-300">Cancel</button>
+                                <button type="submit" disabled={isSubmitting} className="px-4 py-2 rounded-md bg-orange-600 text-white font-semibold hover:bg-orange-700 disabled:bg-orange-300">
+                                    {isSubmitting ? 'Saving...' : 'Add Log'}
+                                </button>
                             </div>
                         </form>
                     </div>
                 </div>
             )}
             <div className="bg-white rounded-lg shadow-sm border border-slate-200">
+                <div className="p-6 flex items-center justify-between gap-4 border-b border-slate-200">
+                    <div>
+                        <h2 className="text-xl font-semibold text-slate-700">Order Logs</h2>
+                        <p className="text-sm text-slate-500">Track the latest activity, conversations, and file drops.</p>
+                    </div>
+                    {canEdit && (
+                        <button onClick={() => setIsModalOpen(true)} className="inline-flex items-center px-3 py-2 text-sm font-semibold rounded-md bg-orange-600 text-white hover:bg-orange-700 shadow">
+                            Add Log
+                        </button>
+                    )}
+                </div>
                 <div className="p-6">
-                    <h2 className="text-xl font-semibold text-slate-700 mb-4">Log History</h2>
                     <div className="overflow-x-auto">
                         <table className="w-full text-sm text-left text-slate-500">
                             <thead className="text-xs text-slate-700 uppercase bg-slate-100">
@@ -418,24 +407,27 @@ const OrderLogsSection = ({ orderId, canEdit, allContacts = [], onContactsChange
                             </thead>
                             <tbody>
                                 {logs.map(log => (
-                                    <tr key={log.log_id} className="bg-white border-b hover:bg-slate-50">
-                                        <td className="px-4 py-3 font-medium text-slate-800">{new Date(log.timestamp).toLocaleString()}</td>
-                                        <td className="px-4 py-3">{log.action}</td>
-                                        <td className="px-4 py-3">{log.details || ''}</td>
+                                    <tr key={log.log_id} className="bg-white border-b last:border-b-0 hover:bg-slate-50">
+                                        <td className="px-4 py-3 font-medium text-slate-800">{log.timestamp ? new Date(log.timestamp).toLocaleString() : '—'}</td>
+                                        <td className="px-4 py-3">{log.action || '—'}</td>
+                                        <td className="px-4 py-3 whitespace-pre-wrap">{log.details || log.note || ''}</td>
                                         <td className="px-4 py-3">
-                                            {log.attachment_path ? <a href={`/data/${log.attachment_path}`} target="_blank" className="text-orange-600 hover:underline">View File</a> : ''}
+                                            {log.attachment_path ? (
+                                                <a href={`/data/${log.attachment_path}`} target="_blank" className="text-orange-600 hover:underline">View File</a>
+                                            ) : (
+                                                <span className="text-slate-400">—</span>
+                                            )}
                                         </td>
                                         {canEdit && (
                                             <td className="px-4 py-3 text-right">
-                                                <button onClick={() => handleEditClick(log)} className="font-medium text-orange-600 hover:underline mr-4">Edit</button>
-                                                <button onClick={() => handleDelete(log.log_id)} className="font-medium text-red-600 hover:underline">Delete</button>
+                                                <button onClick={() => handleDelete(log.log_id)} className="text-sm font-medium text-red-600 hover:text-red-700">Delete</button>
                                             </td>
                                         )}
                                     </tr>
                                 ))}
                                 {logs.length === 0 && (
                                     <tr>
-                                        <td colSpan={canEdit ? "5" : "4"} className="text-center py-4 text-slate-500">No log entries for this order yet.</td>
+                                        <td colSpan={canEdit ? 5 : 4} className="px-4 py-6 text-center text-slate-500">No log entries for this order yet.</td>
                                     </tr>
                                 )}
                             </tbody>
@@ -483,177 +475,221 @@ const NameDropToggle = ({ value, onChange, disabled = false }) => {
 };
 
 
-const generatePdf = (order, allItems, action = 'save') => {
+const generateInvoicePdf = (order, allItems, action = 'save') => {
+    if (!order) return;
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF();
-    const { contactInfo, lineItems, notes, total, id, date, scentOption, estimatedShippingDate, estimatedShipping, nameDrop, signatureDataUrl } = order; // Added signatureDataUrl and estimatedShipping
+    const safeItems = allItems || {};
+    const safeOrder = order || {};
+    const displayId = typeof safeOrder.display_id === 'string' ? safeOrder.display_id : null;
+    const orderId = safeOrder.id || '';
+    const orderTitle = (safeOrder.title || '').trim();
+    const orderNumber = (displayId && displayId.trim()) || orderId;
     const timeZone = "America/Chicago";
     const dateOptions = { year: 'numeric', month: 'long', day: 'numeric' };
-    doc.setFontSize(20); doc.text("Purchase Order", 14, 22);
-    doc.setFontSize(12); doc.text(`PO #: ${id}`, 14, 30); doc.text(`Date: ${formatInTimeZone(date, timeZone, dateOptions)}`, 14, 36);
-    
-    let leftColumnY = 50;
-    let rightColumnY = 50;
+    const formattedDate = safeOrder.date ? formatInTimeZone(safeOrder.date, timeZone, dateOptions) : '—';
+
+    const baseContact = safeOrder.contactInfo || {};
+    const contactInfo = {
+        companyName: '',
+        contactName: '',
+        email: '',
+        phone: '',
+        billingAddress: '',
+        billingCity: '',
+        billingState: '',
+        billingZipCode: '',
+        shippingAddress: '',
+        shippingCity: '',
+        shippingState: '',
+        shippingZipCode: '',
+        ...baseContact
+    };
+
+    const renderBlock = (label, lines, x, y, wrapWidth = null) => {
+        doc.setFontSize(12);
+        doc.text(label, x, y);
+        y += 6;
+        doc.setFontSize(10);
+        if (!lines.length) {
+            doc.text('—', x, y);
+            return y + 7;
+        }
+        if (wrapWidth) {
+            const wrapped = doc.splitTextToSize(lines.join('\n'), wrapWidth);
+            doc.text(wrapped, x, y);
+            return y + (wrapped.length * 4) + 2;
+        }
+        lines.forEach((line) => {
+            doc.text(line, x, y);
+            y += 5;
+        });
+        return y + 2;
+    };
+
+    const buildAddressLines = (address, city, state, zip) => {
+        const lines = [];
+        if (address) lines.push(address);
+        const locality = [city, state].filter(Boolean).join(', ');
+        const postalLine = [locality, zip].filter(Boolean).join(' ');
+        if (postalLine.trim()) lines.push(postalLine.trim());
+        return lines;
+    };
+
+    doc.setFontSize(20);
+    doc.text("Invoice", 14, 22);
+    doc.setFontSize(12);
+    let headerY = 30;
+    doc.text(`Order #: ${orderNumber || '—'}`, 14, headerY);
+    if (orderTitle) {
+        headerY += 6;
+        doc.text(`Title: ${orderTitle}`, 14, headerY);
+    }
+    headerY += 6;
+    doc.text(`Date: ${formattedDate}`, 14, headerY);
+
+    let leftColumnY = headerY + 14;
+    let rightColumnY = headerY + 14;
     const leftColumnX = 14;
-    const rightColumnX = 105; // Start addresses further to the right
+    const rightColumnX = 105;
 
-    // Contact Info - Left Column
-    doc.setFontSize(12); doc.text("Contact Information", leftColumnX, leftColumnY); 
-    leftColumnY += 6;
-    doc.setFontSize(10);
-    doc.text(`${contactInfo.companyName}`, leftColumnX, leftColumnY); leftColumnY += 5;
-    doc.text(`${contactInfo.contactName}`, leftColumnX, leftColumnY); leftColumnY += 5;
-    doc.text(`${contactInfo.email}`, leftColumnX, leftColumnY); leftColumnY += 5;
-    doc.text(`${contactInfo.phone}`, leftColumnX, leftColumnY); leftColumnY += 5;
+    const customerLines = [contactInfo.companyName, contactInfo.contactName, contactInfo.email, contactInfo.phone].filter(Boolean);
+    leftColumnY = renderBlock("Bill To", customerLines, leftColumnX, leftColumnY);
 
-    // Billing Address - Right Column
-    if (contactInfo.billingAddress || contactInfo.billingCity) {
-        doc.setFontSize(10);
-        doc.text("Billing Address:", rightColumnX, rightColumnY); rightColumnY += 5;
-        const ba = `${contactInfo.billingAddress || ''}\n${contactInfo.billingCity || ''}, ${contactInfo.billingState || ''} ${contactInfo.billingZipCode || ''}`;
-        const billingAddressLines = doc.splitTextToSize(ba, 90);
-        doc.text(billingAddressLines, rightColumnX, rightColumnY);
-        rightColumnY += (billingAddressLines.length * 4) + 2;
+    const billingLines = buildAddressLines(contactInfo.billingAddress, contactInfo.billingCity, contactInfo.billingState, contactInfo.billingZipCode);
+    if (billingLines.length) {
+        rightColumnY = renderBlock("Billing Address", billingLines, rightColumnX, rightColumnY, 90);
     }
 
-    // Shipping Address - Right Column, below Billing
-    if (contactInfo.shippingAddress || contactInfo.shippingCity) {
-        if (contactInfo.billingAddress || contactInfo.billingCity) rightColumnY += 3;
-        doc.setFontSize(10);
-        doc.text("Shipping Address:", rightColumnX, rightColumnY); rightColumnY += 5;
-        const sa = `${contactInfo.shippingAddress || ''}\n${contactInfo.shippingCity || ''}, ${contactInfo.shippingState || ''} ${contactInfo.shippingZipCode || ''}`;
-        const shippingAddressLines = doc.splitTextToSize(sa, 90);
-        doc.text(shippingAddressLines, rightColumnX, rightColumnY);
-        rightColumnY += (shippingAddressLines.length * 4) + 2;
+    const shippingLines = buildAddressLines(contactInfo.shippingAddress, contactInfo.shippingCity, contactInfo.shippingState, contactInfo.shippingZipCode);
+    if (shippingLines.length) {
+        rightColumnY = renderBlock("Shipping Address", shippingLines, rightColumnX, rightColumnY, 90);
     }
-    
-    // Determine the starting Y for the table, ensuring it's below both columns
-    let tableStartY = Math.max(leftColumnY, rightColumnY, 70); // Ensure table starts at least at Y=70 or below the longest column
-    tableStartY += 5; // Add a small buffer
 
-    const tableColumn = ["Item", "Style", "Quantity", "Unit Price", "Total"];
-    const tableRows = lineItems.map(item => [allItems[item.item]?.name || item.item, item.style, item.quantity, `$${(item.price / 100).toFixed(2)}`, `$${((item.quantity * item.price) / 100).toFixed(2)}`]);
-    doc.autoTable({ head: [tableColumn], body: tableRows, startY: tableStartY });
+    let tableStartY = Math.max(leftColumnY, rightColumnY, headerY + 20) + 5;
 
-    // Calculate subtotal and name drop surcharge
-    let calculatedSubtotal = 0;
-    lineItems.forEach(item => {
-        calculatedSubtotal += item.quantity * item.price;
+    const safeLineItems = Array.isArray(safeOrder.lineItems) ? safeOrder.lineItems : [];
+    const tableHead = ["Item", "Style", "Quantity", "Unit Price", "Total"];
+    const tableBody = safeLineItems.map((item) => {
+        const itemLookup = item?.item ? safeItems[item.item] : null;
+        const itemName = (itemLookup && itemLookup.name) || item?.item || 'Item';
+        const quantity = Number(item?.quantity) || 0;
+        const unitPriceCents = Number(item?.price) || 0;
+        const lineTotalCents = quantity * unitPriceCents;
+        return [
+            itemName,
+            item?.style || '',
+            String(quantity),
+            `$${(unitPriceCents / 100).toFixed(2)}`,
+            `$${(lineTotalCents / 100).toFixed(2)}`
+        ];
     });
 
-    let calculatedNameDropSurcharge = 0;
-    if (nameDrop) {
-        lineItems.forEach(item => {
-            if (item.type === 'cross') { // Assuming item.type is reliably populated
-                calculatedNameDropSurcharge += item.quantity * 100; // $1.00 per cross item
+    doc.autoTable({ head: [tableHead], body: tableBody, startY: tableStartY });
+
+    const subtotalCents = safeLineItems.reduce((acc, item) => {
+        const quantity = Number(item?.quantity) || 0;
+        const unitPriceCents = Number(item?.price) || 0;
+        return acc + (quantity * unitPriceCents);
+    }, 0);
+
+    let nameDropSurchargeCents = 0;
+    if (safeOrder.nameDrop) {
+        safeLineItems.forEach((item) => {
+            if (item?.type === 'cross') {
+                const quantity = Number(item?.quantity) || 0;
+                nameDropSurchargeCents += quantity * 100;
             }
         });
     }
 
-    let finalY = doc.lastAutoTable.finalY + 10;
-    doc.setFontSize(10); // Smaller font for sub-lines
-    doc.text(`Subtotal: $${(calculatedSubtotal / 100).toFixed(2)}`, 14, finalY);
-    finalY += 7;
+    const estimatedShippingValue = typeof safeOrder.estimatedShipping === 'number'
+        ? safeOrder.estimatedShipping
+        : parseFloat(safeOrder.estimatedShipping || '0');
+    const estimatedShippingCents = Math.round((Number.isFinite(estimatedShippingValue) ? estimatedShippingValue : 0) * 100);
+    const totalCents = subtotalCents + nameDropSurchargeCents + estimatedShippingCents;
 
-    if (calculatedNameDropSurcharge > 0) {
-        doc.text(`Name Drop Surcharge: $${(calculatedNameDropSurcharge / 100).toFixed(2)}`, 14, finalY);
-        finalY += 7;
-    }
+    const tableResult = doc.lastAutoTable;
+    let summaryY = (tableResult ? tableResult.finalY : tableStartY) + 10;
 
-    // Add Estimated Shipping Cost here
-    // estimatedShipping is destructured from order, expected to be a string like "12.34"
-    const estShippingValue = parseFloat(estimatedShipping) || 0; // Default to 0 if NaN
-    if (estShippingValue > 0) { // Display only if positive value
-        doc.setFontSize(10); // Ensure font size is consistent for this item
-        doc.text(`Est. Shipping Cost: $${estShippingValue.toFixed(2)}`, 14, finalY);
-        finalY += 7; // Increment Y for the next line
-    }
-
-    // Calculate the grand total for PDF display based on components shown on PDF
-    const estimatedShippingInCentsForPdfTotal = Math.round(estShippingValue * 100);
-    const grandTotalForPdfDisplay = calculatedSubtotal + calculatedNameDropSurcharge + estimatedShippingInCentsForPdfTotal;
-
-    doc.setFontSize(12); // Larger font for the grand total
-    doc.text(`Total: $${(grandTotalForPdfDisplay / 100).toFixed(2)}`, 14, finalY); // Use the self-calculated total for PDF
-    
-    finalY += 10; 
-    doc.setFontSize(10); 
-    doc.text(`Scent Option: ${scentOption}`, 14, finalY);
-
-    let currentLineY = finalY + 5; // Y position for the next line of text
-
-    if(estimatedShippingDate) {
-        doc.text(`Est. Ship Date: ${formatInTimeZone(estimatedShippingDate, timeZone, dateOptions)}`, 14, currentLineY);
-        currentLineY += 5; // Increment Y for the next line
-    }
-    
-    finalY = currentLineY - 5; // Update finalY to the Y position of the last line written (if any date was written)
-                               // If no date, finalY remains as it was after Scent Option.
-                               // This needs to be robust: if currentLineY didn't change, finalY should be the Y of Scent Option.
-    if (currentLineY === finalY + 10) { // This means neither date nor shipping cost (from previous logic) was added after Scent Option
-        // If only Scent Option was printed, and then we moved to notes, finalY should be where Scent Option was.
-        // However, the new logic places shipping cost before total, so this specific adjustment might need review.
-        // Let's simplify: finalY is now the Y after Total. The lines after Total start from there.
-        // The `finalY = currentLineY - 5;` was for the block that printed date/shipping *after* total.
-        // Now that block is split, we need to ensure `finalY` correctly reflects the Y position *after* the Total.
-        // The `finalY += 10;` after Total already correctly sets up for Scent Option.
-        // The `currentLineY` logic for Est. Ship Date is fine as it starts from `finalY` (which is after Scent Option).
-    }
-    
-    let notesStartY = finalY + 10; // This should be based on the Y position after Est. Ship Date (if present)
-                                   // or after Scent Option if no Est. Ship Date.
-                                   // The `finalY = currentLineY - 5;` correctly sets this up if currentLineY was updated.
-                                   // If currentLineY was NOT updated (no ship date), then finalY is still the Y of Scent Option.
-                                   // So, notesStartY will be 10 below Scent Option or 10 below Est. Ship Date. This seems correct.
-    if (notes) { 
-        doc.text("Notes:", 14, notesStartY); 
-        const splitNotes = doc.splitTextToSize(notes, 180); 
-        doc.text(splitNotes, 14, notesStartY + 5);
-        finalY = notesStartY + 5 + (splitNotes.length * 4); // Adjust finalY based on notes length
-    } else {
-        finalY = notesStartY; // If no notes, finalY is just after shipping date
-    }
-
-    // Signature Block
-    finalY += 15; // Add some space before signature
-    if (finalY > 260) { // Check if new page is needed for signature
-        doc.addPage();
-        finalY = 20; // Reset Y position for new page
-    }
     doc.setFontSize(10);
-    doc.text("Authorized Signature:", 14, finalY);
+    doc.text(`Subtotal: $${(subtotalCents / 100).toFixed(2)}`, 14, summaryY);
+    summaryY += 7;
 
+    if (nameDropSurchargeCents > 0) {
+        doc.text(`Name Drop Surcharge: $${(nameDropSurchargeCents / 100).toFixed(2)}`, 14, summaryY);
+        summaryY += 7;
+    }
+
+    if (estimatedShippingCents > 0) {
+        doc.text(`Est. Shipping Cost: $${(estimatedShippingCents / 100).toFixed(2)}`, 14, summaryY);
+        summaryY += 7;
+    }
+
+    doc.setFontSize(12);
+    doc.text(`Total: $${(totalCents / 100).toFixed(2)}`, 14, summaryY);
+    summaryY += 10;
+
+    doc.setFontSize(10);
+    const scentLabel = safeOrder.scentOption || 'Scented';
+    doc.text(`Scent Option: ${scentLabel}`, 14, summaryY);
+    summaryY += 5;
+
+    if (safeOrder.estimatedShippingDate) {
+        doc.text(`Est. Ship Date: ${formatInTimeZone(safeOrder.estimatedShippingDate, timeZone, dateOptions)}`, 14, summaryY);
+        summaryY += 5;
+    }
+
+    const trimmedNotes = (safeOrder.notes || '').trim();
+    if (trimmedNotes) {
+        summaryY += 5;
+        doc.text("Notes:", 14, summaryY);
+        summaryY += 5;
+        const wrappedNotes = doc.splitTextToSize(trimmedNotes, 180);
+        doc.text(wrappedNotes, 14, summaryY);
+        summaryY += wrappedNotes.length * 4;
+    }
+
+    summaryY += 15;
+    if (summaryY > 260) {
+        doc.addPage();
+        summaryY = 20;
+    }
+
+    doc.setFontSize(10);
+    doc.text("Authorized Signature:", 14, summaryY);
+
+    const signatureDataUrl = safeOrder.signatureDataUrl;
     if (signatureDataUrl) {
         try {
-            if (signatureDataUrl.startsWith('data:image/png;base64,')) {
-                const base64ImageData = signatureDataUrl.substring(signatureDataUrl.indexOf(',') + 1);
-                // A very short base64 string might indicate an empty or problematic signature.
-                // A 1x1 transparent PNG's base64 data is ~88 chars.
-                // We require a bit more to consider it a valid signature image.
-                if (base64ImageData.length > 150) { 
-                    const signatureImgWidth = 70; // mm
-                    const signatureImgHeight = 20; // mm, adjust as needed
-                    doc.addImage(signatureDataUrl, 'PNG', 50, finalY - (signatureImgHeight/2) + 2 , signatureImgWidth, signatureImgHeight);
+            if (signatureDataUrl.startsWith('data:image')) {
+                const base64Data = signatureDataUrl.substring(signatureDataUrl.indexOf(',') + 1);
+                if (base64Data.length > 150) {
+                    const signatureImgWidth = 70;
+                    const signatureImgHeight = 20;
+                    doc.addImage(signatureDataUrl, 'PNG', 50, summaryY - (signatureImgHeight / 2) + 2, signatureImgWidth, signatureImgHeight);
                 } else {
-                    console.warn("Signature data is too short (length: " + base64ImageData.length + "), possibly empty or corrupted. Drawing a line instead.");
-                    doc.line(50, finalY, 120, finalY); // Fallback line
+                    doc.line(50, summaryY, 120, summaryY);
                 }
             } else {
-                console.error("Signature data URL is not a valid PNG image. Drawing a line instead.");
-                doc.line(50, finalY, 120, finalY); // Fallback line
+                doc.line(50, summaryY, 120, summaryY);
             }
-        } catch (e) {
-            console.error("Error adding signature image to PDF:", e);
-            doc.line(50, finalY, 120, finalY); // Fallback line in case of error
+        } catch (error) {
+            console.error('Error rendering signature image for PDF:', error);
+            doc.line(50, summaryY, 120, summaryY);
         }
     } else {
-        doc.line(50, finalY, 120, finalY); // Draw a line if no signature data
+        doc.line(50, summaryY, 120, summaryY);
     }
-    
-    if (action === 'save') { doc.save(`PO_${id}.pdf`); } 
-    else if (action === 'preview') { doc.output('dataurlnewwindow'); }
-    else if (action === 'datauristring') { return doc.output('datauristring'); }
-}
+
+    if (action === 'save') {
+        doc.save(`Invoice_${orderId || 'Order'}.pdf`);
+    } else if (action === 'preview') {
+        doc.output('dataurlnewwindow');
+    } else if (action === 'datauristring') {
+        return doc.output('datauristring');
+    }
+};
 
 const SalesChart = ({ data }) => {
     const { useRef, useEffect } = React;
@@ -930,7 +966,7 @@ ${fallbackYourCompanyName}`
                             onClick={() => {
                                 if (order && allItems) {
                                     try {
-                                        generatePdf(order, allItems, 'save'); // 'save' action directly downloads
+                                        generateInvoicePdf(order, allItems, 'save'); // 'save' action directly downloads
                                     } catch (e) {
                                         console.error("Error generating PDF for download:", e);
                                         alert("Failed to generate PDF for download.");
@@ -1464,8 +1500,19 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allContacts, allSelectableIt
                     <tbody>{filteredOrders.map(order => {
                         const timeZone = "America/Chicago";
                         const dateOptions = { year: 'numeric', month: 'long', day: 'numeric' };
+                        const orderTitle = (order.title || '').trim();
+                        const displayIdValue = typeof order.display_id === 'string' ? order.display_id : '';
+                        const trimmedDisplayId = displayIdValue.trim();
+                        const hasDisplayId = Boolean(trimmedDisplayId);
+                        const primaryLabel = orderTitle || trimmedDisplayId || order.id;
+                        const idLabel = hasDisplayId ? `${trimmedDisplayId}${trimmedDisplayId === order.id ? '' : ` • ${order.id}`}` : order.id;
                         return (<tr key={order.id} onClick={() => viewOrder(order)} className="bg-white border-b hover:bg-slate-50 cursor-pointer">
-                        <td className="px-4 py-3 font-medium text-slate-800">{order.display_id || order.id}</td><td className="px-4 py-3">{getContactDisplayName(order.primaryContact || order.contactInfo)}</td>
+                        <td className="px-4 py-3 align-top">
+                            <div className="flex flex-col">
+                                <span className="font-medium text-slate-800">{primaryLabel}</span>
+                                <span className="text-xs text-slate-500">{idLabel}</span>
+                            </div>
+                        </td><td className="px-4 py-3">{getContactDisplayName(order.primaryContact || order.contactInfo)}</td>
                         <td className="px-4 py-3">{formatInTimeZone(order.date, timeZone, dateOptions)}</td><td className="px-4 py-3">${parseFloat(order.total || 0).toFixed(2)}</td>
                         <td className="px-4 py-3">
                             {order.status === 'Shipped' ? (
@@ -1480,7 +1527,7 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allContacts, allSelectableIt
                         </td>
                         <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
                             <div className="flex items-center justify-center space-x-2">
-                                <button onClick={() => generatePdf(order, allSelectableItems, 'preview')} className="p-1 text-slate-500 hover:text-orange-600"><PdfIcon /></button>
+                                <button onClick={() => generateInvoicePdf(order, allSelectableItems, 'preview')} className="p-1 text-slate-500 hover:text-orange-600"><PdfIcon /></button>
                                 <button onClick={() => setOrderForEmailModal(order)} className="p-1 text-slate-500 hover:text-orange-600"><EmailIcon /></button>
                             </div>
                         </td>
@@ -1510,6 +1557,8 @@ const UnsavedChangesModal = ({ onCancel, onDelete, onSaveAndClose }) => {
 const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, allSelectableItems, itemData, packageData, fetchAndUpdateContacts, setOrderForEmailModal, startInEditMode = false }) => { // Added setOrderForEmailModal
     const { useState, useMemo, useEffect, useRef, useCallback } = React;
     const defaultOrderState = {
+        id: null,
+        title: '',
         display_id: '',
         contactInfo: {},
         additionalContacts: [],
@@ -1535,6 +1584,8 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
         return {
             ...defaultOrderState,
             ...incomingOrder,
+            id: incomingOrder.id || null,
+            title: incomingOrder.title || '',
             display_id: incomingOrder.display_id || '',
             additionalContacts: incomingOrder.additionalContacts || [],
             estimatedShipping: incomingOrder.estimatedShipping || '',
@@ -1836,6 +1887,8 @@ const unpackPackage = (id, pkgCode) => {
 
     const isDraft = formData.status === 'Draft';
     const canEdit = isEditing || isDraft;
+    const resolvedOrderLabel = formData.title || formData.display_id || formData.id || order?.id || 'New Order';
+    const pageHeading = !order ? 'New Order' : (isEditing ? `Edit Order: ${resolvedOrderLabel}` : `Order Details: ${resolvedOrderLabel}`);
     
     const handleStatusChange = async (newStatus) => {
         const newStatusHistory = [...formData.statusHistory, { status: newStatus, date: new Date().toISOString() }];
@@ -1877,7 +1930,7 @@ const unpackPackage = (id, pkgCode) => {
         return {
             ...formData,
             lineItems: filteredLineItems, // Use the filtered list
-            id: formData.id || `PO-${Date.now()}`,
+            id: formData.id || null,
             date: isNewOrder ? (formData.date || new Date().toISOString()) : formData.date,
             status: finalStatus,
             statusHistory: newStatusHistory,
@@ -1929,7 +1982,7 @@ const unpackPackage = (id, pkgCode) => {
         }
     };
 
-    const handlePreviewPdf = () => { const tempOrder = createOrderObject(); generatePdf(tempOrder, allSelectableItems, 'preview'); };
+    const handlePreviewPdf = () => { const tempOrder = createOrderObject(); generateInvoicePdf(tempOrder, allSelectableItems, 'preview'); };
     
     const handleDelete = async () => {
         if (!formData || !formData.id) {
@@ -2022,9 +2075,26 @@ const unpackPackage = (id, pkgCode) => {
                 />
             )}
             {/* EmailModal is now handled at the App level, triggered by setOrderForEmailModal prop */}
-            <div className="mb-6"><button onClick={handleReturnToDashboard} className="text-orange-600 hover:text-orange-800 font-semibold">&larr; Back to Dashboard</button><h1 className="text-3xl font-bold text-slate-800 mt-2">{order ? `Order Details: ${formData.display_id || order.id}` : 'New Purchase Order'}</h1></div>
+            <div className="mb-6"><button onClick={handleReturnToDashboard} className="text-orange-600 hover:text-orange-800 font-semibold">&larr; Back to Dashboard</button><h1 className="text-3xl font-bold text-slate-800 mt-2">{pageHeading}</h1></div>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 <div className="lg:col-span-2 space-y-6">
+                    <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <Input
+                                label="Order Title"
+                                placeholder="Give this order a descriptive title"
+                                value={formData.title}
+                                onChange={e => setFormData(prev => ({ ...prev, title: e.target.value }))}
+                                disabled={!canEdit}
+                            />
+                            <div>
+                                <label className="block text-sm font-medium text-slate-600">Internal Order ID</label>
+                                <div className="mt-1 block w-full px-3 py-2 bg-slate-100 border border-slate-200 rounded-md text-sm text-slate-600">
+                                    {formData.id || order?.id || 'Pending assignment'}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                     <div className="relative">
                         <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200 space-y-6">
                             <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
@@ -2233,7 +2303,7 @@ const unpackPackage = (id, pkgCode) => {
                                 Save Changes
                             </button>
                         )}
-                        <button onClick={handlePreviewPdf} className="w-full text-center px-6 py-3 bg-white text-slate-700 font-bold rounded-md hover:bg-slate-100 border border-slate-300">Preview PDF</button>
+                        <button onClick={handlePreviewPdf} className="w-full text-center px-6 py-3 bg-white text-slate-700 font-bold rounded-md hover:bg-slate-100 border border-slate-300">Preview Invoice</button>
                         {!isDraft && !isEditing && <button onClick={() => setIsEditing(true)} className="w-full text-center px-6 py-3 bg-blue-100 text-blue-700 font-bold rounded-md hover:bg-blue-200">Edit Order</button>}
                         {/* Always show delete button if order exists (formData.id) */}
                         {formData.id && (
