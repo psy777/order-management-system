@@ -1507,7 +1507,7 @@ const UnsavedChangesModal = ({ onCancel, onDelete, onSaveAndClose }) => {
     );
 };
 
-const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, allSelectableItems, itemData, packageData, fetchAndUpdateContacts, setOrderForEmailModal }) => { // Added setOrderForEmailModal
+const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, allSelectableItems, itemData, packageData, fetchAndUpdateContacts, setOrderForEmailModal, startInEditMode = false }) => { // Added setOrderForEmailModal
     const { useState, useMemo, useEffect, useRef, useCallback } = React;
     const defaultOrderState = {
         display_id: '',
@@ -1551,7 +1551,7 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
         };
     };
 
-    const [isEditing, setIsEditing] = useState(!order || order.status === 'Draft');
+    const [isEditing, setIsEditing] = useState(startInEditMode || !order || order.status === 'Draft');
     const [formData, setFormData] = useState(deriveInitialFormState(order));
     const [primaryContactId, setPrimaryContactId] = useState(order?.primaryContactId || order?.contactInfo?.id || '');
     const [primaryContactSummary, setPrimaryContactSummary] = useState(() => order?.primaryContact || order?.contactInfo || null);
@@ -1564,10 +1564,10 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
 
     useEffect(() => {
         setFormData(deriveInitialFormState(order));
-        setIsEditing(!order || order.status === 'Draft');
+        setIsEditing(startInEditMode || !order || order.status === 'Draft');
         setPrimaryContactId(order?.primaryContactId || order?.contactInfo?.id || '');
         setPrimaryContactSummary(order?.primaryContact || order?.contactInfo || null);
-    }, [order]);
+    }, [order, startInEditMode]);
 
     useEffect(() => {
         if (!primaryContactId) {
@@ -2257,6 +2257,7 @@ const App = () => {
     const [page, setPage] = useState('dashboard');
     const [orders, setOrders] = useState([]);
     const [activeOrder, setActiveOrder] = useState(null);
+    const [startInEditMode, setStartInEditMode] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [allContacts, setAllContacts] = useState([]);
     const [allSelectableItems, setAllSelectableItems] = useState({});
@@ -2265,6 +2266,20 @@ const App = () => {
     const [orderForEmailModal, setOrderForEmailModal] = useState(null); // State to control EmailModal
     const [showSettingsMenu, setShowSettingsMenu] = useState(false);
     const [appSettings, setAppSettings] = useState({ company_name: "Your Company", default_email_body: "" }); // Added appSettings
+
+    const updateBrowserUrl = useCallback((updater) => {
+        if (typeof window === 'undefined') {
+            return;
+        }
+        const url = new URL(window.location.href);
+        updater(url.searchParams);
+        const newSearch = url.searchParams.toString();
+        const current = `${window.location.pathname}${window.location.search}`;
+        const next = newSearch ? `${url.pathname}?${newSearch}` : url.pathname;
+        if (next !== current) {
+            window.history.replaceState({}, '', next);
+        }
+    }, []);
 
     const handleOrderUpdate = (updatedOrderFromServer) => { // Added this function
         setOrders(prevOrders => {
@@ -2333,17 +2348,65 @@ const App = () => {
             // Check for order_id in URL to load an order for editing
             const urlParams = new URLSearchParams(window.location.search);
             const orderIdFromUrl = urlParams.get('order_id');
+            const viewParam = urlParams.get('view');
+            const modeParam = urlParams.get('mode');
+
             if (orderIdFromUrl) {
-                const orderToEdit = ordersData.find(o => o.id === orderIdFromUrl);
+                let orderToEdit = ordersData.find(o => o.id === orderIdFromUrl);
+                if (!orderToEdit) {
+                    try {
+                        const detailRes = await fetch(`/api/orders/${orderIdFromUrl}`);
+                        if (detailRes.ok) {
+                            orderToEdit = await detailRes.json();
+                        }
+                    } catch (detailError) {
+                        console.error("Failed to fetch order details for editing:", detailError);
+                    }
+                }
+
                 if (orderToEdit) {
                     setActiveOrder(orderToEdit);
+                    const shouldEdit = modeParam !== 'view';
+                    setStartInEditMode(shouldEdit);
                     setPage('viewOrder');
+                    updateBrowserUrl(params => {
+                        params.set('order_id', orderToEdit.id);
+                        if (shouldEdit) {
+                            params.set('mode', 'edit');
+                        } else {
+                            params.delete('mode');
+                        }
+                        params.delete('view');
+                    });
+                } else {
+                    console.warn(`Order with id ${orderIdFromUrl} could not be found for editing.`);
+                    setActiveOrder(null);
+                    setStartInEditMode(false);
+                    setPage('dashboard');
+                    updateBrowserUrl(params => {
+                        params.delete('order_id');
+                        params.delete('mode');
+                    });
                 }
+            } else if (viewParam === 'create') {
+                setActiveOrder(null);
+                setStartInEditMode(true);
+                setPage('createOrder');
+                updateBrowserUrl(params => {
+                    params.set('view', 'create');
+                    params.delete('order_id');
+                    params.delete('mode');
+                });
             } else {
-                const viewParam = urlParams.get('view');
-                if (viewParam === 'create') {
-                    setPage('createOrder');
-                }
+                setActiveOrder(null);
+                setStartInEditMode(false);
+                updateBrowserUrl(params => {
+                    params.delete('order_id');
+                    params.delete('mode');
+                    if (!viewParam) {
+                        params.delete('view');
+                    }
+                });
             }
 
             } catch (error) {
@@ -2356,13 +2419,50 @@ const App = () => {
     }, []);
 
     
-    const navigateTo = (pageName) => {
+    const navigateTo = useCallback((pageName, options = {}) => {
         if (pageName === 'settings') {
             window.location.href = '/settings';
             return;
         }
+
+        if (pageName === 'dashboard') {
+            setActiveOrder(null);
+            setStartInEditMode(false);
+            updateBrowserUrl(params => {
+                params.delete('order_id');
+                params.delete('mode');
+                params.delete('view');
+            });
+        } else if (pageName === 'createOrder') {
+            setActiveOrder(null);
+            setStartInEditMode(true);
+            updateBrowserUrl(params => {
+                params.set('view', 'create');
+                params.delete('order_id');
+                params.delete('mode');
+            });
+        } else if (pageName === 'viewOrder' && options.orderId) {
+            updateBrowserUrl(params => {
+                params.set('order_id', options.orderId);
+                if (options.startInEditMode) {
+                    params.set('mode', 'edit');
+                } else {
+                    params.delete('mode');
+                }
+                params.delete('view');
+            });
+        }
+
+        if (options.order) {
+            setActiveOrder(options.order);
+        }
+
+        if (typeof options.startInEditMode === 'boolean') {
+            setStartInEditMode(options.startInEditMode);
+        }
+
         setPage(pageName);
-    };
+    }, [updateBrowserUrl]);
 
     const viewOrder = (order) => {
         window.location.href = `/order/${order.id}`;
@@ -2444,11 +2544,11 @@ const App = () => {
     const renderPage = () => {
         switch(page) {
             case 'createOrder':
-                return <OrderForm navigateTo={navigateTo} saveOrder={saveOrder} allContacts={allContacts} allSelectableItems={allSelectableItems} itemData={itemData} packageData={packageData} fetchAndUpdateContacts={fetchAndUpdateContacts} setOrderForEmailModal={setOrderForEmailModal} />;
+                return <OrderForm navigateTo={navigateTo} saveOrder={saveOrder} allContacts={allContacts} allSelectableItems={allSelectableItems} itemData={itemData} packageData={packageData} fetchAndUpdateContacts={fetchAndUpdateContacts} setOrderForEmailModal={setOrderForEmailModal} startInEditMode={true} />;
             case 'viewOrder':
                 // This case is now handled by a separate page, but we keep the OrderForm logic
                 // for when the user navigates back to edit from the view page via URL param.
-                return <OrderForm order={activeOrder} navigateTo={navigateTo} saveOrder={saveOrder} deleteOrder={deleteOrder} allContacts={allContacts} allSelectableItems={allSelectableItems} itemData={itemData} packageData={packageData} fetchAndUpdateContacts={fetchAndUpdateContacts} setOrderForEmailModal={setOrderForEmailModal} />;
+                return <OrderForm order={activeOrder} navigateTo={navigateTo} saveOrder={saveOrder} deleteOrder={deleteOrder} allContacts={allContacts} allSelectableItems={allSelectableItems} itemData={itemData} packageData={packageData} fetchAndUpdateContacts={fetchAndUpdateContacts} setOrderForEmailModal={setOrderForEmailModal} startInEditMode={startInEditMode} />;
             case 'dashboard':
             default:
                 return <Dashboard orders={orders} navigateTo={navigateTo} viewOrder={viewOrder} allContacts={allContacts} allSelectableItems={allSelectableItems} setOrderForEmailModal={setOrderForEmailModal} />;
@@ -2474,11 +2574,24 @@ const App = () => {
     }, []);
 
     useEffect(() => {
-        window.fireCoastNavigateTo = (target) => {
+        window.fireCoastNavigateTo = (target, options = {}) => {
             if (target === 'createOrder') {
-                setPage('createOrder');
+                navigateTo('createOrder');
             } else if (target === 'dashboard') {
-                setPage('dashboard');
+                navigateTo('dashboard');
+            } else if (target === 'viewOrder') {
+                if (options.order) {
+                    navigateTo('viewOrder', {
+                        order: options.order,
+                        orderId: options.order.id,
+                        startInEditMode: options.startInEditMode ?? false,
+                    });
+                } else if (options.orderId) {
+                    navigateTo('viewOrder', {
+                        orderId: options.orderId,
+                        startInEditMode: options.startInEditMode ?? false,
+                    });
+                }
             }
         };
         window.fireCoastLogout = handleLogout;
@@ -2486,7 +2599,7 @@ const App = () => {
             delete window.fireCoastNavigateTo;
             delete window.fireCoastLogout;
         };
-    }, [handleLogout]);
+    }, [handleLogout, navigateTo]);
 
     if (isLoading) {
         return <div className="text-center p-8">Loading...</div>;
