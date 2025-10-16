@@ -257,8 +257,17 @@ def serialize_order(cursor, order_row, user_timezone, include_logs=False):
     order_dict['total'] = order_dict.pop('total_amount')
     order_dict['estimatedShipping'] = order_dict.pop('estimated_shipping_cost') or 0
     order_dict['estimatedShippingDate'] = order_dict.pop('estimated_shipping_date')
-    order_dict['scentOption'] = order_dict.pop('scent_option')
-    order_dict['nameDrop'] = True if order_dict.pop('name_drop', 0) == 1 else False
+
+    raw_priority = order_dict.pop('priority_level', None)
+    raw_channel = order_dict.pop('fulfillment_channel', None)
+    raw_reference = order_dict.pop('customer_reference', None)
+
+    order_dict['priorityLevel'] = raw_priority.strip() if isinstance(raw_priority, str) else ''
+    order_dict['fulfillmentChannel'] = raw_channel.strip() if isinstance(raw_channel, str) else ''
+    order_dict['customerReference'] = raw_reference.strip() if isinstance(raw_reference, str) else ''
+
+    order_dict.pop('scent_option', None)
+    order_dict.pop('name_drop', None)
     order_dict['shippingAddress'] = order_dict.pop('shipping_address', '')
     order_dict['shippingCity'] = order_dict.pop('shipping_city', '')
     order_dict['shippingState'] = order_dict.pop('shipping_state', '')
@@ -893,10 +902,7 @@ def save_order():
         additional_contact_ids = normalized_additional
         new_order_payload['additionalContactIds'] = additional_contact_ids
         
-        if 'nameDrop' not in new_order_payload: new_order_payload['nameDrop'] = False
-        
         subtotal_cents = sum(item.get('quantity',0) * item.get('price',0) for item in new_order_payload.get('lineItems',[]))
-        name_drop_surcharge_cents = sum(item.get('quantity',0) * 100 for item in new_order_payload.get('lineItems',[]) if new_order_payload.get('nameDrop',False) and item.get('type')=='cross')
         
         estimated_shipping_cost_dollars = new_order_payload.get('estimatedShipping', 0.0)
         if not isinstance(estimated_shipping_cost_dollars, (int, float)):
@@ -908,7 +914,7 @@ def save_order():
             final_total_dollars = round(new_order_payload['total'] / 100.0, 2)
         else:
             estimated_shipping_cents = int(round(estimated_shipping_cost_dollars * 100))
-            final_total_dollars = round((subtotal_cents + name_drop_surcharge_cents + estimated_shipping_cents) / 100.0, 2)
+            final_total_dollars = round((subtotal_cents + estimated_shipping_cents) / 100.0, 2)
 
         new_order_payload['total'] = final_total_dollars
         
@@ -924,16 +930,72 @@ def save_order():
             display_id = display_id.strip()
         display_id = display_id or None
 
+        def normalize_optional_text(value):
+            if isinstance(value, str):
+                stripped = value.strip()
+                return stripped if stripped else None
+            return None
+
+        priority_level_value = normalize_optional_text(new_order_payload.get('priorityLevel'))
+        fulfillment_channel_value = normalize_optional_text(new_order_payload.get('fulfillmentChannel'))
+        customer_reference_value = normalize_optional_text(new_order_payload.get('customerReference'))
+
+        new_order_payload['priorityLevel'] = priority_level_value or ''
+        new_order_payload['fulfillmentChannel'] = fulfillment_channel_value or ''
+        new_order_payload['customerReference'] = customer_reference_value or ''
+
         if current_order_id_for_db_ops:
-            cursor.execute("UPDATE orders SET display_id=?, contact_id=?, order_date=?, status=?, notes=?, estimated_shipping_date=?, shipping_address=?, shipping_city=?, shipping_state=?, shipping_zip_code=?, estimated_shipping_cost=?, scent_option=?, name_drop=?, signature_data_url=?, total_amount=?, title=?, updated_at=CURRENT_TIMESTAMP WHERE order_id=?",
-                           (display_id, db_processed_contact_id, new_order_payload.get('date', datetime.now(timezone.utc).isoformat()+"Z"), new_order_payload.get('status','Draft'), new_order_payload.get('notes'), new_order_payload.get('estimatedShippingDate'), new_order_payload.get('shippingAddress'), new_order_payload.get('shippingCity'), new_order_payload.get('shippingState'), new_order_payload.get('shippingZipCode'), estimated_shipping_cost_dollars, new_order_payload.get('scentOption'), 1 if new_order_payload.get('nameDrop') else 0, new_order_payload.get('signatureDataUrl'), final_total_dollars, title_value, current_order_id_for_db_ops))
+            cursor.execute(
+                "UPDATE orders SET display_id=?, contact_id=?, order_date=?, status=?, notes=?, estimated_shipping_date=?, shipping_address=?, shipping_city=?, shipping_state=?, shipping_zip_code=?, estimated_shipping_cost=?, signature_data_url=?, total_amount=?, title=?, priority_level=?, fulfillment_channel=?, customer_reference=?, updated_at=CURRENT_TIMESTAMP WHERE order_id=?",
+                (
+                    display_id,
+                    db_processed_contact_id,
+                    new_order_payload.get('date', datetime.now(timezone.utc).isoformat()+"Z"),
+                    new_order_payload.get('status','Draft'),
+                    new_order_payload.get('notes'),
+                    new_order_payload.get('estimatedShippingDate'),
+                    new_order_payload.get('shippingAddress'),
+                    new_order_payload.get('shippingCity'),
+                    new_order_payload.get('shippingState'),
+                    new_order_payload.get('shippingZipCode'),
+                    estimated_shipping_cost_dollars,
+                    new_order_payload.get('signatureDataUrl'),
+                    final_total_dollars,
+                    title_value,
+                    priority_level_value,
+                    fulfillment_channel_value,
+                    customer_reference_value,
+                    current_order_id_for_db_ops
+                )
+            )
             cursor.execute("DELETE FROM order_line_items WHERE order_id = ?", (current_order_id_for_db_ops,))
             cursor.execute("DELETE FROM order_status_history WHERE order_id = ?", (current_order_id_for_db_ops,))
         else:
             current_order_id_for_db_ops = f"ORD-{uuid.uuid4()}"
             new_order_payload['id'] = current_order_id_for_db_ops
-            cursor.execute("INSERT INTO orders (order_id, display_id, contact_id, order_date, status, notes, estimated_shipping_date, shipping_address, shipping_city, shipping_state, shipping_zip_code, estimated_shipping_cost, scent_option, name_drop, signature_data_url, total_amount, title) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                           (current_order_id_for_db_ops, display_id, db_processed_contact_id, new_order_payload.get('date', datetime.now(timezone.utc).isoformat()+"Z"), new_order_payload.get('status','Draft'), new_order_payload.get('notes'), new_order_payload.get('estimatedShippingDate'), new_order_payload.get('shippingAddress'), new_order_payload.get('shippingCity'), new_order_payload.get('shippingState'), new_order_payload.get('shippingZipCode'), estimated_shipping_cost_dollars, new_order_payload.get('scentOption'), 1 if new_order_payload.get('nameDrop') else 0, new_order_payload.get('signatureDataUrl'), final_total_dollars, title_value))
+            cursor.execute(
+                "INSERT INTO orders (order_id, display_id, contact_id, order_date, status, notes, estimated_shipping_date, shipping_address, shipping_city, shipping_state, shipping_zip_code, estimated_shipping_cost, signature_data_url, total_amount, title, priority_level, fulfillment_channel, customer_reference) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    current_order_id_for_db_ops,
+                    display_id,
+                    db_processed_contact_id,
+                    new_order_payload.get('date', datetime.now(timezone.utc).isoformat()+"Z"),
+                    new_order_payload.get('status','Draft'),
+                    new_order_payload.get('notes'),
+                    new_order_payload.get('estimatedShippingDate'),
+                    new_order_payload.get('shippingAddress'),
+                    new_order_payload.get('shippingCity'),
+                    new_order_payload.get('shippingState'),
+                    new_order_payload.get('shippingZipCode'),
+                    estimated_shipping_cost_dollars,
+                    new_order_payload.get('signatureDataUrl'),
+                    final_total_dollars,
+                    title_value,
+                    priority_level_value,
+                    fulfillment_channel_value,
+                    customer_reference_value
+                )
+            )
         
         processed_order_id = current_order_id_for_db_ops 
         app.logger.info(f"DB-OP: processed_order_id is now set to: '{processed_order_id}' before line item processing.")
@@ -953,12 +1015,32 @@ def save_order():
         sync_contact_mentions(cursor, handles_from_notes, 'order_note', processed_order_id, notes_text)
         refresh_order_contact_links(cursor, processed_order_id, db_processed_contact_id)
 
+        existing_display_id = None
+        existing_title = ''
         if existing_order_row:
-            cursor.execute("INSERT INTO order_logs (order_id, user, action, details) VALUES (?, ?, ?, ?)",
-                           (current_order_id_for_db_ops, "system", "Order Updated", f"Order {current_order_id_for_db_ops} was updated."))
+            try:
+                existing_display_id = existing_order_row['display_id']
+            except (KeyError, IndexError, TypeError):
+                existing_display_id = None
+            try:
+                existing_title = existing_order_row['title']
+            except (KeyError, IndexError, TypeError):
+                existing_title = ''
+
+        cleaned_display_id = display_id or (existing_display_id.strip() if isinstance(existing_display_id, str) else None)
+        cleaned_title = title_value or (existing_title.strip() if isinstance(existing_title, str) else '')
+        order_label = cleaned_title or cleaned_display_id or processed_order_id
+
+        if existing_order_row:
+            cursor.execute(
+                "INSERT INTO order_logs (order_id, user, action, details) VALUES (?, ?, ?, ?)",
+                (current_order_id_for_db_ops, "system", "Order Updated", f"Order {order_label} was updated.")
+            )
         else:
-            cursor.execute("INSERT INTO order_logs (order_id, user, action, details) VALUES (?, ?, ?, ?)",
-                           (processed_order_id, "system", "Order Created", f"Order {processed_order_id} was created."))
+            cursor.execute(
+                "INSERT INTO order_logs (order_id, user, action, details) VALUES (?, ?, ?, ?)",
+                (processed_order_id, "system", "Order Created", f"Order {order_label} was created.")
+            )
 
         conn_main.commit()
         app.logger.info(f"Order {processed_order_id} committed successfully.")

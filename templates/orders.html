@@ -453,28 +453,6 @@ const PriceInput = ({ value, onChange, disabled = false }) => {
     return (<input type="text" value={`$${formattedValue}`} onChange={handleChange} disabled={disabled} className="w-24 sm:w-28 text-right bg-white border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm p-2 disabled:bg-slate-100 disabled:text-slate-500" />);
 };
 
-const ScentToggle = ({ value, onChange, disabled = false }) => {
-    const options = ["Scented", "Unscented", "Mixed"];
-    return (<div><label className="block text-sm font-medium text-slate-600 mb-2">Scent Option</label><div className="flex w-full bg-slate-200 p-1 rounded-full">{options.map(option => (<button key={option} onClick={() => !disabled && onChange(option)} disabled={disabled} className={`w-full text-center px-3 py-1.5 text-sm font-semibold rounded-full transition-all duration-300 ease-in-out ${value === option ? 'bg-white text-orange-600 shadow-sm' : 'text-slate-600 hover:bg-slate-300/50'} ${disabled ? 'cursor-not-allowed' : ''}`}>{option}</button>))}</div></div>);
-};
-
-const NameDropToggle = ({ value, onChange, disabled = false }) => {
-    return (
-        <div>
-            <label className="block text-sm font-medium text-slate-600 mb-1">Name Drop Surcharge</label>
-            <button
-                onClick={() => !disabled && onChange(!value)}
-                disabled={disabled}
-                className={`relative inline-flex items-center h-6 rounded-full w-11 transition-colors duration-200 ease-in-out focus:outline-none ${disabled ? 'cursor-not-allowed opacity-50' : 'focus:ring-2 focus:ring-orange-500 focus:ring-opacity-50'} ${value ? 'bg-orange-600' : 'bg-slate-300'}`}
-            >
-                <span className={`inline-block w-4 h-4 transform bg-white rounded-full transition-transform duration-200 ease-in-out ${value ? 'translate-x-6' : 'translate-x-1'}`} />
-            </button>
-            {value && <p className="text-xs text-slate-500 mt-1">$1.00 surcharge per cross item.</p>}
-        </div>
-    );
-};
-
-
 const generateInvoicePdf = (order, allItems, action = 'save') => {
     if (!order) return;
     const { jsPDF } = window.jspdf;
@@ -593,21 +571,11 @@ const generateInvoicePdf = (order, allItems, action = 'save') => {
         return acc + (quantity * unitPriceCents);
     }, 0);
 
-    let nameDropSurchargeCents = 0;
-    if (safeOrder.nameDrop) {
-        safeLineItems.forEach((item) => {
-            if (item?.type === 'cross') {
-                const quantity = Number(item?.quantity) || 0;
-                nameDropSurchargeCents += quantity * 100;
-            }
-        });
-    }
-
     const estimatedShippingValue = typeof safeOrder.estimatedShipping === 'number'
         ? safeOrder.estimatedShipping
         : parseFloat(safeOrder.estimatedShipping || '0');
     const estimatedShippingCents = Math.round((Number.isFinite(estimatedShippingValue) ? estimatedShippingValue : 0) * 100);
-    const totalCents = subtotalCents + nameDropSurchargeCents + estimatedShippingCents;
+    const totalCents = subtotalCents + estimatedShippingCents;
 
     const tableResult = doc.lastAutoTable;
     let summaryY = (tableResult ? tableResult.finalY : tableStartY) + 10;
@@ -615,11 +583,6 @@ const generateInvoicePdf = (order, allItems, action = 'save') => {
     doc.setFontSize(10);
     doc.text(`Subtotal: $${(subtotalCents / 100).toFixed(2)}`, 14, summaryY);
     summaryY += 7;
-
-    if (nameDropSurchargeCents > 0) {
-        doc.text(`Name Drop Surcharge: $${(nameDropSurchargeCents / 100).toFixed(2)}`, 14, summaryY);
-        summaryY += 7;
-    }
 
     if (estimatedShippingCents > 0) {
         doc.text(`Est. Shipping Cost: $${(estimatedShippingCents / 100).toFixed(2)}`, 14, summaryY);
@@ -631,12 +594,23 @@ const generateInvoicePdf = (order, allItems, action = 'save') => {
     summaryY += 10;
 
     doc.setFontSize(10);
-    const scentLabel = safeOrder.scentOption || 'Scented';
-    doc.text(`Scent Option: ${scentLabel}`, 14, summaryY);
-    summaryY += 5;
-
     if (safeOrder.estimatedShippingDate) {
         doc.text(`Est. Ship Date: ${formatInTimeZone(safeOrder.estimatedShippingDate, timeZone, dateOptions)}`, 14, summaryY);
+        summaryY += 5;
+    }
+
+    if (safeOrder.priorityLevel) {
+        doc.text(`Priority: ${safeOrder.priorityLevel}`, 14, summaryY);
+        summaryY += 5;
+    }
+
+    if (safeOrder.fulfillmentChannel) {
+        doc.text(`Fulfillment: ${safeOrder.fulfillmentChannel}`, 14, summaryY);
+        summaryY += 5;
+    }
+
+    if (safeOrder.customerReference) {
+        doc.text(`Customer Reference: ${safeOrder.customerReference}`, 14, summaryY);
         summaryY += 5;
     }
 
@@ -1450,52 +1424,70 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allContacts, allSelectableIt
                 </div>
             </div>
             <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
-                <div className="flex justify-between items-center mb-4">
-                    <h2 className="text-xl font-semibold text-slate-700">All Orders</h2>
-                    <div className="flex flex-wrap items-center gap-3">
-                        <div
-                            className="flex items-center flex-wrap gap-2 w-full max-w-md bg-white border border-slate-300 rounded-md shadow-sm p-1.5 focus-within:ring-2 focus-within:ring-orange-500 focus-within:border-orange-500"
-                            onClick={() => searchInputRef.current && searchInputRef.current.focus()}
-                        >
+                <div className="mb-4 space-y-4">
+                    <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+                        <h2 className="text-xl font-semibold text-slate-700">All Orders</h2>
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:gap-3 w-full lg:w-auto">
+                            <div className="w-full sm:flex-1 lg:w-80">
+                                <label htmlFor="orders-search-input" className="block text-sm font-medium text-slate-600 mb-1">Search orders</label>
+                                <div
+                                    className="relative"
+                                    onClick={() => searchInputRef.current && searchInputRef.current.focus()}
+                                >
+                                    <input
+                                        id="orders-search-input"
+                                        ref={searchInputRef}
+                                        type="search"
+                                        value={inputValue}
+                                        onChange={handleInputChange}
+                                        onKeyDown={handleKeyDown}
+                                        onBlur={() => {
+                                            parseInputToPills(inputValue);
+                                            setTimeout(() => {
+                                                if (!document.activeElement.closest('.calendar-container')) {
+                                                    setShowCalendar(false);
+                                                }
+                                            }, 150);
+                                        }}
+                                        placeholder="Search by title, contact, status, or filter keyword"
+                                        className="block w-full rounded-md border border-slate-300 px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                                    />
+                                    {isSearching && (
+                                        <span className="absolute inset-y-0 right-3 flex items-center">
+                                            <svg className="h-4 w-4 animate-spin text-slate-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                                            </svg>
+                                        </span>
+                                    )}
+                                </div>
+                                <p className="mt-1 text-xs text-slate-400">Try filters like <code>status:sent</code>, <code>before:2024-01-01</code>, or <code>after:</code>.</p>
+                            </div>
+                            {(searchPills.length > 0 || inputValue.trim()) && (
+                                <button
+                                    type="button"
+                                    onClick={clearSearch}
+                                    className="mt-3 sm:mt-0 sm:self-end px-3 py-2 text-sm font-semibold text-slate-600 border border-slate-300 rounded-md hover:bg-slate-100 transition-colors"
+                                >
+                                    Clear
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                    {searchPills.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
                             {searchPills.map((pill, index) => (
-                                <span key={index} className="flex items-center bg-slate-200 text-slate-700 text-sm font-medium px-2 py-1 rounded">
+                                <span key={index} className="flex items-center bg-slate-100 text-slate-700 text-sm font-medium px-2.5 py-1 rounded-full border border-slate-200">
                                     {pill}
-                                    <button onClick={() => removePill(index)} className="ml-1.5 text-slate-500 hover:text-slate-800 focus:outline-none">
+                                    <button type="button" onClick={() => removePill(index)} className="ml-1.5 text-slate-400 hover:text-slate-700 focus:outline-none">
                                         &times;
                                     </button>
                                 </span>
                             ))}
-                            <input
-                                ref={searchInputRef}
-                                type="text"
-                                value={inputValue}
-                                onChange={handleInputChange}
-                                onKeyDown={handleKeyDown}
-                                onBlur={() => {
-                                    parseInputToPills(inputValue);
-                                    setTimeout(() => {
-                                        if (!document.activeElement.closest('.calendar-container')) {
-                                            setShowCalendar(false);
-                                        }
-                                    }, 150);
-                                }}
-                                placeholder={searchPills.length === 0 ? 'Search for anything' : ''}
-                                className="flex-grow p-1 bg-transparent focus:outline-none min-w-[100px]"
-                            />
                         </div>
-                        {(searchPills.length > 0 || inputValue.trim()) && (
-                            <button
-                                type="button"
-                                onClick={clearSearch}
-                                className="px-3 py-2 text-sm font-semibold text-slate-600 border border-slate-300 rounded-md hover:bg-slate-100 transition-colors"
-                            >
-                                Clear
-                            </button>
-                        )}
-                        {isSearching && <span className="text-sm text-slate-500">Searching…</span>}
-                    </div>
+                    )}
+                    {searchError && <p className="text-xs text-red-600">{searchError}</p>}
                 </div>
-                {searchError && <p className="text-xs text-red-600 -mt-2 mb-4 text-right">{searchError}</p>}
                 <div className="overflow-x-auto"><table className="w-full text-sm text-left text-slate-500"><thead className="text-xs text-slate-700 uppercase bg-slate-100"><tr><th className="px-4 py-3">Order ID</th><th className="px-4 py-3">Customer</th><th className="px-4 py-3">Date</th><th className="px-4 py-3">Total</th><th className="px-4 py-3">Status</th><th className="px-4 py-3 text-center">Actions</th></tr></thead>
                     <tbody>{filteredOrders.map(order => {
                         const timeZone = "America/Chicago";
@@ -1566,8 +1558,9 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
         notes: '',
         estimatedShippingDate: '',
         estimatedShipping: '',
-        scentOption: 'Scented',
-        nameDrop: false,
+        priorityLevel: '',
+        fulfillmentChannel: '',
+        customerReference: '',
         signatureDataUrl: null,
         statusHistory: [{ status: 'Draft', date: new Date().toISOString() }],
         status: 'Draft',
@@ -1589,7 +1582,9 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
             display_id: incomingOrder.display_id || '',
             additionalContacts: incomingOrder.additionalContacts || [],
             estimatedShipping: incomingOrder.estimatedShipping || '',
-            scentOption: incomingOrder.scentOption || 'Scented',
+            priorityLevel: incomingOrder.priorityLevel || '',
+            fulfillmentChannel: incomingOrder.fulfillmentChannel || '',
+            customerReference: incomingOrder.customerReference || '',
             shippingAddress: incomingOrder.shippingAddress || '',
             shippingCity: incomingOrder.shippingCity || '',
             shippingState: incomingOrder.shippingState || '',
@@ -1859,31 +1854,16 @@ const unpackPackage = (id, pkgCode) => {
 
     const orderTotals = useMemo(() => {
         const subtotal = formData.lineItems.reduce((acc, item) => acc + (item.quantity * item.price), 0);
-        let nameDropSurcharge = 0;
-        let crossItemCount = 0;
-        if (formData.nameDrop) {
-            formData.lineItems.forEach(item => {
-                if (item.type === 'cross') {
-                    nameDropSurcharge += item.quantity * 100; // $1 per item quantity
-                    crossItemCount += item.quantity;
-                }
-            });
-        }
-        // formData.estimatedShipping is expected to be in dollars (float)
-        const estimatedShipping = parseFloat(formData.estimatedShipping) || 0; // in dollars
+        const estimatedShipping = parseFloat(formData.estimatedShipping) || 0; // dollars
         const estimatedShippingInCents = Math.round(estimatedShipping * 100);
+        const liveCalculatedTotal = subtotal + estimatedShippingInCents;
 
-        // Always calculate the total based on current form data components.
-        const liveCalculatedTotal = subtotal + nameDropSurcharge + estimatedShippingInCents;
-
-        return { 
-            subtotal, // in cents
-            nameDropSurcharge, // in cents
-            estimatedShipping, // in dollars (for display in summary)
-            total: liveCalculatedTotal, // always use the live calculation, in cents
-            crossItemCount 
+        return {
+            subtotal,
+            estimatedShipping,
+            total: liveCalculatedTotal
         };
-    }, [formData.lineItems, formData.nameDrop, formData.estimatedShipping]);
+    }, [formData.lineItems, formData.estimatedShipping]);
 
     const isDraft = formData.status === 'Draft';
     const canEdit = isEditing || isDraft;
@@ -1916,16 +1896,8 @@ const unpackPackage = (id, pkgCode) => {
 
         // Recalculate totals based on filtered items
         const subtotal = filteredLineItems.reduce((acc, item) => acc + (item.quantity * item.price), 0);
-        let nameDropSurcharge = 0;
-        if (formData.nameDrop) {
-            filteredLineItems.forEach(item => {
-                if (item.type === 'cross') {
-                    nameDropSurcharge += item.quantity * 100;
-                }
-            });
-        }
         const estimatedShippingInCents = Math.round((parseFloat(formData.estimatedShipping) || 0) * 100);
-        const finalTotal = subtotal + nameDropSurcharge + estimatedShippingInCents;
+        const finalTotal = subtotal + estimatedShippingInCents;
 
         return {
             ...formData,
@@ -2238,7 +2210,7 @@ const unpackPackage = (id, pkgCode) => {
                     <div className="bg-white rounded-lg shadow-sm border border-slate-200"><div className="p-6 border-b"><h2 className="text-xl font-semibold text-slate-700 mb-4">Line Items</h2>{canEdit && (<div className="flex gap-2"><input ref={scanInputRef} type="text" value={scanInput} onChange={e => setScanInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { handleScanAddItem(e); } }} placeholder="Scan or Enter Item Code" className="flex-grow block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm" /><button onClick={handleScanAddItem} className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors">Add</button></div>)}</div><div className="overflow-x-auto"><table className="w-full text-sm text-left text-slate-500"><thead className="text-xs text-slate-700 uppercase bg-slate-100"><tr><th scope="col" className="px-4 py-3">Item</th><th scope="col" className="px-4 py-3">Style</th><th scope="col" className="px-4 py-3 text-center">Qty</th><th scope="col" className="px-4 py-3 text-right">Unit Price</th><th scope="col" className="px-4 py-3 text-right">Total</th>{canEdit && <th scope="col" className="px-2 py-3"></th>}</tr></thead><tbody>{formData.lineItems.map(item => (<tr key={item.id} className="border-b align-middle"><td className="px-4 py-2"><Select value={item.item} onChange={e => handleLineItemChange(item.id, 'item', e.target.value)} disabled={!canEdit}><option value="-- Select Item --">-- Select Item --</option>{Object.entries(allSelectableItems).map(([id, details]) => (<option key={id} value={id}>{details.name}</option>))}</Select></td><td className="px-4 py-2"><Select value={item.style} onChange={e => handleLineItemChange(item.id, 'style', e.target.value)} disabled={!canEdit}>{(allSelectableItems[item.item]?.styles || []).map(name => (<option key={name} value={name}>{name}</option>))}</Select></td><td className="px-4 py-2"><input type="number" min="0" value={item.quantity} onChange={e => handleLineItemChange(item.id, 'quantity', Number(e.target.value))} className="w-16 sm:w-20 text-center bg-white border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm p-2" disabled={!canEdit} /></td><td className="px-4 py-2 text-right"><PriceInput value={item.price} onChange={newPrice => handleLineItemChange(item.id, 'price', newPrice)} disabled={!canEdit}/></td><td className="px-4 py-2 text-right font-medium text-slate-800">${((item.quantity * item.price) / 100).toFixed(2)}</td>{canEdit && <td className="px-2 py-2 text-center"><button onClick={() => removeLineItem(item.id)} className="text-slate-400 hover:text-red-600 p-1 rounded-full hover:bg-red-100 transition-colors"><TrashIcon /></button></td>}</tr>))}</tbody></table></div>{canEdit && <div className="p-6 border-t"><button onClick={addEmptyLineItem} className="w-full text-center px-4 py-2 bg-orange-100 text-orange-700 font-semibold rounded-md hover:bg-orange-200 transition-colors">+ Add Line Item</button></div>}</div>
                 </div>
                 <div className="lg:col-span-1 space-y-6">
-                    <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200"><h2 className="text-xl font-semibold text-slate-700 border-b pb-3 mb-4">Order Metadata</h2><div className="space-y-4"><Input label="Estimated Shipping Date" type="date" value={formData.estimatedShippingDate} onChange={e => setFormData(p=>({...p, estimatedShippingDate: e.target.value}))} disabled={!canEdit} /><ScentToggle value={formData.scentOption} onChange={val => setFormData(p=>({...p, scentOption: val}))} disabled={!canEdit} /><NameDropToggle value={formData.nameDrop} onChange={val => setFormData(p=>({...p, nameDrop: val}))} disabled={!canEdit} /></div></div>
+                    <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200"><h2 className="text-xl font-semibold text-slate-700 border-b pb-3 mb-4">Order Metadata</h2><div className="space-y-4"><Input label="Estimated Shipping Date" type="date" value={formData.estimatedShippingDate} onChange={e => setFormData(p=>({...p, estimatedShippingDate: e.target.value}))} disabled={!canEdit} /><div><label className="block text-sm font-medium text-slate-600 mb-1">Priority Level</label><Select value={formData.priorityLevel} onChange={e => setFormData(p=>({...p, priorityLevel: e.target.value}))} disabled={!canEdit}><option value="">No priority set</option><option value="High">High</option><option value="Standard">Standard</option><option value="Low">Low</option></Select></div><div><label className="block text-sm font-medium text-slate-600 mb-1">Fulfillment Channel</label><Select value={formData.fulfillmentChannel} onChange={e => setFormData(p=>({...p, fulfillmentChannel: e.target.value}))} disabled={!canEdit}><option value="">Not specified</option><option value="In-House">In-House</option><option value="Dropship">Dropship</option><option value="Third-Party">Third-Party</option><option value="Pickup">Customer Pickup</option></Select></div><Input label="Customer Reference" placeholder="Optional PO, campaign, or reference" value={formData.customerReference} onChange={e => setFormData(p=>({...p, customerReference: e.target.value}))} disabled={!canEdit} /></div></div>
                     {!isDraft && (<div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200"><h2 className="text-xl font-semibold text-slate-700 mb-4">Update Status</h2><div className="space-y-2"><button onClick={() => handleStatusChange('Paid')} disabled={formData.status !== 'Sent'} className="w-full text-center px-4 py-2 bg-blue-500 text-white font-semibold rounded-md hover:bg-blue-600 disabled:bg-slate-300 disabled:cursor-not-allowed">Mark as Paid</button><button onClick={() => handleStatusChange('Shipped')} disabled={formData.status !== 'Paid'} className="w-full text-center px-4 py-2 bg-green-500 text-white font-semibold rounded-md hover:bg-green-600 disabled:bg-slate-300 disabled:cursor-not-allowed">Mark as Shipped</button></div></div>)}
                     <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
                         <h2 className="text-xl font-semibold text-slate-700 mb-3 border-b pb-3">Signature</h2>
@@ -2264,12 +2236,6 @@ const unpackPackage = (id, pkgCode) => {
                         <h2 className="text-xl font-semibold text-slate-700 mb-4">Order Summary</h2>
                         <div className="space-y-3">
                             <div className="flex justify-between items-center text-slate-600"><span>Subtotal</span><span className="font-medium">${(orderTotals.subtotal / 100).toFixed(2)}</span></div>
-                            {orderTotals.nameDropSurcharge > 0 && (
-                                <div className="flex justify-between items-center text-slate-600">
-                                    <span>Name Drop Surcharge ({orderTotals.crossItemCount} crosses)</span>
-                                    <span className="font-medium">${(orderTotals.nameDropSurcharge / 100).toFixed(2)}</span>
-                                </div>
-                            )}
                             {orderTotals.estimatedShipping > 0 && (
                                 <div className="flex justify-between items-center text-slate-600">
                                     <span>Est. Shipping</span>
