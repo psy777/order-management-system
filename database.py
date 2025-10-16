@@ -91,6 +91,18 @@ def init_db():
     cursor.execute("CREATE TABLE IF NOT EXISTS order_line_items (line_item_id INTEGER PRIMARY KEY AUTOINCREMENT, order_id TEXT NOT NULL, item_code TEXT NOT NULL, package_code TEXT, quantity INTEGER NOT NULL, price_per_unit_cents INTEGER NOT NULL, style_chosen TEXT, item_type TEXT, FOREIGN KEY (order_id) REFERENCES orders (order_id) ON DELETE CASCADE, FOREIGN KEY (item_code) REFERENCES items (item_code) ON DELETE RESTRICT);")
     cursor.execute("CREATE TABLE IF NOT EXISTS order_status_history (history_id INTEGER PRIMARY KEY AUTOINCREMENT, order_id TEXT NOT NULL, status TEXT NOT NULL, status_date TEXT NOT NULL, FOREIGN KEY (order_id) REFERENCES orders (order_id) ON DELETE CASCADE);")
     cursor.execute("CREATE TABLE IF NOT EXISTS order_logs (log_id INTEGER PRIMARY KEY AUTOINCREMENT, order_id TEXT NOT NULL, timestamp TEXT DEFAULT CURRENT_TIMESTAMP, user TEXT, action TEXT NOT NULL, details TEXT, note TEXT, attachment_path TEXT, FOREIGN KEY (order_id) REFERENCES orders (order_id) ON DELETE CASCADE);")
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS order_contact_links (
+            order_id TEXT NOT NULL,
+            contact_id TEXT NOT NULL,
+            relationship TEXT NOT NULL DEFAULT 'secondary',
+            added_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (order_id, contact_id),
+            FOREIGN KEY (order_id) REFERENCES orders (order_id) ON DELETE CASCADE,
+            FOREIGN KEY (contact_id) REFERENCES contacts (id) ON DELETE CASCADE
+        );
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_order_contact_links_contact ON order_contact_links(contact_id)")
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS contact_mentions (

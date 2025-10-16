@@ -3,262 +3,337 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Settings - Order Manager</title>
-    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
-    <link rel="stylesheet" href="/assets/css/styles.css">
-    <link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png">
-    <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32x32.png">
-    <link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon-16x16.png">
-    <link rel="manifest" href="/assets/site.webmanifest">
+    <title>Settings - FireCoast OMS</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="../assets/css/styles.css">
 </head>
-<body>
-    <div class="container mt-4">
-        <a href="/admin" target="_top" class="back-to-dashboard-button">&larr; Back to Admin Dashboard</a>
-        <h1>Settings</h1>
-        <hr>
+<body class="bg-slate-50 min-h-screen font-sans">
+    <nav class="bg-slate-900 text-white shadow">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex h-16 items-center justify-between">
+                <div class="flex items-center space-x-10">
+                    <a href="/admin" id="nav-home-link" class="text-lg font-semibold tracking-wide">FireCoast OMS</a>
+                    <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
+                        <a href="/orders" class="hover:text-orange-300 transition">Orders</a>
+                        <a href="/contacts" class="hover:text-orange-300 transition">Contacts</a>
+                        <a href="/analytics" class="hover:text-orange-300 transition">Analytics</a>
+                        <a href="/settings" class="text-orange-300">Settings</a>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-3 text-sm font-medium">
+                    <a href="/settings" class="text-orange-300 md:hidden">Settings</a>
+                    <a href="#" id="nav-log-out" class="hover:text-orange-300 transition">Log Out</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const brandLink = document.getElementById('nav-home-link');
+            if (brandLink) {
+                brandLink.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    window.location.href = '/admin';
+                });
+            }
 
-        <h2>General Settings</h2>
-        <div class="card">
-            <div class="card-body">
-                <form id="generalSettingsForm">
-                    <div class="form-group">
-                        <label for="companyName">Company Name</label>
-                        <input type="text" class="form-control" id="companyName" name="companyName">
+            const logoutLink = document.getElementById('nav-log-out');
+            if (logoutLink) {
+                logoutLink.addEventListener('click', async (event) => {
+                    event.preventDefault();
+                    if (window.fireCoastLogout) {
+                        window.fireCoastLogout();
+                        return;
+                    }
+                    try {
+                        const response = await fetch('/shutdown', { method: 'POST' });
+                        if (response.ok) {
+                            document.body.innerHTML = '<div class="min-h-screen flex items-center justify-center text-slate-700 text-lg">Application has been shut down. You can now close this tab.</div>';
+                        } else {
+                            alert('Failed to log out.');
+                        }
+                    } catch (error) {
+                        console.error('Error logging out:', error);
+                        alert('Error attempting to log out.');
+                    }
+                });
+            }
+        });
+    </script>
+    <main class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+        <header class="mb-8">
+            <h1 class="text-3xl font-bold text-slate-800">Settings</h1>
+            <p class="mt-2 text-slate-500">Manage workspace defaults, email delivery, and data maintenance tasks.</p>
+        </header>
+
+        <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mb-8">
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <h2 class="text-xl font-semibold text-slate-800">General Preferences</h2>
+                    <p class="text-sm text-slate-500">Defaults that shape each new order and outgoing communication.</p>
+                </div>
+                <span id="generalStatus" class="text-sm text-slate-400"></span>
+            </div>
+            <form id="generalSettingsForm" class="mt-6 space-y-6">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-600" for="companyName">Company Name</label>
+                        <input type="text" id="companyName" name="companyName" class="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
                     </div>
-                    <div class="form-group">
-                        <label for="shippingZipCode">Default Shipping Zip Code</label>
-                        <input type="text" class="form-control" id="shippingZipCode" name="shippingZipCode">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-600" for="shippingZipCode">Default Shipping Zip Code</label>
+                        <input type="text" id="shippingZipCode" name="shippingZipCode" class="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
                     </div>
-                    <div class="form-group">
-                        <label for="timezone">Timezone</label>
-                        <select class="form-control" id="timezone" name="timezone">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-600" for="timezone">Timezone</label>
+                        <select id="timezone" name="timezone" class="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500">
                             {% for tz in timezones %}
                                 <option value="{{ tz }}" {% if tz == selected_timezone %}selected{% endif %}>{{ tz }}</option>
                             {% endfor %}
                         </select>
                     </div>
-                    <div class="form-group">
-                        <label for="defaultEmailBody">Default Email Body</label>
-                        <textarea class="form-control" id="defaultEmailBody" name="defaultEmailBody" rows="5"></textarea>
-                        <small class="form-text text-muted">
-                            Available placeholders: [contactCompany], [orderID], [yourCompany]
-                        </small>
-                    </div>
-                    <button type="submit" class="btn btn-primary">Save General Settings</button>
-                </form>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-600" for="defaultEmailBody">Default Email Body</label>
+                    <textarea id="defaultEmailBody" name="defaultEmailBody" rows="5" class="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500"></textarea>
+                    <p class="mt-1 text-xs text-slate-500">Available placeholders: [contactCompany], [orderID], [yourCompany]</p>
+                </div>
+                <div class="flex justify-end">
+                    <button type="submit" class="inline-flex items-center px-4 py-2 bg-orange-600 text-white font-semibold rounded-md shadow-sm hover:bg-orange-700 transition-colors">
+                        Save General Settings
+                    </button>
+                </div>
+            </form>
+        </section>
+
+        <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mb-8">
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <h2 class="text-xl font-semibold text-slate-800">Email Delivery</h2>
+                    <p class="text-sm text-slate-500">Configure the account FireCoast OMS uses to send purchase orders.</p>
+                </div>
+                <span id="emailStatus" class="text-sm text-slate-400"></span>
             </div>
-        </div>
-
-        <hr class="mt-5">
-
-        <h2>Email Server Settings</h2>
-        <div class="card">
-            <div class="card-body">
-                <form id="emailSettingsForm">
-                    <div class="form-group">
-                        <label for="emailAddress">Email Address</label>
-                        <input type="email" class="form-control" id="emailAddress" name="emailAddress">
+            <form id="emailSettingsForm" class="mt-6 space-y-6">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-600" for="emailAddress">Email Address</label>
+                        <input type="email" id="emailAddress" name="emailAddress" class="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
                     </div>
-                    <div class="form-group">
-                        <label for="appPassword">App Password</label>
-                        <input type="password" class="form-control" id="appPassword" name="appPassword">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-600" for="appPassword">App Password</label>
+                        <input type="password" id="appPassword" name="appPassword" class="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
                     </div>
-                    <div class="form-group">
-                        <label for="emailCc">CC</label>
-                        <input type="email" class="form-control" id="emailCc" name="emailCc">
-                        <small class="form-text text-muted">Comma-separated list of emails to CC.</small>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-600" for="emailCc">Default CC</label>
+                        <input type="text" id="emailCc" name="emailCc" class="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="Comma-separated" />
                     </div>
-                    <div class="form-group">
-                        <label for="emailBcc">BCC</label>
-                        <input type="email" class="form-control" id="emailBcc" name="emailBcc">
-                        <small class="form-text text-muted">Comma-separated list of emails to BCC.</small>
-                    </div>
-                    <button type="submit" class="btn btn-primary">Save Email Settings</button>
-                </form>
-            </div>
-        </div>
-
-        <hr class="mt-5">
-
-        <h2>Data Management</h2>
-        <div class="row">
-            <div class="col-md-4">
-                <div class="card">
-                    <div class="card-body">
-                        <h5 class="card-title">Customer Records</h5>
-                        <p class="card-text">View and manage customer information.</p>
-                        <button class="btn btn-secondary" id="manageCustomers">Manage Customers</button>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-600" for="emailBcc">Default BCC</label>
+                        <input type="text" id="emailBcc" name="emailBcc" class="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="Comma-separated" />
                     </div>
                 </div>
-            </div>
-            <div class="col-md-4">
-                <div class="card">
-                    <div class="card-body">
-                        <h5 class="card-title">Item Records (Crosses)</h5>
-                        <p class="card-text">View and manage item details.</p>
-                        <button class="btn btn-secondary" id="manageItems">Manage Items</button>
-                    </div>
+                <div class="flex justify-end">
+                    <button type="submit" class="inline-flex items-center px-4 py-2 bg-orange-600 text-white font-semibold rounded-md shadow-sm hover:bg-orange-700 transition-colors">
+                        Save Email Settings
+                    </button>
                 </div>
-            </div>
-            <div class="col-md-4">
-                <div class="card">
-                    <div class="card-body">
-                        <h5 class="card-title">Package Records</h5>
-                        <p class="card-text">View and manage package information.</p>
-                        <button class="btn btn-secondary" id="managePackages">Manage Packages</button>
-                    </div>
-                </div>
-            </div>
-        </div>
+            </form>
+        </section>
 
-        <hr class="mt-5">
+        <section class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <article class="bg-white border border-slate-200 rounded-xl shadow-sm p-6 space-y-3">
+                <h3 class="text-lg font-semibold text-slate-800">Contact Directory</h3>
+                <p class="text-sm text-slate-500">Review contact profiles, handles, and mention activity.</p>
+                <button id="manageCustomers" class="mt-2 inline-flex items-center justify-center px-4 py-2 bg-slate-900 text-white text-sm font-semibold rounded-md hover:bg-slate-700 transition-colors">
+                    Open Contacts
+                </button>
+            </article>
+            <article class="bg-white border border-slate-200 rounded-xl shadow-sm p-6 space-y-3">
+                <h3 class="text-lg font-semibold text-slate-800">Item Catalog</h3>
+                <p class="text-sm text-slate-500">Update items, packages, and pricing used across orders.</p>
+                <button id="manageItems" class="mt-2 inline-flex items-center justify-center px-4 py-2 bg-slate-900 text-white text-sm font-semibold rounded-md hover:bg-slate-700 transition-colors">
+                    Manage Items
+                </button>
+            </article>
+            <article class="bg-white border border-slate-200 rounded-xl shadow-sm p-6 space-y-3">
+                <h3 class="text-lg font-semibold text-slate-800">Packaging Presets</h3>
+                <p class="text-sm text-slate-500">Adjust the preset bundles available when building orders.</p>
+                <button id="managePackages" class="mt-2 inline-flex items-center justify-center px-4 py-2 bg-slate-900 text-white text-sm font-semibold rounded-md hover:bg-slate-700 transition-colors">
+                    Manage Packages
+                </button>
+            </article>
+        </section>
 
-        <h2>Database Management</h2>
-        <div class="row">
-            <div class="col-md-6">
-                <div class="card">
-                    <div class="card-body">
-                        <h5 class="card-title">Export Full Backup</h5>
-                        <p class="card-text">Download a complete backup of all data, including the database and uploaded files, as a single ZIP archive.</p>
-                        <button class="btn btn-info" id="exportData">Export Backup</button>
-                    </div>
+        <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <h2 class="text-xl font-semibold text-slate-800">Database Maintenance</h2>
+                    <p class="text-sm text-slate-500">Export a full backup or restore from a previous archive.</p>
+                </div>
+                <span id="databaseStatus" class="text-sm text-slate-400"></span>
+            </div>
+            <div class="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div class="border border-slate-200 rounded-lg p-5 space-y-3 bg-slate-50">
+                    <h3 class="text-lg font-semibold text-slate-800">Export Backup</h3>
+                    <p class="text-sm text-slate-500">Download the entire database and uploaded files as a single ZIP archive.</p>
+                    <button id="exportData" class="inline-flex items-center px-4 py-2 bg-orange-600 text-white text-sm font-semibold rounded-md shadow-sm hover:bg-orange-700 transition-colors">
+                        Export Data
+                    </button>
+                </div>
+                <div class="border border-slate-200 rounded-lg p-5 space-y-3 bg-slate-50">
+                    <h3 class="text-lg font-semibold text-slate-800">Import Backup</h3>
+                    <p class="text-sm text-slate-500">Restore FireCoast OMS from a ZIP export. <span class="font-semibold text-slate-700">This will overwrite all existing data.</span></p>
+                    <input type="file" id="importFile" accept=".zip" class="hidden" />
+                    <button id="importData" class="inline-flex items-center px-4 py-2 bg-slate-900 text-white text-sm font-semibold rounded-md shadow-sm hover:bg-slate-700 transition-colors">
+                        Import Data
+                    </button>
                 </div>
             </div>
-            <div class="col-md-6">
-                <div class="card">
-                    <div class="card-body">
-                        <h5 class="card-title">Import Full Backup</h5>
-                        <p class="card-text">Restore the application from a ZIP backup file. <strong>Warning:</strong> This will completely overwrite all current data.</p>
-                        <input type="file" id="importFile" style="display: none;" accept=".zip">
-                        <button class="btn btn-warning" id="importData">Import Backup</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
+        </section>
+    </main>
 
-    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.5.4/dist/umd/popper.min.js"></script>
-    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
     <script>
-        $(document).ready(function() {
-            // Load existing settings
-            $.getJSON('/api/settings', function(data) {
-                $('#companyName').val(data.company_name);
-                $('#shippingZipCode').val(data.default_shipping_zip_code);
-                $('#defaultEmailBody').val(data.default_email_body);
-                $('#emailAddress').val(data.email_address);
-                $('#appPassword').val(data.app_password);
-                $('#emailCc').val(data.email_cc);
-                $('#emailBcc').val(data.email_bcc);
-                $('#timezone').val(data.timezone || 'UTC');
-            });
+        document.addEventListener('DOMContentLoaded', () => {
+            const generalForm = document.getElementById('generalSettingsForm');
+            const emailForm = document.getElementById('emailSettingsForm');
+            const generalStatus = document.getElementById('generalStatus');
+            const emailStatus = document.getElementById('emailStatus');
+            const databaseStatus = document.getElementById('databaseStatus');
+            const timezoneSelect = document.getElementById('timezone');
+            const importFileInput = document.getElementById('importFile');
 
-            // Handle general settings form submission
-            $('#generalSettingsForm').on('submit', function(event) {
-                event.preventDefault();
-                const settingsData = {
-                    company_name: $('#companyName').val(),
-                    default_shipping_zip_code: $('#shippingZipCode').val(),
-                    default_email_body: $('#defaultEmailBody').val()
-                };
-                $.ajax({
-                    url: '/api/settings',
-                    type: 'POST',
-                    contentType: 'application/json',
-                    data: JSON.stringify(settingsData),
-                    success: function(response) {
-                        // Now save the timezone
-                        $.ajax({
-                            url: '/api/settings/timezone',
-                            type: 'POST',
-                            contentType: 'application/json',
-                            data: JSON.stringify({ timezone: $('#timezone').val() }),
-                            success: function(response) {
-                                alert('Settings saved successfully!');
-                            },
-                            error: function(error) {
-                                alert('Error saving timezone.');
-                                console.error(error);
-                            }
-                        });
-                    },
-                    error: function(error) {
-                        alert('Error saving settings.');
-                        console.error(error);
+            const setStatus = (node, message, tone = 'info') => {
+                if (!node) return;
+                node.textContent = message || '';
+                node.className = `text-sm ${tone === 'error' ? 'text-red-600' : tone === 'success' ? 'text-green-600' : 'text-slate-400'}`;
+            };
+
+            const loadSettings = async () => {
+                try {
+                    const response = await fetch('/api/settings');
+                    if (!response.ok) {
+                        throw new Error('Failed to load settings');
                     }
-                });
-            });
-
-            // Handle email settings form submission
-            $('#emailSettingsForm').on('submit', function(event) {
-                event.preventDefault();
-                const emailData = {
-                    email_address: $('#emailAddress').val(),
-                    app_password: $('#appPassword').val(),
-                    email_cc: $('#emailCc').val(),
-                    email_bcc: $('#emailBcc').val()
-                };
-                $.ajax({
-                    url: '/api/settings/email',
-                    type: 'POST',
-                    contentType: 'application/json',
-                    data: JSON.stringify(emailData),
-                    success: function(response) {
-                        alert('Email settings saved successfully!');
-                    },
-                    error: function(error) {
-                        alert('Error saving email settings.');
-                        console.error(error);
+                    const data = await response.json();
+                    document.getElementById('companyName').value = data.company_name || '';
+                    document.getElementById('shippingZipCode').value = data.default_shipping_zip_code || '';
+                    document.getElementById('defaultEmailBody').value = data.default_email_body || '';
+                    document.getElementById('emailAddress').value = data.email_address || '';
+                    document.getElementById('appPassword').value = data.app_password || '';
+                    document.getElementById('emailCc').value = data.email_cc || '';
+                    document.getElementById('emailBcc').value = data.email_bcc || '';
+                    if (data.timezone && timezoneSelect) {
+                        timezoneSelect.value = data.timezone;
                     }
-                });
+                } catch (error) {
+                    console.error(error);
+                    setStatus(generalStatus, 'Unable to load settings.', 'error');
+                }
+            };
+
+            generalForm.addEventListener('submit', async (event) => {
+                event.preventDefault();
+                setStatus(generalStatus, 'Saving…');
+                try {
+                    const payload = {
+                        company_name: document.getElementById('companyName').value,
+                        default_shipping_zip_code: document.getElementById('shippingZipCode').value,
+                        default_email_body: document.getElementById('defaultEmailBody').value,
+                    };
+                    const response = await fetch('/api/settings', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload),
+                    });
+                    if (!response.ok) {
+                        throw new Error('Failed to save general settings');
+                    }
+                    const tzResponse = await fetch('/api/settings/timezone', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ timezone: timezoneSelect.value }),
+                    });
+                    if (!tzResponse.ok) {
+                        throw new Error('Failed to update timezone');
+                    }
+                    setStatus(generalStatus, 'General settings saved.', 'success');
+                } catch (error) {
+                    console.error(error);
+                    setStatus(generalStatus, 'Unable to save general settings.', 'error');
+                }
             });
 
-            // Redirect to dedicated management pages
-            $('#manageCustomers').on('click', function() {
-                window.location.href = '/manage/customers';
+            emailForm.addEventListener('submit', async (event) => {
+                event.preventDefault();
+                setStatus(emailStatus, 'Saving…');
+                try {
+                    const payload = {
+                        email_address: document.getElementById('emailAddress').value,
+                        app_password: document.getElementById('appPassword').value,
+                        email_cc: document.getElementById('emailCc').value,
+                        email_bcc: document.getElementById('emailBcc').value,
+                    };
+                    const response = await fetch('/api/settings/email', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload),
+                    });
+                    if (!response.ok) {
+                        throw new Error('Failed to save email settings');
+                    }
+                    setStatus(emailStatus, 'Email settings saved.', 'success');
+                } catch (error) {
+                    console.error(error);
+                    setStatus(emailStatus, 'Unable to save email settings.', 'error');
+                }
             });
 
-            $('#manageItems').on('click', function() {
+            document.getElementById('manageCustomers').addEventListener('click', () => {
+                window.location.href = '/contacts';
+            });
+            document.getElementById('manageItems').addEventListener('click', () => {
                 window.location.href = '/manage/items';
             });
-
-            $('#managePackages').on('click', function() {
+            document.getElementById('managePackages').addEventListener('click', () => {
                 window.location.href = '/manage/packages';
             });
 
-            // Handle data export
-            $('#exportData').on('click', function() {
+            document.getElementById('exportData').addEventListener('click', () => {
                 window.location.href = '/api/export-data';
             });
 
-            // Handle data import
-            $('#importData').on('click', function() {
-                $('#importFile').click();
+            document.getElementById('importData').addEventListener('click', () => {
+                importFileInput.value = '';
+                importFileInput.click();
             });
 
-            $('#importFile').on('change', function() {
-                const file = this.files[0];
-                if (file) {
-                    const formData = new FormData();
-                    formData.append('file', file);
-
-                    $.ajax({
-                        url: '/api/import-data',
-                        type: 'POST',
-                        data: formData,
-                        processData: false,
-                        contentType: false,
-                        success: function(response) {
-                            alert('Database restored successfully!');
-                        },
-                        error: function(error) {
-                            alert('Error restoring database.');
-                            console.error(error);
-                        }
+            importFileInput.addEventListener('change', async () => {
+                const file = importFileInput.files[0];
+                if (!file) return;
+                setStatus(databaseStatus, 'Uploading backup…');
+                const formData = new FormData();
+                formData.append('file', file);
+                try {
+                    const response = await fetch('/api/import-data', {
+                        method: 'POST',
+                        body: formData,
                     });
+                    if (!response.ok) {
+                        throw new Error('Import failed');
+                    }
+                    setStatus(databaseStatus, 'Database restored successfully.', 'success');
+                } catch (error) {
+                    console.error(error);
+                    setStatus(databaseStatus, 'Import failed. The database was not replaced.', 'error');
+                } finally {
+                    importFileInput.value = '';
                 }
             });
+
+            loadSettings();
         });
     </script>
+</body>
 </html>

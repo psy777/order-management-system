@@ -292,7 +292,7 @@ const ContactMentions = ({ mentions }) => {
     );
 };
 
-const ContactDetail = ({ contact, onSave, isSaving, contactsCatalog }) => {
+const ContactDetail = ({ contact, onSave, isSaving, contactsCatalog, onCancelCreate }) => {
     const mapContactToFormState = (contactData = EMPTY_CONTACT) => ({
         id: contactData?.id || null,
         contactName: contactData?.contactName || '',
@@ -313,10 +313,12 @@ const ContactDetail = ({ contact, onSave, isSaving, contactsCatalog }) => {
 
     const [formState, setFormState] = useState(mapContactToFormState(contact));
     const [isDirty, setIsDirty] = useState(false);
+    const [mode, setMode] = useState(contact?.id ? 'view' : 'create');
 
     useEffect(() => {
         setFormState(mapContactToFormState(contact));
         setIsDirty(false);
+        setMode(contact?.id ? 'view' : 'create');
     }, [contact]);
 
     if (!contact) {
@@ -337,6 +339,7 @@ const ContactDetail = ({ contact, onSave, isSaving, contactsCatalog }) => {
         const saved = await onSave(formState);
         if (saved) {
             setFormState(mapContactToFormState(saved));
+            setMode('view');
         }
         setIsDirty(false);
     };
@@ -354,18 +357,27 @@ const ContactDetail = ({ contact, onSave, isSaving, contactsCatalog }) => {
         return segments.join(' ');
     };
 
-    const isNew = !formState.id;
     const primaryOrders = contact.primaryOrders || [];
     const displayName = (formState.contactName && formState.contactName.trim()) || (formState.companyName && formState.companyName.trim()) || (formState.email && formState.email.trim()) || 'Unnamed contact';
     const showCompanyLine = Boolean(formState.companyName && formState.companyName.trim() && formState.companyName.trim() !== formState.contactName?.trim());
-    const canSubmit = Boolean((formState.contactName && formState.contactName.trim()) || (formState.companyName && formState.companyName.trim())) && isDirty && !isSaving;
+    const hasIdentity = Boolean((formState.contactName && formState.contactName.trim()) || (formState.companyName && formState.companyName.trim()));
+    const isCreateMode = mode === 'create';
+    const isViewMode = mode === 'view';
+    const canSubmit = hasIdentity && !isSaving && (isCreateMode ? true : isDirty);
+
+    const handleStartEdit = () => setMode('edit');
+    const handleCancelEdit = () => {
+        setFormState(mapContactToFormState(contact));
+        setIsDirty(false);
+        setMode(contact?.id ? 'view' : 'create');
+    };
 
     return (
         <div className="space-y-6">
             <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div>
-                        <p className="text-xs uppercase tracking-wider text-slate-500">{isNew ? 'New Contact' : 'Contact'}</p>
+                        <p className="text-xs uppercase tracking-wider text-slate-500">{isCreateMode ? 'New Contact' : 'Contact'}</p>
                         <h2 className="mt-1 text-2xl font-semibold text-slate-800">{displayName}</h2>
                         {showCompanyLine && <p className="text-sm text-slate-500">{formState.companyName}</p>}
                     </div>
@@ -379,6 +391,15 @@ const ContactDetail = ({ contact, onSave, isSaving, contactsCatalog }) => {
                             <span className="inline-flex items-center bg-slate-100 text-slate-700 px-3 py-1 rounded-full text-xs font-semibold">
                                 Primary for {primaryOrders.length} order{primaryOrders.length === 1 ? '' : 's'}
                             </span>
+                        )}
+                        {isViewMode && formState.id && (
+                            <button
+                                type="button"
+                                onClick={handleStartEdit}
+                                className="inline-flex items-center px-3 py-1.5 text-sm font-semibold text-white bg-orange-600 rounded-md shadow-sm hover:bg-orange-700 transition-colors"
+                            >
+                                Edit Contact
+                            </button>
                         )}
                     </div>
                 </div>
@@ -418,68 +439,89 @@ const ContactDetail = ({ contact, onSave, isSaving, contactsCatalog }) => {
                 )}
             </div>
 
-            <form onSubmit={handleSubmit} className="bg-white border border-slate-200 rounded-xl shadow-sm p-6 space-y-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <h3 className="text-lg font-semibold text-slate-800">{isNew ? 'Create Contact' : 'Contact Profile'}</h3>
-                    <button
-                        type="submit"
-                        disabled={!canSubmit}
-                        className={`px-4 py-2 rounded-md text-sm font-semibold ${canSubmit ? 'bg-orange-600 text-white hover:bg-orange-700' : 'bg-slate-200 text-slate-500 cursor-not-allowed'} ${isSaving ? 'opacity-75' : ''}`}
-                    >
-                        {isSaving ? 'Saving…' : isNew ? 'Create Contact' : 'Save Changes'}
-                    </button>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                        <label className="block text-sm font-medium text-slate-600">Contact Name</label>
-                        <input value={formState.contactName} onChange={e => handleChange('contactName', e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+            {isViewMode ? (
+                <section className="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
+                    <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-semibold text-slate-800">Internal Notes</h3>
+                        <span className="text-xs text-slate-500">Last updated {formatDateTime(contact.updatedAt)}</span>
                     </div>
-                    <div>
-                        <label className="block text-sm font-medium text-slate-600">Company</label>
-                        <input value={formState.companyName} onChange={e => handleChange('companyName', e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="Optional" />
+                    <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 min-h-[96px] whitespace-pre-wrap">
+                        {formState.notes && formState.notes.trim() ? formState.notes : 'No internal notes yet.'}
                     </div>
-                    <div>
-                        <label className="block text-sm font-medium text-slate-600">Handle</label>
-                        <input value={formState.handle} onChange={e => handleChange('handle', e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="autogenerate" />
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-slate-600">Email</label>
-                        <input value={formState.email} onChange={e => handleChange('email', e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-slate-600">Phone</label>
-                        <input value={formState.phone} onChange={e => handleChange('phone', e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
-                    </div>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                        <label className="block text-sm font-medium text-slate-600">Shipping Address</label>
-                        <textarea value={formState.shippingAddress} onChange={e => handleChange('shippingAddress', e.target.value)} rows={2} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500"></textarea>
-                        <div className="grid grid-cols-3 gap-2 mt-2">
-                            <input value={formState.shippingCity} onChange={e => handleChange('shippingCity', e.target.value)} placeholder="City" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
-                            <input value={formState.shippingState} onChange={e => handleChange('shippingState', e.target.value)} placeholder="State" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
-                            <input value={formState.shippingZipCode} onChange={e => handleChange('shippingZipCode', e.target.value)} placeholder="Zip" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                </section>
+            ) : (
+                <form onSubmit={handleSubmit} className="bg-white border border-slate-200 rounded-xl shadow-sm p-6 space-y-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <h3 className="text-lg font-semibold text-slate-800">{isCreateMode ? 'Create Contact' : 'Edit Contact'}</h3>
+                        <div className="flex gap-2">
+                            <button
+                                type="button"
+                                onClick={isCreateMode ? (onCancelCreate || handleCancelEdit) : handleCancelEdit}
+                                className="px-4 py-2 rounded-md text-sm font-semibold text-slate-600 border border-slate-300 hover:bg-slate-100 transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="submit"
+                                disabled={!canSubmit}
+                                className={`px-4 py-2 rounded-md text-sm font-semibold ${canSubmit ? 'bg-orange-600 text-white hover:bg-orange-700' : 'bg-slate-200 text-slate-500 cursor-not-allowed'} ${isSaving ? 'opacity-75' : ''}`}
+                            >
+                                {isSaving ? 'Saving…' : isCreateMode ? 'Create Contact' : 'Save Changes'}
+                            </button>
                         </div>
                     </div>
-                    <div>
-                        <label className="block text-sm font-medium text-slate-600">Billing Address</label>
-                        <textarea value={formState.billingAddress} onChange={e => handleChange('billingAddress', e.target.value)} rows={2} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500"></textarea>
-                        <div className="grid grid-cols-3 gap-2 mt-2">
-                            <input value={formState.billingCity} onChange={e => handleChange('billingCity', e.target.value)} placeholder="City" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
-                            <input value={formState.billingState} onChange={e => handleChange('billingState', e.target.value)} placeholder="State" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
-                            <input value={formState.billingZipCode} onChange={e => handleChange('billingZipCode', e.target.value)} placeholder="Zip" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-sm font-medium text-slate-600">Contact Name</label>
+                            <input value={formState.contactName} onChange={e => handleChange('contactName', e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-slate-600">Company</label>
+                            <input value={formState.companyName} onChange={e => handleChange('companyName', e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="Optional" />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-slate-600">Handle</label>
+                            <input value={formState.handle} onChange={e => handleChange('handle', e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="autogenerate" />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-slate-600">Email</label>
+                            <input value={formState.email} onChange={e => handleChange('email', e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-slate-600">Phone</label>
+                            <input value={formState.phone} onChange={e => handleChange('phone', e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
                         </div>
                     </div>
-                </div>
-                <ContactMentionTextarea
-                    label="Internal Notes"
-                    placeholder="Keep shared notes and mention teammates with @handle"
-                    value={formState.notes}
-                    onChange={value => handleChange('notes', value)}
-                    contacts={contactsCatalog}
-                    rows={4}
-                />
-            </form>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-sm font-medium text-slate-600">Shipping Address</label>
+                            <textarea value={formState.shippingAddress} onChange={e => handleChange('shippingAddress', e.target.value)} rows={2} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500"></textarea>
+                            <div className="grid grid-cols-3 gap-2 mt-2">
+                                <input value={formState.shippingCity} onChange={e => handleChange('shippingCity', e.target.value)} placeholder="City" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                                <input value={formState.shippingState} onChange={e => handleChange('shippingState', e.target.value)} placeholder="State" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                                <input value={formState.shippingZipCode} onChange={e => handleChange('shippingZipCode', e.target.value)} placeholder="Zip" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                            </div>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-slate-600">Billing Address</label>
+                            <textarea value={formState.billingAddress} onChange={e => handleChange('billingAddress', e.target.value)} rows={2} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500"></textarea>
+                            <div className="grid grid-cols-3 gap-2 mt-2">
+                                <input value={formState.billingCity} onChange={e => handleChange('billingCity', e.target.value)} placeholder="City" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                                <input value={formState.billingState} onChange={e => handleChange('billingState', e.target.value)} placeholder="State" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                                <input value={formState.billingZipCode} onChange={e => handleChange('billingZipCode', e.target.value)} placeholder="Zip" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                            </div>
+                        </div>
+                    </div>
+                    <ContactMentionTextarea
+                        label="Internal Notes"
+                        placeholder="Keep shared notes and mention teammates with @handle"
+                        value={formState.notes}
+                        onChange={value => handleChange('notes', value)}
+                        contacts={contactsCatalog}
+                        rows={4}
+                    />
+                </form>
+            )}
 
             <section className="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
                 <div className="flex items-center justify-between mb-4">
@@ -500,6 +542,7 @@ const ContactsApp = () => {
     const [error, setError] = useState(null);
     const [searchTerm, setSearchTerm] = useState('');
     const [isSaving, setIsSaving] = useState(false);
+    const [previousSelectedId, setPreviousSelectedId] = useState(null);
 
 
     useEffect(() => {
@@ -615,6 +658,7 @@ const ContactsApp = () => {
             const newDetail = { ...EMPTY_CONTACT, ...created, id: created.id, mentions: [], primaryOrders: [] };
             setContactDetail(newDetail);
             setSelectedId(created.id);
+            setPreviousSelectedId(null);
             return newDetail;
         } catch (err) {
             console.error('Failed to save contact', err);
@@ -627,8 +671,25 @@ const ContactsApp = () => {
 
     const startCreateContact = () => {
         setError(null);
+        if (selectedId && selectedId !== 'new') {
+            setPreviousSelectedId(selectedId);
+        } else if (!selectedId && contacts.length > 0) {
+            setPreviousSelectedId(contacts[0].id);
+        }
         setSelectedId('new');
         setContactDetail({ ...EMPTY_CONTACT });
+    };
+
+    const cancelCreateContact = () => {
+        const fallbackId = previousSelectedId || (contacts[0] && contacts[0].id) || null;
+        setPreviousSelectedId(null);
+        if (fallbackId) {
+            setContactDetail(null);
+            setSelectedId(fallbackId);
+        } else {
+            setSelectedId(null);
+            setContactDetail(null);
+        }
     };
 
     if (isLoading) {
@@ -698,6 +759,7 @@ const ContactsApp = () => {
                             onSave={handleSaveContact}
                             isSaving={isSaving}
                             contactsCatalog={contacts}
+                            onCancelCreate={cancelCreateContact}
                         />
                     ) : (
                         <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-10 flex items-center justify-center text-slate-500">

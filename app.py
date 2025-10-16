@@ -134,6 +134,153 @@ def serialize_contact_row(row):
     return contact
 
 
+def _build_contact_display(contact_dict):
+    if not contact_dict:
+        return None
+    display_name = (
+        (contact_dict.get("contactName") or "").strip()
+        or (contact_dict.get("companyName") or "").strip()
+        or (contact_dict.get("email") or "").strip()
+        or (contact_dict.get("handle") or "").strip()
+    )
+    if not display_name:
+        display_name = "Unnamed contact"
+    return {
+        **contact_dict,
+        "displayName": display_name,
+    }
+
+
+def serialize_order(cursor, order_row, user_timezone, include_logs=False):
+    order_dict = dict(order_row)
+
+    if order_dict.get('order_date'):
+        utc_date = dateutil_parse(order_dict['order_date']).replace(tzinfo=pytz.utc)
+        order_dict['order_date'] = utc_date.astimezone(user_timezone).isoformat()
+
+    contact_snapshot = {
+        "id": order_dict.pop('contact_id'),
+        "companyName": order_dict.pop('contact_company_name', None) or "[Contact Not Found]",
+        "contactName": order_dict.pop('contact_contact_name', None),
+        "email": order_dict.pop('contact_email', None),
+        "phone": order_dict.pop('contact_phone', None),
+        "billingAddress": order_dict.pop('contact_billing_address', None),
+        "billingCity": order_dict.pop('contact_billing_city', None),
+        "billingState": order_dict.pop('contact_billing_state', None),
+        "billingZipCode": order_dict.pop('contact_billing_zip_code', None),
+        "shippingAddress": order_dict.pop('contact_shipping_address', None),
+        "shippingCity": order_dict.pop('contact_shipping_city', None),
+        "shippingState": order_dict.pop('contact_shipping_state', None),
+        "shippingZipCode": order_dict.pop('contact_shipping_zip_code', None),
+        "handle": order_dict.pop('contact_handle', None),
+        "notes": order_dict.pop('contact_notes', None),
+    }
+
+    if not contact_snapshot['id']:
+        contact_snapshot = {
+            "id": None,
+            "companyName": "[Contact Not Found]",
+            "contactName": "",
+            "email": "",
+            "phone": "",
+            "billingAddress": "",
+            "billingCity": "",
+            "billingState": "",
+            "billingZipCode": "",
+            "shippingAddress": "",
+            "shippingCity": "",
+            "shippingState": "",
+            "shippingZipCode": "",
+            "handle": None,
+            "notes": "",
+        }
+
+    order_id = order_dict['order_id']
+
+    cursor.execute(
+        "SELECT item_code, package_code, quantity, price_per_unit_cents, style_chosen, item_type FROM order_line_items WHERE order_id = ?",
+        (order_id,)
+    )
+    order_dict['lineItems'] = [
+        {
+            'item': li['item_code'],
+            'packageCode': li['package_code'],
+            'price': li['price_per_unit_cents'],
+            'quantity': li['quantity'],
+            'style': li['style_chosen'],
+            'type': li['item_type']
+        }
+        for li in cursor.fetchall()
+    ]
+
+    cursor.execute(
+        "SELECT status, status_date FROM order_status_history WHERE order_id = ? ORDER BY status_date ASC",
+        (order_id,)
+    )
+    status_history = []
+    for history_row in cursor.fetchall():
+        utc_date = dateutil_parse(history_row['status_date']).replace(tzinfo=pytz.utc)
+        status_history.append({
+            'status': history_row['status'],
+            'date': utc_date.astimezone(user_timezone).isoformat()
+        })
+    order_dict['statusHistory'] = status_history
+
+    cursor.execute(
+        """
+            SELECT c.id, c.company_name, c.contact_name, c.email, c.phone, c.billing_address, c.billing_city,
+                   c.billing_state, c.billing_zip_code, c.shipping_address, c.shipping_city, c.shipping_state,
+                   c.shipping_zip_code, c.handle, c.notes, c.created_at, c.updated_at
+            FROM order_contact_links ocl
+            JOIN contacts c ON ocl.contact_id = c.id
+            WHERE ocl.order_id = ?
+            ORDER BY LOWER(COALESCE(c.contact_name, c.company_name, c.email, c.handle, ''))
+        """,
+        (order_id,)
+    )
+    additional_contacts = [serialize_contact_row(row) for row in cursor.fetchall()]
+    additional_contacts = [_build_contact_display(contact) for contact in additional_contacts]
+
+    primary_contact_display = _build_contact_display(contact_snapshot)
+
+    order_dict['contactInfo'] = contact_snapshot
+    order_dict['primaryContact'] = primary_contact_display
+    order_dict['primaryContactId'] = primary_contact_display['id'] if primary_contact_display else None
+    order_dict['additionalContacts'] = additional_contacts
+    order_dict['additionalContactIds'] = [contact['id'] for contact in additional_contacts if contact]
+
+    order_dict['id'] = order_dict.pop('order_id')
+    order_dict['display_id'] = order_dict.pop('display_id')
+    order_dict['date'] = order_dict.pop('order_date')
+    order_dict['total'] = order_dict.pop('total_amount')
+    order_dict['estimatedShipping'] = order_dict.pop('estimated_shipping_cost') or 0
+    order_dict['estimatedShippingDate'] = order_dict.pop('estimated_shipping_date')
+    order_dict['scentOption'] = order_dict.pop('scent_option')
+    order_dict['nameDrop'] = True if order_dict.pop('name_drop', 0) == 1 else False
+    order_dict['shippingAddress'] = order_dict.pop('shipping_address', '')
+    order_dict['shippingCity'] = order_dict.pop('shipping_city', '')
+    order_dict['shippingState'] = order_dict.pop('shipping_state', '')
+    order_dict['shippingZipCode'] = order_dict.pop('shipping_zip_code', '')
+    order_dict['signatureDataUrl'] = order_dict.pop('signature_data_url')
+
+    if include_logs:
+        cursor.execute(
+            "SELECT log_id, timestamp, user, action, details, note, attachment_path FROM order_logs WHERE order_id = ? ORDER BY timestamp DESC",
+            (order_dict['id'],)
+        )
+        logs = []
+        for log_row in cursor.fetchall():
+            log_dict = dict(log_row)
+            if log_dict.get('timestamp'):
+                naive_date = dateutil_parse(log_dict['timestamp'])
+                utc_date = pytz.utc.localize(naive_date)
+                log_dict['timestamp'] = utc_date.astimezone(user_timezone).isoformat()
+            logs.append(log_dict)
+        order_dict['orderLogs'] = logs
+
+    return order_dict
+
+
 def update_or_create_contact(cursor, contact_info_payload):
     if not contact_info_payload:
         return None
@@ -306,56 +453,9 @@ def get_orders():
 
     cursor.execute("SELECT o.*, v.company_name as contact_company_name, v.contact_name as contact_contact_name, v.email as contact_email, v.phone as contact_phone, v.billing_address as contact_billing_address, v.billing_city as contact_billing_city, v.billing_state as contact_billing_state, v.billing_zip_code as contact_billing_zip_code, v.shipping_address as contact_shipping_address, v.shipping_city as contact_shipping_city, v.shipping_state as contact_shipping_state, v.shipping_zip_code as contact_shipping_zip_code, v.handle as contact_handle, v.notes as contact_notes FROM orders o LEFT JOIN contacts v ON o.contact_id = v.id WHERE o.status != 'Deleted' ORDER BY o.order_date DESC, o.order_id DESC")
     orders_from_db = cursor.fetchall()
-    active_orders_response = []
-    for order_row in orders_from_db:
-        order_dict = dict(order_row)
-        if order_dict.get('order_date'):
-            utc_date = dateutil_parse(order_dict['order_date']).replace(tzinfo=pytz.utc)
-            order_dict['order_date'] = utc_date.astimezone(user_timezone).isoformat()
-        
-        order_dict['contactInfo'] = {
-            "id": order_dict.pop('contact_id'),
-            "companyName": order_dict.pop('contact_company_name') or "[Contact Not Found]",
-            "contactName": order_dict.pop('contact_contact_name'),
-            "email": order_dict.pop('contact_email'),
-            "phone": order_dict.pop('contact_phone'),
-            "billingAddress": order_dict.pop('contact_billing_address'),
-            "billingCity": order_dict.pop('contact_billing_city'),
-            "billingState": order_dict.pop('contact_billing_state'),
-            "billingZipCode": order_dict.pop('contact_billing_zip_code'),
-            "shippingAddress": order_dict.pop('contact_shipping_address'),
-            "shippingCity": order_dict.pop('contact_shipping_city'),
-            "shippingState": order_dict.pop('contact_shipping_state'),
-            "shippingZipCode": order_dict.pop('contact_shipping_zip_code'),
-            "handle": order_dict.pop('contact_handle'),
-            "notes": order_dict.pop('contact_notes')
-        }
-        if not order_dict['contactInfo']['id']:
-            order_dict['contactInfo'] = {
-                "id": None, "companyName": "[Contact Not Found]", "contactName": "", "email": "", "phone": "",
-                "billingAddress": "", "billingCity": "", "billingState": "", "billingZipCode": "",
-                "shippingAddress": "", "shippingCity": "", "shippingState": "", "shippingZipCode": "",
-                "handle": None, "notes": ""
-            }
-        cursor.execute("SELECT item_code, package_code, quantity, price_per_unit_cents, style_chosen, item_type FROM order_line_items WHERE order_id = ?", (order_dict['order_id'],))
-        order_dict['lineItems'] = [{'item': li['item_code'], 'packageCode': li['package_code'], 'price': li['price_per_unit_cents'], 'quantity': li['quantity'], 'style': li['style_chosen'], 'type': li['item_type']} for li in cursor.fetchall()]
-        cursor.execute("SELECT status, status_date FROM order_status_history WHERE order_id = ? ORDER BY status_date ASC", (order_dict['order_id'],))
-        
-        status_history = []
-        for h in cursor.fetchall():
-            utc_date = dateutil_parse(h['status_date']).replace(tzinfo=pytz.utc)
-            status_history.append({'status': h['status'], 'date': utc_date.astimezone(user_timezone).isoformat()})
-        order_dict['statusHistory'] = status_history
-
-        order_dict['id'] = order_dict.pop('order_id')
-        order_dict['display_id'] = order_dict.pop('display_id')
-        order_dict['date'] = order_dict.pop('order_date')
-        order_dict['total'] = order_dict.pop('total_amount')
-        order_dict['estimatedShipping'] = order_dict.pop('estimated_shipping_cost')
-        order_dict['nameDrop'] = True if order_dict.pop('name_drop', 0) == 1 else False
-        active_orders_response.append(order_dict)
+    orders_payload = [serialize_order(cursor, row, user_timezone, include_logs=False) for row in orders_from_db]
     conn.close()
-    return jsonify(active_orders_response)
+    return jsonify(orders_payload)
 
 @app.route('/api/orders/<string:order_id>', methods=['GET'])
 def get_order(order_id):
@@ -371,66 +471,9 @@ def get_order(order_id):
         conn.close()
         return jsonify({"status": "error", "message": "Order not found"}), 404
 
-    order_dict = dict(order_row)
-    if order_dict.get('order_date'):
-        utc_date = dateutil_parse(order_dict['order_date']).replace(tzinfo=pytz.utc)
-        order_dict['order_date'] = utc_date.astimezone(user_timezone).isoformat()
-
-    order_dict['contactInfo'] = {
-        "id": order_dict.pop('contact_id'),
-        "companyName": order_dict.pop('contact_company_name') or "[Contact Not Found]",
-        "contactName": order_dict.pop('contact_contact_name'),
-        "email": order_dict.pop('contact_email'),
-        "phone": order_dict.pop('contact_phone'),
-        "billingAddress": order_dict.pop('contact_billing_address'),
-        "billingCity": order_dict.pop('contact_billing_city'),
-        "billingState": order_dict.pop('contact_billing_state'),
-        "billingZipCode": order_dict.pop('contact_billing_zip_code'),
-        "shippingAddress": order_dict.pop('contact_shipping_address'),
-        "shippingCity": order_dict.pop('contact_shipping_city'),
-        "shippingState": order_dict.pop('contact_shipping_state'),
-        "shippingZipCode": order_dict.pop('contact_shipping_zip_code'),
-        "handle": order_dict.pop('contact_handle'),
-        "notes": order_dict.pop('contact_notes')
-    }
-    if not order_dict['contactInfo']['id']:
-        order_dict['contactInfo'] = {
-            "id": None, "companyName": "[Contact Not Found]", "contactName": "", "email": "", "phone": "",
-            "billingAddress": "", "billingCity": "", "billingState": "", "billingZipCode": "",
-            "shippingAddress": "", "shippingCity": "", "shippingState": "", "shippingZipCode": "",
-            "handle": None, "notes": ""
-        }
-    cursor.execute("SELECT item_code, package_code, quantity, price_per_unit_cents, style_chosen, item_type FROM order_line_items WHERE order_id = ?", (order_dict['order_id'],))
-    order_dict['lineItems'] = [{'item': li['item_code'], 'packageCode': li['package_code'], 'price': li['price_per_unit_cents'], 'quantity': li['quantity'], 'style': li['style_chosen'], 'type': li['item_type']} for li in cursor.fetchall()]
-    cursor.execute("SELECT status, status_date FROM order_status_history WHERE order_id = ? ORDER BY status_date ASC", (order_dict['order_id'],))
-    
-    status_history = []
-    for h in cursor.fetchall():
-        utc_date = dateutil_parse(h['status_date']).replace(tzinfo=pytz.utc)
-        status_history.append({'status': h['status'], 'date': utc_date.astimezone(user_timezone).isoformat()})
-    order_dict['statusHistory'] = status_history
-
-    order_dict['id'] = order_dict.pop('order_id')
-    order_dict['display_id'] = order_dict.pop('display_id')
-    order_dict['date'] = order_dict.pop('order_date')
-    order_dict['total'] = order_dict.pop('total_amount')
-    order_dict['estimatedShipping'] = order_dict.pop('estimated_shipping_cost')
-    order_dict['nameDrop'] = True if order_dict.pop('name_drop', 0) == 1 else False
-    
-    cursor.execute("SELECT log_id, timestamp, user, action, details, note, attachment_path FROM order_logs WHERE order_id = ? ORDER BY timestamp DESC", (order_id,))
-    logs_from_db = cursor.fetchall()
-    logs = []
-    for log_row in logs_from_db:
-        log_dict = dict(log_row)
-        if log_dict.get('timestamp'):
-            naive_date = dateutil_parse(log_dict['timestamp'])
-            utc_date = pytz.utc.localize(naive_date)
-            log_dict['timestamp'] = utc_date.astimezone(user_timezone).isoformat()
-        logs.append(log_dict)
-    order_dict['orderLogs'] = logs
-    
+    order_payload = serialize_order(cursor, order_row, user_timezone, include_logs=True)
     conn.close()
-    return jsonify(order_dict)
+    return jsonify(order_payload)
 
 @app.route('/api/orders/<string:order_id>/logs', methods=['GET', 'POST'])
 def handle_order_logs(order_id):
@@ -582,6 +625,9 @@ def search_orders():
 
     conn = get_db_connection()
     cursor = conn.cursor()
+    settings = read_json_file(SETTINGS_FILE)
+    user_timezone_str = settings.get('timezone', 'UTC')
+    user_timezone = pytz.timezone(user_timezone_str)
     
     base_query = "SELECT DISTINCT o.order_id FROM orders o "
     joins = set()
@@ -697,26 +743,9 @@ def search_orders():
         
         cursor.execute(sql_fetch_orders, tuple(order_ids))
         orders_from_db = cursor.fetchall()
-        
-        active_orders_response = []
-        for order_row in orders_from_db:
-            order_dict = dict(order_row)
-            order_dict['contactInfo'] = {
-                "id": order_dict.pop('contact_id'),
-                "companyName": order_dict.pop('contact_company_name') or "[Contact Not Found]",
-                "contactName": order_dict.pop('contact_contact_name'), 'email': order_dict.pop('contact_email'), 'phone': order_dict.pop('contact_phone'),
-                'billingAddress': order_dict.pop('contact_billing_address'), 'billingCity': order_dict.pop('contact_billing_city'), 'billingState': order_dict.pop('contact_billing_state'), 'billingZipCode': order_dict.pop('contact_billing_zip_code'),
-                'shippingAddress': order_dict.pop('contact_shipping_address'), 'shippingCity': order_dict.pop('contact_shipping_city'), 'shippingState': order_dict.pop('contact_shipping_state'), 'shippingZipCode': order_dict.pop('contact_shipping_zip_code')
-            }
-            cursor.execute("SELECT item_code, package_code, quantity, price_per_unit_cents, style_chosen, item_type FROM order_line_items WHERE order_id = ?", (order_dict['order_id'],))
-            order_dict['lineItems'] = [{'item': li['item_code'], 'packageCode': li['package_code'], 'price': li['price_per_unit_cents'], 'quantity': li['quantity'], 'style': li['style_chosen'], 'type': li['item_type']} for li in cursor.fetchall()]
-            cursor.execute("SELECT status, status_date FROM order_status_history WHERE order_id = ? ORDER BY status_date ASC", (order_dict['order_id'],))
-            order_dict['statusHistory'] = [{'status': h['status'], 'date': h['status_date']} for h in cursor.fetchall()]
-            order_dict['id'] = order_dict.pop('order_id'); order_dict['date'] = order_dict.pop('order_date'); order_dict['total'] = order_dict.pop('total_amount'); order_dict['estimatedShipping'] = order_dict.pop('estimated_shipping_cost')
-            order_dict['nameDrop'] = bool(order_dict.pop('name_drop', 0))
-            active_orders_response.append(order_dict)
-            
-        return jsonify(active_orders_response)
+        orders_payload = [serialize_order(cursor, row, user_timezone, include_logs=False) for row in orders_from_db]
+        conn.close()
+        return jsonify(orders_payload)
 
     except sqlite3.Error as e:
         app.logger.error(f"Database error during search: {e}\nQuery: {final_query}\nParams: {params}")
@@ -749,6 +778,9 @@ def save_order():
     try:
         conn_main = get_db_connection()
         cursor = conn_main.cursor()
+        settings = read_json_file(SETTINGS_FILE)
+        user_timezone_str = settings.get('timezone', 'UTC')
+        user_timezone = pytz.timezone(user_timezone_str)
         order_id_from_payload = new_order_payload.get('id')
         
         existing_order_row = None
@@ -783,11 +815,32 @@ def save_order():
                 if conn_main: conn_main.rollback()
                 return jsonify({"status": "error", "message": f"Order ID {order_id_from_payload} not found."}), 404
         
-        db_processed_contact_id = None
-        if 'contactInfo' in new_order_payload and new_order_payload['contactInfo']:
-            db_processed_contact_id = update_or_create_contact(cursor, new_order_payload['contactInfo'])
-            if db_processed_contact_id: new_order_payload['contactInfo']['id'] = db_processed_contact_id
-            else: app.logger.error(f"Contact processing failed. Payload: {new_order_payload.get('contactInfo')}")
+        contact_info_payload = new_order_payload.get('contactInfo') or {}
+        primary_contact_id = contact_info_payload.get('id') or new_order_payload.get('primaryContactId')
+        if not primary_contact_id:
+            if conn_main and conn_main.in_transaction:
+                conn_main.rollback()
+            return jsonify({"status": "error", "message": "A primary contact is required for every order."}), 400
+
+        cursor.execute("SELECT id FROM contacts WHERE id = ?", (primary_contact_id,))
+        if not cursor.fetchone():
+            if conn_main and conn_main.in_transaction:
+                conn_main.rollback()
+            return jsonify({"status": "error", "message": "Selected primary contact could not be found."}), 400
+
+        db_processed_contact_id = primary_contact_id
+        new_order_payload['contactInfo'] = {**contact_info_payload, 'id': primary_contact_id}
+
+        additional_contact_ids = new_order_payload.get('additionalContactIds') or []
+        normalized_additional = []
+        for candidate in additional_contact_ids:
+            if not candidate or candidate == db_processed_contact_id or candidate in normalized_additional:
+                continue
+            cursor.execute("SELECT 1 FROM contacts WHERE id = ?", (candidate,))
+            if cursor.fetchone():
+                normalized_additional.append(candidate)
+        additional_contact_ids = normalized_additional
+        new_order_payload['additionalContactIds'] = additional_contact_ids
         
         if 'nameDrop' not in new_order_payload: new_order_payload['nameDrop'] = False
         
@@ -835,6 +888,13 @@ def save_order():
         if not any(h['status'] == new_order_payload.get('status') for h in new_order_payload.get('statusHistory',[])):
             cursor.execute("INSERT INTO order_status_history (order_id, status, status_date) VALUES (?,?,?)", (processed_order_id, new_order_payload.get('status'), datetime.now(timezone.utc).isoformat()+"Z"))
 
+        cursor.execute("DELETE FROM order_contact_links WHERE order_id = ?", (processed_order_id,))
+        for contact_id in additional_contact_ids:
+            cursor.execute(
+                "INSERT OR REPLACE INTO order_contact_links (order_id, contact_id, relationship) VALUES (?, ?, 'secondary')",
+                (processed_order_id, contact_id)
+            )
+
         notes_text = new_order_payload.get('notes')
         handles_from_notes = extract_contact_handles(notes_text)
         sync_contact_mentions(cursor, handles_from_notes, 'order_note', processed_order_id, notes_text)
@@ -849,20 +909,29 @@ def save_order():
         conn_main.commit()
         app.logger.info(f"Order {processed_order_id} committed successfully.")
 
-        if 'id' in new_order_payload:
-            new_order_payload['id'] = new_order_payload.pop('id')
+        cursor.execute(
+            """
+                SELECT o.*, v.company_name as contact_company_name, v.contact_name as contact_contact_name, v.email as contact_email,
+                       v.phone as contact_phone, v.billing_address as contact_billing_address, v.billing_city as contact_billing_city,
+                       v.billing_state as contact_billing_state, v.billing_zip_code as contact_billing_zip_code,
+                       v.shipping_address as contact_shipping_address, v.shipping_city as contact_shipping_city,
+                       v.shipping_state as contact_shipping_state, v.shipping_zip_code as contact_shipping_zip_code,
+                       v.handle as contact_handle, v.notes as contact_notes
+                FROM orders o
+                LEFT JOIN contacts v ON o.contact_id = v.id
+                WHERE o.order_id = ?
+            """,
+            (processed_order_id,)
+        )
+        refreshed_row = cursor.fetchone()
+        if refreshed_row:
+            final_order_response = serialize_order(cursor, refreshed_row, user_timezone, include_logs=True)
+        else:
+            final_order_response = {
+                "id": processed_order_id,
+                **{k: v for k, v in new_order_payload.items() if k != 'id'}
+            }
 
-        current_status = new_order_payload.get('status', 'Draft')
-        status_history = new_order_payload.get('statusHistory', [])
-        if not any(h['status'] == current_status for h in status_history):
-            status_history.append({
-                'status': current_status,
-                'date': datetime.now(timezone.utc).isoformat() + "Z"
-            })
-        new_order_payload['statusHistory'] = status_history
-
-        final_order_response = new_order_payload
-        
         app.logger.info(f"Order {processed_order_id} processed and response prepared successfully.")
         return jsonify({
             "status": "success",
