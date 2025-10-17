@@ -108,6 +108,21 @@ const hexToRgb = (hex) => {
     };
 };
 
+const normalizePhoneDigits = (value = '') => (value || '').replace(/\D/g, '').slice(0, 10);
+
+const formatPhoneNumber = (value = '') => {
+    const digits = normalizePhoneDigits(value);
+    if (!digits) return '';
+    if (digits.length < 4) {
+        const closing = digits.length === 3 ? ')' : '';
+        return `(${digits}${closing}`;
+    }
+    if (digits.length < 7) {
+        return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+    }
+    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)} ${digits.slice(6)}`;
+};
+
 // --- SHARED HELPER COMPONENTS & ICONS ---
 const Input = ({ label, placeholder, value, onChange, type = "text", disabled = false, onFocus, onBlur }) => (
     <div><label className="block text-sm font-medium text-slate-600">{label}</label><input type={type} placeholder={placeholder} value={value} onChange={onChange} disabled={disabled} onFocus={onFocus} onBlur={onBlur} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm disabled:bg-slate-100 disabled:text-slate-500" /></div>
@@ -268,7 +283,7 @@ const ContactMentionTextarea = ({ label, placeholder, value, onChange, disabled 
                 <div
                     ref={overlayRef}
                     aria-hidden="true"
-                    className={`pointer-events-none absolute inset-0 px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words ${disabled ? 'text-slate-500' : 'text-slate-700'}`}
+                    className={`pointer-events-none absolute inset-0 px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words rounded-md ${disabled ? 'bg-slate-100 text-slate-500' : 'bg-white text-slate-700'}`}
                     dangerouslySetInnerHTML={{ __html: buildHighlightedHtml }}
                 ></div>
                 <textarea
@@ -279,7 +294,7 @@ const ContactMentionTextarea = ({ label, placeholder, value, onChange, disabled 
                     onChange={handleChange}
                     onKeyDown={handleKeyDown}
                     disabled={disabled}
-                    className={`relative block w-full resize-y rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 ${disabled ? 'bg-slate-100 text-transparent' : 'bg-white text-transparent'} placeholder-transparent caret-orange-500 selection:bg-orange-200 selection:text-transparent`}
+                    className={`relative block w-full resize-y rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 bg-transparent text-transparent placeholder-transparent caret-orange-500 selection:bg-orange-200 selection:text-transparent`}
                     style={{ WebkitTextFillColor: 'transparent' }}
                 />
             </div>
@@ -623,7 +638,8 @@ const generateInvoicePdf = (order, allItems, action = 'save', brandingOverride =
     const leftColumnX = 14;
     const rightColumnX = 105;
 
-    const customerLines = [contactInfo.companyName, contactInfo.contactName, contactInfo.email, contactInfo.phone].filter(Boolean);
+    const customerPhone = formatPhoneNumber(contactInfo.phone);
+    const customerLines = [contactInfo.companyName, contactInfo.contactName, contactInfo.email, customerPhone].filter(Boolean);
     leftColumnY = renderBlock("Bill To", customerLines, leftColumnX, leftColumnY);
 
     const billingLines = buildAddressLines(contactInfo.billingAddress, contactInfo.billingCity, contactInfo.billingState, contactInfo.billingZipCode);
@@ -1290,6 +1306,8 @@ const ContactSummaryCard = ({ contact }) => {
         );
     }
 
+    const phoneDisplay = formatPhoneNumber(contact.phone);
+
     return (
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
             <div>
@@ -1305,7 +1323,7 @@ const ContactSummaryCard = ({ contact }) => {
                 </div>
                 <div>
                     <p className="font-medium text-slate-700">Phone</p>
-                    <p>{contact.phone || 'Not provided'}</p>
+                    <p>{phoneDisplay || 'Not provided'}</p>
                 </div>
                 <div className="sm:col-span-2">
                     <p className="font-medium text-slate-700">Shipping</p>
@@ -1854,7 +1872,7 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
             contactName: newContactForm.contactName.trim(),
             companyName: newContactForm.companyName.trim(),
             email: newContactForm.email.trim(),
-            phone: newContactForm.phone.trim(),
+            phone: normalizePhoneDigits(newContactForm.phone),
             shippingAddress: newContactForm.shippingAddress.trim(),
             shippingCity: newContactForm.shippingCity.trim(),
             shippingState: newContactForm.shippingState.trim(),
@@ -2311,7 +2329,15 @@ const unpackPackage = (id, pkgCode) => {
                                         <Input label="Contact Name" value={newContactForm.contactName} onChange={e => setNewContactForm(prev => ({ ...prev, contactName: e.target.value }))} disabled={isCreatingContact} />
                                         <Input label="Company" value={newContactForm.companyName} onChange={e => setNewContactForm(prev => ({ ...prev, companyName: e.target.value }))} disabled={isCreatingContact} />
                                         <Input label="Email" value={newContactForm.email} onChange={e => setNewContactForm(prev => ({ ...prev, email: e.target.value }))} disabled={isCreatingContact} />
-                                        <Input label="Phone" value={newContactForm.phone} onChange={e => setNewContactForm(prev => ({ ...prev, phone: e.target.value }))} disabled={isCreatingContact} />
+                                        <Input
+                                            label="Phone"
+                                            value={newContactForm.phone}
+                                            onChange={e => {
+                                                const formatted = formatPhoneNumber(e.target.value);
+                                                setNewContactForm(prev => ({ ...prev, phone: formatted }));
+                                            }}
+                                            disabled={isCreatingContact}
+                                        />
                                     </div>
                                     <div className="space-y-3">
                                         <Textarea

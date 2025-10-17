@@ -107,6 +107,21 @@
             };
         };
 
+        const normalizePhoneDigits = (value = '') => (value || '').replace(/\D/g, '').slice(0, 10);
+
+        const formatPhoneNumber = (value = '') => {
+            const digits = normalizePhoneDigits(value);
+            if (!digits) return '';
+            if (digits.length < 4) {
+                const closing = digits.length === 3 ? ')' : '';
+                return `(${digits}${closing}`;
+            }
+            if (digits.length < 7) {
+                return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+            }
+            return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)} ${digits.slice(6)}`;
+        };
+
 const ContactMentionTextarea = ({ label, placeholder, value, onChange, disabled = false, rows = 3, contacts = [] }) => {
     const { useState, useRef, useEffect, useMemo } = React;
     const textareaRef = useRef(null);
@@ -256,7 +271,7 @@ const ContactMentionTextarea = ({ label, placeholder, value, onChange, disabled 
                 <div
                     ref={overlayRef}
                     aria-hidden="true"
-                    className={`pointer-events-none absolute inset-0 px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words ${disabled ? 'text-slate-500' : 'text-slate-700'}`}
+                    className={`pointer-events-none absolute inset-0 px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words rounded-md ${disabled ? 'bg-slate-100 text-slate-500' : 'bg-white text-slate-700'}`}
                     dangerouslySetInnerHTML={{ __html: buildHighlightedHtml }}
                 ></div>
                 <textarea
@@ -267,7 +282,7 @@ const ContactMentionTextarea = ({ label, placeholder, value, onChange, disabled 
                     onChange={handleChange}
                     onKeyDown={handleKeyDown}
                     disabled={disabled}
-                    className={`relative block w-full resize-y rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 ${disabled ? 'bg-slate-100 text-transparent' : 'bg-white text-transparent'} placeholder-transparent caret-orange-500 selection:bg-orange-200 selection:text-transparent`}
+                    className={`relative block w-full resize-y rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 bg-transparent text-transparent placeholder-transparent caret-orange-500 selection:bg-orange-200 selection:text-transparent`}
                     style={{ WebkitTextFillColor: 'transparent' }}
                 />
             </div>
@@ -511,7 +526,8 @@ const formatContactAddress = (address, city, state, zip) => {
             const leftColumnX = 14;
             const rightColumnX = 105;
 
-            const customerLines = [contactInfo.companyName, contactInfo.contactName, contactInfo.email, contactInfo.phone].filter(Boolean);
+            const customerPhone = formatPhoneNumber(contactInfo.phone);
+            const customerLines = [contactInfo.companyName, contactInfo.contactName, contactInfo.email, customerPhone].filter(Boolean);
             leftColumnY = renderBlock("Bill To", customerLines, leftColumnX, leftColumnY);
 
             const billingLines = buildAddressLines(contactInfo.billingAddress, contactInfo.billingCity, contactInfo.billingState, contactInfo.billingZipCode);
@@ -737,6 +753,7 @@ const formatContactAddress = (address, city, state, zip) => {
             const companyName = (primaryContact.companyName || '').trim();
             const showCompanyLine = Boolean(companyName && companyName !== contactDisplayName);
             const contactHandle = (primaryContact.handle || '').trim();
+            const formattedPhone = formatPhoneNumber(primaryContact.phone);
             const formattedShipping = formatContactAddress(
                 primaryContact.shippingAddress,
                 primaryContact.shippingCity,
@@ -785,11 +802,6 @@ const formatContactAddress = (address, city, state, zip) => {
                                     )}
                                 </div>
                                 <div className="flex flex-wrap gap-2">
-                                    {primaryContact.phone && (
-                                        <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-sm font-medium text-slate-700">
-                                            {primaryContact.phone}
-                                        </span>
-                                    )}
                                     {primaryContact.id && (
                                         <a
                                             href={`/contacts?contact_id=${primaryContact.id}`}
@@ -807,7 +819,7 @@ const formatContactAddress = (address, city, state, zip) => {
                                 </div>
                                 <div>
                                     <p className="font-semibold text-slate-700">Phone</p>
-                                    <p>{primaryContact.phone || 'Not provided'}</p>
+                                    <p>{formattedPhone || 'Not provided'}</p>
                                 </div>
                                 <div>
                                     <p className="font-semibold text-slate-700">Shipping Address</p>

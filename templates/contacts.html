@@ -109,6 +109,21 @@ const formatDateTime = (dateString) => {
     }
 };
 
+const normalizePhoneDigits = (value = '') => (value || '').replace(/\D/g, '').slice(0, 10);
+
+const formatPhoneNumber = (value = '') => {
+    const digits = normalizePhoneDigits(value);
+    if (!digits) return '';
+    if (digits.length < 4) {
+        const closing = digits.length === 3 ? ')' : '';
+        return `(${digits}${closing}`;
+    }
+    if (digits.length < 7) {
+        return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+    }
+    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)} ${digits.slice(6)}`;
+};
+
 const ContactMentionTextarea = ({ label, placeholder, value, onChange, disabled = false, rows = 3, contacts = [] }) => {
     const { useState, useRef, useEffect, useMemo } = React;
     const textareaRef = useRef(null);
@@ -258,7 +273,7 @@ const ContactMentionTextarea = ({ label, placeholder, value, onChange, disabled 
                 <div
                     ref={overlayRef}
                     aria-hidden="true"
-                    className={`pointer-events-none absolute inset-0 px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words ${disabled ? 'text-slate-500' : 'text-slate-700'}`}
+                    className={`pointer-events-none absolute inset-0 px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words rounded-md ${disabled ? 'bg-slate-100 text-slate-500' : 'bg-white text-slate-700'}`}
                     dangerouslySetInnerHTML={{ __html: buildHighlightedHtml }}
                 ></div>
                 <textarea
@@ -269,7 +284,7 @@ const ContactMentionTextarea = ({ label, placeholder, value, onChange, disabled 
                     onChange={handleChange}
                     onKeyDown={handleKeyDown}
                     disabled={disabled}
-                    className={`relative block w-full resize-y rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 ${disabled ? 'bg-slate-100 text-transparent' : 'bg-white text-transparent'} placeholder-transparent caret-orange-500 selection:bg-orange-200 selection:text-transparent`}
+                    className={`relative block w-full resize-y rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 bg-transparent text-transparent placeholder-transparent caret-orange-500 selection:bg-orange-200 selection:text-transparent`}
                     style={{ WebkitTextFillColor: 'transparent' }}
                 />
             </div>
@@ -367,7 +382,7 @@ const ContactDetail = ({ contact, onSave, isSaving, contactsCatalog, onCancelCre
         contactName: contactData?.contactName || '',
         companyName: contactData?.companyName || '',
         email: contactData?.email || '',
-        phone: contactData?.phone || '',
+        phone: formatPhoneNumber(contactData?.phone || ''),
         shippingAddress: contactData?.shippingAddress || '',
         shippingCity: contactData?.shippingCity || '',
         shippingState: contactData?.shippingState || '',
@@ -399,7 +414,8 @@ const ContactDetail = ({ contact, onSave, isSaving, contactsCatalog, onCancelCre
     }
 
     const handleChange = (field, value) => {
-        setFormState(prev => ({ ...prev, [field]: value }));
+        const nextValue = field === 'phone' ? formatPhoneNumber(value) : value;
+        setFormState(prev => ({ ...prev, [field]: nextValue }));
         setIsDirty(true);
     };
 
@@ -479,7 +495,7 @@ const ContactDetail = ({ contact, onSave, isSaving, contactsCatalog, onCancelCre
                     </div>
                     <div>
                         <p className="font-semibold text-slate-700">Phone</p>
-                        <p>{formState.phone || 'Not provided'}</p>
+                        <p>{formatPhoneNumber(formState.phone) || 'Not provided'}</p>
                     </div>
                     <div>
                         <p className="font-semibold text-slate-700">Shipping Address</p>
@@ -681,7 +697,7 @@ const ContactsApp = () => {
             contactName: formState.contactName?.trim() || '',
             companyName: formState.companyName?.trim() || '',
             email: formState.email?.trim() || '',
-            phone: formState.phone?.trim() || '',
+            phone: normalizePhoneDigits(formState.phone),
             shippingAddress: formState.shippingAddress || '',
             shippingCity: formState.shippingCity || '',
             shippingState: formState.shippingState || '',
