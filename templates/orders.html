@@ -159,12 +159,22 @@ const getLineItemTypeMeta = (type) => {
 
 const LINE_ITEM_TYPE_OPTIONS = ['product', 'service', 'fee', 'shipping', 'discount', 'other'];
 
+const LINE_ITEM_TYPE_WEIGHT_DEFAULTS = {
+    product: 5,
+    service: 0,
+    fee: 0,
+    shipping: 0,
+    discount: 0,
+    package: 80,
+    other: 5,
+};
+
 const sanitizePlaceholderValue = (value) => {
     if (!value) return '';
     const trimmed = value.toString().trim();
     if (!trimmed) return '';
     const lowered = trimmed.toLowerCase();
-    if (lowered === '[no contact found]' || lowered === 'no contact found') {
+    if (['[no contact found]', 'no contact found', '[contact not found]', 'contact not found'].includes(lowered)) {
         return '';
     }
     return trimmed;
@@ -565,12 +575,23 @@ const OrderLogsSection = ({ orderId, canEdit, allContacts = [], onContactsChange
 
 
 const PriceInput = ({ value, onChange, disabled = false, ariaLabel }) => {
-    const handleChange = (e) => { const digits = e.target.value.replace(/\D/g, ''); onChange(Number(digits)); };
-    const formattedValue = (value / 100).toFixed(2);
+    const handleChange = (e) => {
+        const raw = e.target.value.replace(/[^0-9.]/g, '');
+        if (raw === '') {
+            onChange(0);
+            return;
+        }
+        const numeric = Number.parseFloat(raw);
+        if (Number.isNaN(numeric)) {
+            return;
+        }
+        onChange(Math.round(numeric * 100));
+    };
+    const formattedValue = `$${(Number(value || 0) / 100).toFixed(2)}`;
     return (
         <input
             type="text"
-            value={`$${formattedValue}`}
+            value={formattedValue}
             onChange={handleChange}
             disabled={disabled}
             aria-label={ariaLabel}
@@ -585,11 +606,12 @@ const generateInvoicePdf = (order, allItems, action = 'save', brandingOverride =
     const doc = new jsPDF();
     const safeItems = allItems || {};
     const safeOrder = order || {};
+
     const displayId = typeof safeOrder.display_id === 'string' ? safeOrder.display_id : null;
     const orderId = safeOrder.id || '';
     const orderTitle = (safeOrder.title || '').trim();
     const orderNumber = (displayId && displayId.trim()) || orderId;
-    const timeZone = "America/Chicago";
+    const timeZone = 'America/Chicago';
     const dateOptions = { year: 'numeric', month: 'long', day: 'numeric' };
     const formattedDate = safeOrder.date ? formatInTimeZone(safeOrder.date, timeZone, dateOptions) : '—';
 
@@ -598,16 +620,9 @@ const generateInvoicePdf = (order, allItems, action = 'save', brandingOverride =
         ...(brandingOverride || {}),
     };
     const accentRgb = hexToRgb(mergedBranding.invoice_brand_color) || { r: 249, g: 115, b: 22 };
-    const brandLines = [];
+    const logoDataUrl = (mergedBranding.invoice_logo_data_url || '').trim();
     const businessName = (mergedBranding.invoice_business_name || '').trim();
     const businessDetails = (mergedBranding.invoice_business_details || '').trim();
-    if (businessName) {
-        brandLines.push(businessName);
-    }
-    if (businessDetails) {
-        brandLines.push(...businessDetails.split('\n').map(line => line.trim()).filter(Boolean));
-    }
-    const logoDataUrl = (mergedBranding.invoice_logo_data_url || '').trim();
 
     const baseContact = safeOrder.contactInfo || {};
     const contactInfo = {
@@ -623,28 +638,7 @@ const generateInvoicePdf = (order, allItems, action = 'save', brandingOverride =
         shippingCity: '',
         shippingState: '',
         shippingZipCode: '',
-        ...baseContact
-    };
-
-    const renderBlock = (label, lines, x, y, wrapWidth = null) => {
-        doc.setFontSize(12);
-        doc.text(label, x, y);
-        y += 6;
-        doc.setFontSize(10);
-        if (!lines.length) {
-            doc.text('—', x, y);
-            return y + 7;
-        }
-        if (wrapWidth) {
-            const wrapped = doc.splitTextToSize(lines.join('\n'), wrapWidth);
-            doc.text(wrapped, x, y);
-            return y + (wrapped.length * 4) + 2;
-        }
-        lines.forEach((line) => {
-            doc.text(line, x, y);
-            y += 5;
-        });
-        return y + 2;
+        ...baseContact,
     };
 
     const buildAddressLines = (address, city, state, zip) => {
@@ -656,86 +650,131 @@ const generateInvoicePdf = (order, allItems, action = 'save', brandingOverride =
         return lines;
     };
 
+    doc.setFillColor(accentRgb.r, accentRgb.g, accentRgb.b);
+    doc.rect(10, 10, 190, 32, 'F');
+    doc.setTextColor(255, 255, 255);
     doc.setFontSize(22);
-    doc.setTextColor(accentRgb.r, accentRgb.g, accentRgb.b);
-    doc.text("Invoice", 14, 22);
-    doc.setDrawColor(accentRgb.r, accentRgb.g, accentRgb.b);
-    doc.setLineWidth(0.75);
-    doc.line(14, 26, 196, 26);
-    doc.setTextColor(0, 0, 0);
+    doc.text('Invoice', 16, 28);
+    doc.setFontSize(10);
+    doc.text(`Order #: ${orderNumber || '—'}`, 16, 34);
+    doc.text(`Date: ${formattedDate}`, 16, 40);
 
-    let rightHeaderTop = 18;
     if (logoDataUrl) {
         try {
-            doc.addImage(logoDataUrl, 'PNG', 150, 10, 40, 20);
-            rightHeaderTop = 32;
+            doc.addImage(logoDataUrl, 'PNG', 150, 12, 45, 20);
         } catch (error) {
             console.error('Unable to render invoice logo:', error);
         }
     }
-    if (brandLines.length) {
-        const wrappedBrand = doc.splitTextToSize(brandLines.join('\n'), 60);
-        doc.setFontSize(12);
-        doc.text(wrappedBrand, 196, rightHeaderTop, { align: 'right' });
+
+    if (businessName || businessDetails) {
+        doc.setFontSize(11);
+        doc.text(businessName || ' ', 16, 48);
+        const detailLines = businessDetails
+            ? businessDetails.split('\n').map(line => line.trim()).filter(Boolean)
+            : [];
+        doc.setFontSize(9);
+        detailLines.forEach((line, index) => {
+            doc.text(line, 16, 53 + index * 4);
+        });
     }
 
-    doc.setFontSize(12);
-    let headerY = 30;
-    doc.text(`Order #: ${orderNumber || '—'}`, 14, headerY);
     if (orderTitle) {
-        headerY += 6;
-        doc.text(`Title: ${orderTitle}`, 14, headerY);
-    }
-    headerY += 6;
-    doc.text(`Date: ${formattedDate}`, 14, headerY);
-
-    let leftColumnY = headerY + 14;
-    let rightColumnY = headerY + 14;
-    const leftColumnX = 14;
-    const rightColumnX = 105;
-
-    const customerPhone = formatPhoneNumber(contactInfo.phone);
-    const customerLines = [contactInfo.companyName, contactInfo.contactName, contactInfo.email, customerPhone].filter(Boolean);
-    leftColumnY = renderBlock("Bill To", customerLines, leftColumnX, leftColumnY);
-
-    const billingLines = buildAddressLines(contactInfo.billingAddress, contactInfo.billingCity, contactInfo.billingState, contactInfo.billingZipCode);
-    if (billingLines.length) {
-        rightColumnY = renderBlock("Billing Address", billingLines, rightColumnX, rightColumnY, 90);
+        doc.setTextColor(30, 41, 59);
+        doc.setFontSize(12);
+        doc.text(orderTitle, 14, 56);
     }
 
-    const shippingLines = buildAddressLines(contactInfo.shippingAddress, contactInfo.shippingCity, contactInfo.shippingState, contactInfo.shippingZipCode);
-    if (shippingLines.length) {
-        rightColumnY = renderBlock("Shipping Address", shippingLines, rightColumnX, rightColumnY, 90);
-    }
+    doc.setTextColor(51, 65, 85);
+    let contentTop = orderTitle ? 62 : 60;
 
-    let tableStartY = Math.max(leftColumnY, rightColumnY, headerY + 20) + 5;
+    doc.setFontSize(11);
+    doc.text('Bill To', 14, contentTop);
+    doc.setFontSize(10);
+    const billToLines = [
+        contactInfo.companyName || contactInfo.contactName,
+        contactInfo.contactName && contactInfo.companyName ? contactInfo.contactName : null,
+        contactInfo.email,
+        formatPhoneNumber(contactInfo.phone),
+        ...buildAddressLines(
+            contactInfo.billingAddress,
+            contactInfo.billingCity,
+            contactInfo.billingState,
+            contactInfo.billingZipCode,
+        ),
+    ].filter(Boolean);
+    let cursorY = contentTop + 5;
+    billToLines.forEach(line => {
+        doc.text(line, 14, cursorY);
+        cursorY += 5;
+    });
+
+    doc.setFontSize(11);
+    doc.text('Ship To', 110, contentTop);
+    doc.setFontSize(10);
+    const shipToLines = buildAddressLines(
+        contactInfo.shippingAddress,
+        contactInfo.shippingCity,
+        contactInfo.shippingState,
+        contactInfo.shippingZipCode,
+    );
+    if (shipToLines.length === 0) {
+        shipToLines.push('Same as billing');
+    }
+    let shipCursor = contentTop + 5;
+    shipToLines.forEach(line => {
+        doc.text(line, 110, shipCursor);
+        shipCursor += 5;
+    });
+
+    const tableStartY = Math.max(cursorY, shipCursor) + 6;
 
     const safeLineItems = Array.isArray(safeOrder.lineItems) ? safeOrder.lineItems : [];
-    const tableHead = ["Item", "Type", "Style", "Units", "Rate", "Total"];
     const tableBody = safeLineItems.map((item) => {
-        const itemLookup = item?.item ? safeItems[item.item] : null;
-        const itemName = (itemLookup && itemLookup.name) || item?.item || 'Item';
-        const quantity = Number(item?.quantity) || 0;
-        const unitPriceCents = Number(item?.price) || 0;
-        const meta = getLineItemTypeMeta(item?.type || itemLookup?.type);
-        const quantityLabel = meta.quantityLabel ? ` ${meta.quantityLabel}` : '';
-        const priceLabel = meta.priceLabel && meta.priceLabel !== 'Unit Price' ? ` (${meta.priceLabel})` : '';
-        const lineTotalCents = quantity * unitPriceCents;
+        const lookup = item.item ? safeItems[item.item] : {};
+        const description = (item.description || item.style || lookup.name || item.item || 'Line Item').trim();
+        const meta = getLineItemTypeMeta(item.type || lookup.type);
+        const quantity = Number(item.quantity) || 0;
+        const unitPriceCents = Number(item.price) || 0;
+        const pricingMode = item.pricingMode === 'variable' ? 'variable' : 'fixed';
+        const unitPriceDisplay = pricingMode === 'variable' ? 'TBD' : `$${(unitPriceCents / 100).toFixed(2)}`;
+        const lineTotalDisplay = pricingMode === 'variable'
+            ? 'TBD'
+            : `$${((quantity * unitPriceCents) / 100).toFixed(2)}`;
         return [
-            itemName,
+            description,
             meta.label,
-            item?.style || '',
-            `${quantity}${quantityLabel}`,
-            `$${(unitPriceCents / 100).toFixed(2)}${priceLabel}`,
-            `$${(lineTotalCents / 100).toFixed(2)}`
+            quantity.toString(),
+            unitPriceDisplay,
+            lineTotalDisplay,
         ];
     });
 
-    doc.autoTable({ head: [tableHead], body: tableBody, startY: tableStartY });
+    doc.autoTable({
+        head: [['Description', 'Type', 'Qty', 'Price', 'Amount']],
+        body: tableBody,
+        startY: tableStartY,
+        styles: {
+            fontSize: 10,
+            lineColor: [226, 232, 240],
+            textColor: [51, 65, 85],
+        },
+        headStyles: {
+            fillColor: [accentRgb.r, accentRgb.g, accentRgb.b],
+            textColor: 255,
+            fontStyle: 'bold',
+        },
+        alternateRowStyles: {
+            fillColor: [248, 250, 252],
+        },
+    });
 
     const subtotalCents = safeLineItems.reduce((acc, item) => {
-        const quantity = Number(item?.quantity) || 0;
-        const unitPriceCents = Number(item?.price) || 0;
+        if (item.pricingMode === 'variable') {
+            return acc;
+        }
+        const quantity = Number(item.quantity) || 0;
+        const unitPriceCents = Number(item.price) || 0;
         return acc + (quantity * unitPriceCents);
     }, 0);
 
@@ -744,84 +783,93 @@ const generateInvoicePdf = (order, allItems, action = 'save', brandingOverride =
         : parseFloat(safeOrder.estimatedShipping || '0');
     const estimatedShippingCents = Math.round((Number.isFinite(estimatedShippingValue) ? estimatedShippingValue : 0) * 100);
     const totalCents = subtotalCents + estimatedShippingCents;
+    const hasVariablePricing = safeLineItems.some(item => item.pricingMode === 'variable');
 
     const tableResult = doc.lastAutoTable;
-    let summaryY = (tableResult ? tableResult.finalY : tableStartY) + 10;
+    let summaryY = (tableResult ? tableResult.finalY : tableStartY) + 12;
+    const summaryX = 120;
+    const summaryWidth = 80;
 
+    doc.setFillColor(248, 250, 252);
+    doc.setDrawColor(226, 232, 240);
+    doc.rect(summaryX, summaryY - 6, summaryWidth, 30 + (estimatedShippingCents > 0 ? 6 : 0) + 10, 'FD');
+
+    doc.setTextColor(51, 65, 85);
     doc.setFontSize(10);
-    doc.text(`Subtotal: $${(subtotalCents / 100).toFixed(2)}`, 14, summaryY);
-    summaryY += 7;
+    doc.text('Subtotal', summaryX + 4, summaryY);
+    doc.text(`$${(subtotalCents / 100).toFixed(2)}`, summaryX + summaryWidth - 4, summaryY, { align: 'right' });
+    summaryY += 6;
 
     if (estimatedShippingCents > 0) {
-        doc.text(`Est. Shipping Cost: $${(estimatedShippingCents / 100).toFixed(2)}`, 14, summaryY);
-        summaryY += 7;
+        doc.text('Est. Shipping', summaryX + 4, summaryY);
+        doc.text(`$${(estimatedShippingCents / 100).toFixed(2)}`, summaryX + summaryWidth - 4, summaryY, { align: 'right' });
+        summaryY += 6;
     }
 
-    doc.setFontSize(12);
-    doc.text(`Total: $${(totalCents / 100).toFixed(2)}`, 14, summaryY);
+    doc.setFontSize(11);
+    doc.text('Total', summaryX + 4, summaryY + 2);
+    doc.text(`$${(totalCents / 100).toFixed(2)}`, summaryX + summaryWidth - 4, summaryY + 2, { align: 'right' });
     summaryY += 10;
 
-    doc.setFontSize(10);
+    doc.setFontSize(9);
     if (safeOrder.estimatedShippingDate) {
-        doc.text(`Est. Ship Date: ${formatInTimeZone(safeOrder.estimatedShippingDate, timeZone, dateOptions)}`, 14, summaryY);
-        summaryY += 5;
+        doc.text(`Estimated Ship Date: ${formatInTimeZone(safeOrder.estimatedShippingDate, timeZone, dateOptions)}`, 14, summaryY);
+        summaryY += 4;
     }
-
     if (safeOrder.priorityLevel) {
         doc.text(`Priority: ${safeOrder.priorityLevel}`, 14, summaryY);
-        summaryY += 5;
+        summaryY += 4;
     }
-
     if (safeOrder.fulfillmentChannel) {
         doc.text(`Fulfillment: ${safeOrder.fulfillmentChannel}`, 14, summaryY);
-        summaryY += 5;
+        summaryY += 4;
     }
-
     if (safeOrder.customerReference) {
         doc.text(`Customer Reference: ${safeOrder.customerReference}`, 14, summaryY);
-        summaryY += 5;
+        summaryY += 4;
+    }
+
+    if (hasVariablePricing) {
+        doc.setTextColor(234, 88, 12);
+        doc.text('Note: Items marked TBD will be finalized prior to billing.', 14, summaryY + 6);
+        doc.setTextColor(51, 65, 85);
+        summaryY += 10;
+    } else {
+        summaryY += 6;
     }
 
     const trimmedNotes = (safeOrder.notes || '').trim();
     if (trimmedNotes) {
-        summaryY += 5;
-        doc.text("Notes:", 14, summaryY);
-        summaryY += 5;
+        doc.setFontSize(11);
+        doc.text('Notes', 14, summaryY + 6);
+        doc.setFontSize(9);
         const wrappedNotes = doc.splitTextToSize(trimmedNotes, 180);
-        doc.text(wrappedNotes, 14, summaryY);
-        summaryY += wrappedNotes.length * 4;
+        doc.text(wrappedNotes, 14, summaryY + 12);
+        summaryY += 12 + wrappedNotes.length * 4;
     }
 
-    summaryY += 15;
-    if (summaryY > 260) {
-        doc.addPage();
-        summaryY = 20;
-    }
-
-    doc.setFontSize(10);
-    doc.text("Authorized Signature:", 14, summaryY);
-
+    summaryY += 12;
+    doc.setFontSize(9);
+    doc.text('Authorized Signature:', 14, summaryY);
     const signatureDataUrl = safeOrder.signatureDataUrl;
     if (signatureDataUrl) {
         try {
             if (signatureDataUrl.startsWith('data:image')) {
                 const base64Data = signatureDataUrl.substring(signatureDataUrl.indexOf(',') + 1);
                 if (base64Data.length > 150) {
-                    const signatureImgWidth = 70;
-                    const signatureImgHeight = 20;
-                    doc.addImage(signatureDataUrl, 'PNG', 50, summaryY - (signatureImgHeight / 2) + 2, signatureImgWidth, signatureImgHeight);
+                    doc.addImage(signatureDataUrl, 'PNG', 50, summaryY - 6, 70, 20);
                 } else {
-                    doc.line(50, summaryY, 120, summaryY);
+                    doc.line(50, summaryY + 1, 120, summaryY + 1);
                 }
             } else {
-                doc.line(50, summaryY, 120, summaryY);
+                doc.line(50, summaryY + 1, 120, summaryY + 1);
             }
         } catch (error) {
             console.error('Error rendering signature image for PDF:', error);
-            doc.line(50, summaryY, 120, summaryY);
+            doc.line(50, summaryY + 1, 120, summaryY + 1);
         }
     } else {
-        doc.line(50, summaryY, 120, summaryY);
+        doc.line(50, summaryY + 1, 120, summaryY + 1);
     }
 
     if (action === 'save') {
@@ -1759,10 +1807,19 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
             shippingState: incomingOrder.shippingState || '',
             shippingZipCode: incomingOrder.shippingZipCode || '',
             lineItems: Array.isArray(incomingOrder.lineItems)
-                ? incomingOrder.lineItems.map(item => ({
-                    ...item,
-                    type: normalizeLineItemType(item?.type || item?.item_type),
-                }))
+                ? incomingOrder.lineItems.map(item => {
+                    const normalizedType = normalizeLineItemType(item?.type || item?.item_type);
+                    const rawPrice = Number(item?.price) || 0;
+                    const pricingMode = item?.pricingMode === 'variable' ? 'variable' : 'fixed';
+                    const description = (item?.description || item?.style || '').toString().trim();
+                    return {
+                        ...item,
+                        type: normalizedType,
+                        description,
+                        pricingMode,
+                        lastFixedPrice: pricingMode === 'fixed' ? rawPrice : (Number(item?.lastFixedPrice) || rawPrice),
+                    };
+                })
                 : [],
             notes: incomingOrder.notes || '',
             statusHistory: incomingOrder.statusHistory || defaultOrderState.statusHistory,
@@ -1994,13 +2051,16 @@ const unpackPackage = (id, pkgCode) => {
   const newItems = pkg.contents.map(({ itemCode, quantity }) => {
     const info = itemData[itemCode] || {};
     const selectableInfo = allSelectableItems[itemCode] || {};
+    const priceCents = Number(info.price ?? selectableInfo.price ?? 0) || 0;
     return {
       id:       nextId++,
       item:     itemCode,
-      style:    (info.styles && info.styles[0]) || '',
+      description: selectableInfo.name || info.name || itemCode,
       type:     normalizeLineItemType(selectableInfo.type || info.type),
       quantity: quantity,
-      price:    (info.price || 0),
+      price:    priceCents,
+      lastFixedPrice: priceCents,
+      pricingMode: 'fixed',
       packageCode: pkgCode,
     };
   });
@@ -2015,41 +2075,98 @@ const unpackPackage = (id, pkgCode) => {
 };
 
     const handleLineItemChange = (id, field, value) => {
-        if (field === 'item' && allSelectableItems[value]?.type === 'package') {
+        if ((field === 'item' || field === 'catalogItem') && allSelectableItems[value]?.type === 'package') {
             unpackPackage(id, value);
-        } else {
-             setFormData(prev => ({...prev, lineItems: prev.lineItems.map(item => {
-                 if (item.id !== id) return item;
-                 const updatedItem = {...item, [field]: value};
-                 if (field === 'item' && itemData[value]) {
-                     updatedItem.style = itemData[value].styles?.[0] || '';
-                     updatedItem.price = (itemData[value].price || 0);
-                     updatedItem.type = normalizeLineItemType(allSelectableItems[value]?.type || itemData[value].type);
-                 }
-                 if (field === 'type') {
-                     updatedItem.type = normalizeLineItemType(value);
-                 }
-                 return updatedItem;
-             })}));
+            return;
         }
+
+        setFormData(prev => ({
+            ...prev,
+            lineItems: prev.lineItems.map(item => {
+                if (item.id !== id) return item;
+                const updatedItem = { ...item };
+
+                switch (field) {
+                    case 'item':
+                    case 'catalogItem': {
+                        const nextValue = value || '';
+                        if (!nextValue) {
+                            updatedItem.item = '';
+                            updatedItem.packageCode = null;
+                            return updatedItem;
+                        }
+                        const selectable = allSelectableItems[nextValue] || itemData[nextValue] || {};
+                        updatedItem.item = nextValue;
+                        updatedItem.packageCode = null;
+                        if (selectable.name) {
+                            updatedItem.description = selectable.name;
+                        }
+                        updatedItem.type = normalizeLineItemType(selectable.type || updatedItem.type);
+                        const priceCents = Number(selectable.price ?? selectable.price_cents ?? 0) || 0;
+                        updatedItem.price = priceCents;
+                        updatedItem.lastFixedPrice = priceCents || updatedItem.lastFixedPrice || 0;
+                        updatedItem.pricingMode = 'fixed';
+                        return updatedItem;
+                    }
+                    case 'description': {
+                        updatedItem.description = value;
+                        return updatedItem;
+                    }
+                    case 'type': {
+                        updatedItem.type = normalizeLineItemType(value);
+                        return updatedItem;
+                    }
+                    case 'quantity': {
+                        const numericQty = Number(value);
+                        updatedItem.quantity = Number.isFinite(numericQty) && numericQty >= 0 ? numericQty : 0;
+                        return updatedItem;
+                    }
+                    case 'price': {
+                        const numericPrice = Number(value) || 0;
+                        updatedItem.price = numericPrice;
+                        updatedItem.lastFixedPrice = numericPrice || updatedItem.lastFixedPrice || 0;
+                        return updatedItem;
+                    }
+                    case 'pricingMode': {
+                        if (value === 'variable') {
+                            updatedItem.pricingMode = 'variable';
+                            updatedItem.lastFixedPrice = Number(updatedItem.price) || updatedItem.lastFixedPrice || 0;
+                        } else {
+                            updatedItem.pricingMode = 'fixed';
+                            const restored = Number(updatedItem.lastFixedPrice) || Number(updatedItem.price) || 0;
+                            updatedItem.price = restored;
+                        }
+                        return updatedItem;
+                    }
+                    default: {
+                        updatedItem[field] = value;
+                        return updatedItem;
+                    }
+                }
+            }),
+        }));
     };
-    
+
     const handleScanAddItem = (event) => {
         if (event) event.preventDefault();
 
         const itemCode = scanInput.trim().toUpperCase();
-        if (allSelectableItems[itemCode]) {
-            if (allSelectableItems[itemCode].type === 'package') {
+        const selectable = allSelectableItems[itemCode];
+        if (selectable) {
+            if (selectable.type === 'package') {
                 unpackPackage(nextId++, itemCode);
             } else {
+                const priceCents = Number(itemData[itemCode]?.price ?? selectable.price ?? 0) || 0;
                 setFormData(prev => ({ ...prev, lineItems: [...prev.lineItems, {
                     id: nextId++,
                     item: itemCode,
-                    style: itemData[itemCode]?.styles[0] || '',
-                    type: normalizeLineItemType(allSelectableItems[itemCode]?.type || itemData[itemCode]?.type),
+                    description: selectable.name || itemCode,
+                    type: normalizeLineItemType(selectable.type || itemData[itemCode]?.type),
                     quantity: 1,
-                    price: (itemData[itemCode]?.price || 0),
-                    packageCode: null
+                    price: priceCents,
+                    lastFixedPrice: priceCents,
+                    pricingMode: 'fixed',
+                    packageCode: null,
                 }] }));
             }
             setScanInput('');
@@ -2060,20 +2177,38 @@ const unpackPackage = (id, pkgCode) => {
             scanInputRef.current.focus();
         }
     };
-    
-    const addEmptyLineItem = () => { setFormData(prev => ({ ...prev, lineItems: [...prev.lineItems, { id: nextId++, item: '-- Select Item --', style: '', type: 'product', quantity: 1, price: 0, packageCode: null }] })); };
+
+    const addEmptyLineItem = () => { setFormData(prev => ({ ...prev, lineItems: [...prev.lineItems, { id: nextId++, item: '', description: '', type: 'product', quantity: 1, price: 0, lastFixedPrice: 0, pricingMode: 'fixed', packageCode: null }] })); };
     const removeLineItem = (id) => { setFormData(prev => ({ ...prev, lineItems: prev.lineItems.filter(item => item.id !== id) })); };
 
+    const handleAddLineItemClick = () => {
+        if (!canEdit) {
+            setIsEditing(true);
+            setTimeout(() => addEmptyLineItem(), 0);
+        } else {
+            addEmptyLineItem();
+        }
+    };
+
     const orderTotals = useMemo(() => {
-        const subtotal = formData.lineItems.reduce((acc, item) => acc + (item.quantity * item.price), 0);
+        const subtotal = formData.lineItems.reduce((acc, item) => {
+            if (item.pricingMode === 'variable') {
+                return acc;
+            }
+            const quantity = Number(item.quantity) || 0;
+            const price = Number(item.price) || 0;
+            return acc + (quantity * price);
+        }, 0);
         const estimatedShipping = parseFloat(formData.estimatedShipping) || 0; // dollars
         const estimatedShippingInCents = Math.round(estimatedShipping * 100);
         const liveCalculatedTotal = subtotal + estimatedShippingInCents;
+        const hasVariablePricing = formData.lineItems.some(item => item.pricingMode === 'variable');
 
         return {
             subtotal,
             estimatedShipping,
-            total: liveCalculatedTotal
+            total: liveCalculatedTotal,
+            hasVariablePricing,
         };
     }, [formData.lineItems, formData.estimatedShipping]);
 
@@ -2104,11 +2239,27 @@ const unpackPackage = (id, pkgCode) => {
         const isNewOrder = !formData.id;
         
         // Filter out unselected line items before saving
-        const filteredLineItems = formData.lineItems.filter(item => item.item !== '-- Select Item --');
-        const normalizedLineItems = filteredLineItems.map(item => ({
-            ...item,
-            type: normalizeLineItemType(item.type || allSelectableItems[item.item]?.type),
-        }));
+        const filteredLineItems = formData.lineItems
+            .map(item => ({
+                ...item,
+                description: (item.description || '').trim(),
+            }))
+            .filter(item => item.description || (item.item && item.item.trim()));
+        const normalizedLineItems = filteredLineItems.map(item => {
+            const normalizedType = normalizeLineItemType(item.type || allSelectableItems[item.item]?.type);
+            const pricingMode = item.pricingMode === 'variable' ? 'variable' : 'fixed';
+            const resolvedPrice = pricingMode === 'variable' ? 0 : (Number(item.price) || 0);
+            return {
+                ...item,
+                item: item.item || '',
+                type: normalizedType,
+                pricingMode,
+                price: resolvedPrice,
+                lastFixedPrice: item.lastFixedPrice || (pricingMode === 'fixed' ? resolvedPrice : 0),
+                style: item.description,
+                description: item.description,
+            };
+        });
 
         // Recalculate totals based on filtered items
         const subtotal = normalizedLineItems.reduce((acc, item) => acc + (item.quantity * item.price), 0);
@@ -2307,16 +2458,6 @@ const unpackPackage = (id, pkgCode) => {
                                     >
                                         + New Contact
                                     </button>
-                                    {primaryContactId && (
-                                        <a
-                                            href={`/contacts?contact_id=${primaryContactId}`}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="px-4 py-2 rounded-md text-sm font-semibold text-slate-700 border border-slate-300 hover:bg-slate-100"
-                                        >
-                                            Open in Contacts
-                                        </a>
-                                    )}
                                 </div>
                             </div>
                             <ContactSummaryCard contact={primaryContactSummary} />
@@ -2462,7 +2603,204 @@ const unpackPackage = (id, pkgCode) => {
 
                     <OrderLogsSection orderId={formData.id} canEdit={canEdit} allContacts={allContacts} onContactsChanged={refreshMentionedContacts} />
 
-                    <div className="bg-white rounded-lg shadow-sm border border-slate-200"><div className="p-6 border-b"><h2 className="text-xl font-semibold text-slate-700 mb-4">Line Items</h2>{canEdit && (<div className="flex gap-2"><input ref={scanInputRef} type="text" value={scanInput} onChange={e => setScanInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { handleScanAddItem(e); } }} placeholder="Scan or Enter Item Code" className="flex-grow block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm" /><button onClick={handleScanAddItem} className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors">Add</button></div>)}</div><div className="overflow-x-auto"><table className="w-full text-sm text-left text-slate-500"><thead className="text-xs text-slate-700 uppercase bg-slate-100"><tr><th scope="col" className="px-4 py-3">Item</th><th scope="col" className="px-4 py-3">Type</th><th scope="col" className="px-4 py-3">Style</th><th scope="col" className="px-4 py-3 text-center">Units</th><th scope="col" className="px-4 py-3 text-right">Rate</th><th scope="col" className="px-4 py-3 text-right">Total</th>{canEdit && <th scope="col" className="px-2 py-3"></th>}</tr></thead><tbody>{formData.lineItems.map(item => { const selectable = allSelectableItems[item.item] || {}; const normalizedType = normalizeLineItemType(item.type || selectable.type); const meta = getLineItemTypeMeta(normalizedType); const styleOptions = (selectable.styles || []).filter(Boolean); const hasStyles = styleOptions.length > 0; const isPackage = normalizedType === 'package'; const displayName = selectable.name || item.item || 'Line Item'; return (<tr key={item.id} className="border-b align-middle"><td className="px-4 py-2"><Select value={item.item} onChange={e => handleLineItemChange(item.id, 'item', e.target.value)} disabled={!canEdit}><option value="-- Select Item --">-- Select Item --</option>{Object.entries(allSelectableItems).map(([id, details]) => (<option key={id} value={id}>{details.name}</option>))}</Select></td><td className="px-4 py-2"><Select value={normalizedType} onChange={e => handleLineItemChange(item.id, 'type', e.target.value)} disabled={!canEdit || isPackage}>{LINE_ITEM_TYPE_OPTIONS.map(option => (<option key={option} value={option}>{LINE_ITEM_TYPES[option].label}</option>))}{isPackage && <option value="package">{LINE_ITEM_TYPES.package.label}</option>}</Select></td><td className="px-4 py-2">{hasStyles ? (<Select value={item.style} onChange={e => handleLineItemChange(item.id, 'style', e.target.value)} disabled={!canEdit}>{styleOptions.map(name => (<option key={name} value={name}>{name}</option>))}</Select>) : (<span className="text-sm text-slate-400">{item.style || 'No variations'}</span>)}</td><td className="px-4 py-2 text-center"><div className="flex flex-col items-center gap-1"><input type="number" min="0" value={item.quantity} onChange={e => handleLineItemChange(item.id, 'quantity', Number(e.target.value))} className="w-16 sm:w-20 text-center bg-white border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm p-2" disabled={!canEdit} /><span className="text-xs text-slate-400">{meta.quantityLabel}</span></div></td><td className="px-4 py-2 text-right"><div className="flex flex-col items-end gap-1"><PriceInput value={item.price} onChange={newPrice => handleLineItemChange(item.id, 'price', newPrice)} disabled={!canEdit} ariaLabel={`${meta.priceLabel} for ${displayName}`} /><span className="text-xs text-slate-400">{meta.priceLabel}</span></div></td><td className="px-4 py-2 text-right font-medium text-slate-800">${((item.quantity * item.price) / 100).toFixed(2)}</td>{canEdit && <td className="px-2 py-2 text-center"><button onClick={() => removeLineItem(item.id)} className="text-slate-400 hover:text-red-600 p-1 rounded-full hover:bg-red-100 transition-colors"><TrashIcon /></button></td>}</tr>); })}</tbody></table></div>{canEdit && <div className="p-6 border-t"><button onClick={addEmptyLineItem} className="w-full text-center px-4 py-2 bg-orange-100 text-orange-700 font-semibold rounded-md hover:bg-orange-200 transition-colors">+ Add Line Item</button></div>}</div>
+                    <div className="bg-white rounded-lg shadow-sm border border-slate-200">
+                        <div className="flex flex-col gap-4 border-b border-slate-200 p-6 md:flex-row md:items-center md:justify-between">
+                            <div>
+                                <h2 className="text-xl font-semibold text-slate-700">Line Items</h2>
+                                <p className="mt-1 text-sm text-slate-500">Build itemized work, services, and adjustments for this order.</p>
+                            </div>
+                            <div className="flex flex-wrap items-center justify-end gap-2">
+                                {!canEdit && formData.id && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setIsEditing(true)}
+                                        className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                                    >
+                                        Enable editing
+                                    </button>
+                                )}
+                                <button
+                                    type="button"
+                                    onClick={handleAddLineItemClick}
+                                    className={`rounded-md px-4 py-2 text-sm font-semibold text-white ${canEdit ? 'bg-orange-600 hover:bg-orange-700' : 'bg-slate-600 hover:bg-slate-700'}`}
+                                >
+                                    + Add line item
+                                </button>
+                            </div>
+                        </div>
+                        {canEdit && (
+                            <div className="border-b border-slate-200 bg-slate-50 px-6 py-4">
+                                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                                    <input
+                                        ref={scanInputRef}
+                                        type="text"
+                                        value={scanInput}
+                                        onChange={e => setScanInput(e.target.value)}
+                                        onKeyDown={e => { if (e.key === 'Enter') { handleScanAddItem(e); } }}
+                                        placeholder="Scan or enter a catalog code"
+                                        className="flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={handleScanAddItem}
+                                        className="rounded-md bg-orange-600 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-700"
+                                    >
+                                        Add from code
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left text-sm text-slate-600">
+                                <thead className="bg-slate-100 text-xs uppercase text-slate-500">
+                                    <tr>
+                                        <th scope="col" className="px-4 py-3">Details</th>
+                                        <th scope="col" className="px-4 py-3">Type</th>
+                                        <th scope="col" className="px-4 py-3 text-center">Units</th>
+                                        <th scope="col" className="px-4 py-3 text-right">Pricing</th>
+                                        <th scope="col" className="px-4 py-3 text-right">Line Total</th>
+                                        {canEdit && <th scope="col" className="px-2 py-3"></th>}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {formData.lineItems.length === 0 ? (
+                                        <tr>
+                                            <td colSpan={canEdit ? 6 : 5} className="px-4 py-6 text-center text-slate-400">
+                                                No line items yet.
+                                            </td>
+                                        </tr>
+                                    ) : (
+                                        formData.lineItems.map(item => {
+                                            const linkedCatalog = item.item ? allSelectableItems[item.item] : null;
+                                            const meta = getLineItemTypeMeta(item.type);
+                                            const quantity = Number(item.quantity) || 0;
+                                            const unitPrice = Number(item.price) || 0;
+                                            const lineTotalCents = item.pricingMode === 'variable' ? null : quantity * unitPrice;
+                                            return (
+                                                <tr key={item.id || `${item.item}-${item.description}-${quantity}`} className="border-b last:border-b-0">
+                                                    <td className="px-4 py-3 align-top">
+                                                        {canEdit ? (
+                                                            <div className="flex flex-col gap-2">
+                                                                <Select
+                                                                    value={item.item || ''}
+                                                                    onChange={e => handleLineItemChange(item.id, 'catalogItem', e.target.value)}
+                                                                    disabled={!canEdit}
+                                                                >
+                                                                    <option value="">No catalog link</option>
+                                                                    {Object.entries(allSelectableItems).map(([id, details]) => (
+                                                                        <option key={id} value={id}>{details.name}</option>
+                                                                    ))}
+                                                                </Select>
+                                                                <input
+                                                                    type="text"
+                                                                    value={item.description}
+                                                                    onChange={e => handleLineItemChange(item.id, 'description', e.target.value)}
+                                                                    placeholder="Describe the line item"
+                                                                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500"
+                                                                />
+                                                                {item.item && linkedCatalog && (
+                                                                    <p className="text-xs text-slate-400">Catalog code: {item.item}</p>
+                                                                )}
+                                                            </div>
+                                                        ) : (
+                                                            <div className="space-y-1">
+                                                                <p className="font-medium text-slate-800">
+                                                                    {item.description || linkedCatalog?.name || item.item || 'Line Item'}
+                                                                </p>
+                                                                {item.item && linkedCatalog && (
+                                                                    <p className="text-xs text-slate-400">Catalog code: {item.item}</p>
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                    </td>
+                                                    <td className="px-4 py-3 align-top">
+                                                        {canEdit ? (
+                                                            <Select
+                                                                value={item.type}
+                                                                onChange={e => handleLineItemChange(item.id, 'type', e.target.value)}
+                                                                disabled={!canEdit}
+                                                            >
+                                                                {[...LINE_ITEM_TYPE_OPTIONS, 'package'].map(option => (
+                                                                    <option key={option} value={option}>{LINE_ITEM_TYPES[option]?.label || option}</option>
+                                                                ))}
+                                                            </Select>
+                                                        ) : (
+                                                            <span className="text-slate-700">{meta.label}</span>
+                                                        )}
+                                                    </td>
+                                                    <td className="px-4 py-3 text-center align-top">
+                                                        {canEdit ? (
+                                                            <div className="flex flex-col items-center gap-1">
+                                                                <input
+                                                                    type="number"
+                                                                    min="0"
+                                                                    value={item.quantity}
+                                                                    onChange={e => handleLineItemChange(item.id, 'quantity', Number(e.target.value))}
+                                                                    className="w-20 rounded-md border border-slate-300 px-2 py-2 text-center shadow-sm focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500"
+                                                                />
+                                                                <span className="text-xs text-slate-400">{meta.quantityLabel}</span>
+                                                            </div>
+                                                        ) : (
+                                                            <div className="flex flex-col items-center gap-1">
+                                                                <span className="text-slate-700">{quantity}</span>
+                                                                <span className="text-xs text-slate-400">{meta.quantityLabel}</span>
+                                                            </div>
+                                                        )}
+                                                    </td>
+                                                    <td className="px-4 py-3 text-right align-top">
+                                                        <div className="flex flex-col items-end gap-2">
+                                                            {item.pricingMode === 'variable' ? (
+                                                                <span className="text-sm font-medium text-slate-500">TBD</span>
+                                                            ) : (
+                                                                <PriceInput
+                                                                    value={item.price}
+                                                                    onChange={newPrice => handleLineItemChange(item.id, 'price', newPrice)}
+                                                                    disabled={!canEdit}
+                                                                    ariaLabel={`${meta.priceLabel} for ${item.description || linkedCatalog?.name || 'line item'}`}
+                                                                />
+                                                            )}
+                                                            {canEdit && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleLineItemChange(item.id, 'pricingMode', item.pricingMode === 'variable' ? 'fixed' : 'variable')}
+                                                                    className="text-xs font-semibold text-orange-600 hover:text-orange-700"
+                                                                >
+                                                                    {item.pricingMode === 'variable' ? 'Set fixed price' : 'Mark as variable'}
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-4 py-3 text-right align-top">
+                                                        {lineTotalCents === null ? (
+                                                            <span className="text-sm font-medium text-slate-500">TBD</span>
+                                                        ) : (
+                                                            <span className="text-sm font-medium text-slate-800">${(lineTotalCents / 100).toFixed(2)}</span>
+                                                        )}
+                                                    </td>
+                                                    {canEdit && (
+                                                        <td className="px-2 py-3 text-center align-top">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => removeLineItem(item.id)}
+                                                                className="rounded-full p-1 text-slate-400 transition-colors hover:bg-red-100 hover:text-red-600"
+                                                            >
+                                                                <TrashIcon />
+                                                            </button>
+                                                        </td>
+                                                    )}
+                                                </tr>
+                                            );
+                                        })
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                        {orderTotals.hasVariablePricing && (
+                            <div className="border-t border-slate-200 bg-orange-50 px-6 py-4 text-sm text-orange-700">
+                                Variable pricing items will display as TBD until a fixed rate is provided.
+                            </div>
+                        )}
+                    </div>
                 </div>
                 <div className="lg:col-span-1 space-y-6">
                     <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200"><h2 className="text-xl font-semibold text-slate-700 border-b pb-3 mb-4">Order Metadata</h2><div className="space-y-4"><Input label="Estimated Shipping Date" type="date" value={formData.estimatedShippingDate} onChange={e => setFormData(p=>({...p, estimatedShippingDate: e.target.value}))} disabled={!canEdit} /><div><label className="block text-sm font-medium text-slate-600 mb-1">Priority Level</label><Select value={formData.priorityLevel} onChange={e => setFormData(p=>({...p, priorityLevel: e.target.value}))} disabled={!canEdit}><option value="">No priority set</option><option value="High">High</option><option value="Standard">Standard</option><option value="Low">Low</option></Select></div><div><label className="block text-sm font-medium text-slate-600 mb-1">Fulfillment Channel</label><Select value={formData.fulfillmentChannel} onChange={e => setFormData(p=>({...p, fulfillmentChannel: e.target.value}))} disabled={!canEdit}><option value="">Not specified</option><option value="In-House">In-House</option><option value="Dropship">Dropship</option><option value="Third-Party">Third-Party</option><option value="Pickup">Customer Pickup</option></Select></div><Input label="Customer Reference" placeholder="Optional PO, campaign, or reference" value={formData.customerReference} onChange={e => setFormData(p=>({...p, customerReference: e.target.value}))} disabled={!canEdit} /></div></div>
@@ -2490,14 +2828,23 @@ const unpackPackage = (id, pkgCode) => {
                     <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
                         <h2 className="text-xl font-semibold text-slate-700 mb-4">Order Summary</h2>
                         <div className="space-y-3">
-                            <div className="flex justify-between items-center text-slate-600"><span>Subtotal</span><span className="font-medium">${(orderTotals.subtotal / 100).toFixed(2)}</span></div>
+                            <div className="flex justify-between items-center text-slate-600">
+                                <span>Subtotal</span>
+                                <span className="font-medium">{orderTotals.hasVariablePricing ? 'TBD' : `$${(orderTotals.subtotal / 100).toFixed(2)}`}</span>
+                            </div>
                             {orderTotals.estimatedShipping > 0 && (
                                 <div className="flex justify-between items-center text-slate-600">
                                     <span>Est. Shipping</span>
                                     <span className="font-medium">${orderTotals.estimatedShipping.toFixed(2)}</span>
                                 </div>
                             )}
-                            <div className="flex justify-between items-center font-bold text-xl text-slate-800"><span>Total</span><span>${(orderTotals.total / 100).toFixed(2)}</span></div>
+                            <div className="flex justify-between items-center font-bold text-xl text-slate-800">
+                                <span>Total</span>
+                                <span>{orderTotals.hasVariablePricing ? 'TBD' : `$${(orderTotals.total / 100).toFixed(2)}`}</span>
+                            </div>
+                            {orderTotals.hasVariablePricing && (
+                                <p className="text-sm text-orange-600">Variable pricing items will finalize before billing.</p>
+                            )}
                         </div>
                     </div>
                     <div className="space-y-3">
@@ -2780,12 +3127,83 @@ const App = () => {
         window.location.href = `/order/${order.id}`;
     };
     
+    const prepareOrderForSave = async (incomingOrder) => {
+        const draftOrder = { ...incomingOrder, lineItems: (incomingOrder.lineItems || []).map(item => ({ ...item })) };
+        const newCatalogEntries = {};
+
+        for (const lineItem of draftOrder.lineItems) {
+            const existingCode = (lineItem.item || '').trim();
+            if (existingCode && allSelectableItems[existingCode]) {
+                continue;
+            }
+
+            const description = (lineItem.description || '').trim() || 'Line Item';
+            lineItem.description = description;
+            const normalizedType = normalizeLineItemType(lineItem.type);
+            const baseCode = description
+                .toUpperCase()
+                .replace(/[^A-Z0-9]+/g, '-')
+                .replace(/^-+|-+$/g, '')
+                .slice(0, 24) || `ITEM-${Date.now()}`;
+            let candidate = baseCode || `ITEM-${Date.now()}`;
+            let suffix = 1;
+            while (candidate && (allSelectableItems[candidate] || newCatalogEntries[candidate])) {
+                candidate = `${baseCode}-${suffix++}`;
+            }
+
+            const payload = {
+                item_code: candidate,
+                name: description,
+                type: normalizedType,
+                price: lineItem.pricingMode === 'variable' ? 0 : (Number(lineItem.price) || 0) / 100,
+                weight_oz: LINE_ITEM_TYPE_WEIGHT_DEFAULTS[normalizedType] ?? 0,
+            };
+
+            try {
+                const response = await fetch('/api/items', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                if (response.ok) {
+                    const result = await response.json();
+                    const createdItem = result.item || {};
+                    const catalogCode = createdItem.item_code || candidate;
+                    const priceCents = Number(createdItem.price_cents ?? createdItem.price ?? 0);
+                    newCatalogEntries[catalogCode] = {
+                        ...createdItem,
+                        id: catalogCode,
+                        name: createdItem.name || description,
+                        type: createdItem.type || normalizedType,
+                        price: priceCents,
+                        styles: createdItem.styles || [],
+                    };
+                    lineItem.item = catalogCode;
+                } else {
+                    const errorMessage = await response.text();
+                    console.error('Failed to create catalog item for line item:', errorMessage);
+                    throw new Error(errorMessage || 'Unable to create catalog item.');
+                }
+            } catch (error) {
+                console.error('Error creating catalog item for line item:', error);
+                throw error;
+            }
+        }
+
+        if (Object.keys(newCatalogEntries).length > 0) {
+            setAllSelectableItems(prev => ({ ...prev, ...newCatalogEntries }));
+        }
+
+        return draftOrder;
+    };
+
     const saveOrder = async (orderToSave) => {
         try {
+            const preparedOrder = await prepareOrderForSave(orderToSave);
             const response = await fetch('/api/orders', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(orderToSave)
+                body: JSON.stringify(preparedOrder)
             });
             const result = await response.json();
             if (result.status === 'success' && result.order) {

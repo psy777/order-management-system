@@ -224,20 +224,32 @@ def serialize_order(cursor, order_row, user_timezone, include_logs=False):
     order_id = order_dict['order_id']
 
     cursor.execute(
-        "SELECT item_code, package_code, quantity, price_per_unit_cents, style_chosen, item_type FROM order_line_items WHERE order_id = ?",
+        """
+        SELECT item_code, package_code, quantity, price_per_unit_cents,
+               style_chosen, item_type, description, pricing_mode
+        FROM order_line_items
+        WHERE order_id = ?
+        """,
         (order_id,)
     )
-    order_dict['lineItems'] = [
-        {
+    fetched_line_items = cursor.fetchall()
+    order_dict['lineItems'] = []
+    for li in fetched_line_items:
+        li_keys = set(li.keys()) if hasattr(li, "keys") else set()
+        description_value = li['description'] if 'description' in li_keys else None
+        if not description_value:
+            description_value = li['style_chosen']
+        pricing_mode_value = li['pricing_mode'] if 'pricing_mode' in li_keys and li['pricing_mode'] else 'fixed'
+        order_dict['lineItems'].append({
             'item': li['item_code'],
             'packageCode': li['package_code'],
             'price': li['price_per_unit_cents'],
             'quantity': li['quantity'],
             'style': li['style_chosen'],
+            'description': description_value or '',
+            'pricingMode': pricing_mode_value,
             'type': li['item_type']
-        }
-        for li in cursor.fetchall()
-    ]
+        })
 
     cursor.execute(
         "SELECT status, status_date FROM order_status_history WHERE order_id = ? ORDER BY status_date ASC",
@@ -770,7 +782,7 @@ def search_orders():
               'customer': {'join': "LEFT JOIN contacts v ON o.contact_id = v.id", 'condition': "(v.company_name LIKE ? OR v.contact_name LIKE ?)", 'params': [f'%{value}%', f'%{value}%']},
               'status': {'condition': "o.status LIKE ?", 'params': [f'%{value}%']},
               'title': {'condition': "o.title LIKE ?", 'params': [f'%{value}%']},
-              'item': {'join': "LEFT JOIN order_line_items oli ON o.order_id = oli.order_id LEFT JOIN items i ON oli.item_code = i.item_code", 'condition': "(i.name LIKE ? OR oli.style_chosen LIKE ?)", 'params': [f'%{value}%', f'%{value}%']},
+              'item': {'join': "LEFT JOIN order_line_items oli ON o.order_id = oli.order_id LEFT JOIN items i ON oli.item_code = i.item_code", 'condition': "(i.name LIKE ? OR COALESCE(oli.description, oli.style_chosen) LIKE ?)", 'params': [f'%{value}%', f'%{value}%']},
               'note': {'condition': "o.notes LIKE ?", 'params': [f'%{value}%']},
               'log': {'join': "LEFT JOIN order_logs ol ON o.order_id = ol.order_id", 'condition': "(ol.details LIKE ? OR ol.note LIKE ?)", 'params': [f'%{value}%', f'%{value}%']},
           }
@@ -798,7 +810,7 @@ def search_orders():
                 term_param = f'%{term}%'
                 text_conditions = [
                     "o.order_id LIKE ?", "o.display_id LIKE ?", "o.title LIKE ?", "o.status LIKE ?", "o.notes LIKE ?",
-                    "v.company_name LIKE ?", "v.contact_name LIKE ?", "i.name LIKE ?", "oli.style_chosen LIKE ?",
+                    "v.company_name LIKE ?", "v.contact_name LIKE ?", "i.name LIKE ?", "COALESCE(oli.description, oli.style_chosen) LIKE ?",
                     "ol.details LIKE ?", "ol.note LIKE ?"
                 ]
                 conditions.append(f"({' OR '.join(text_conditions)})")
@@ -1026,11 +1038,26 @@ def save_order():
         processed_order_id = current_order_id_for_db_ops 
         app.logger.info(f"DB-OP: processed_order_id is now set to: '{processed_order_id}' before line item processing.")
 
-        for li in new_order_payload.get('lineItems',[]):
+        for li in new_order_payload.get('lineItems', []):
             cursor.execute("SELECT item_code FROM items WHERE item_code = ?", (li.get('item'),))
-            if not cursor.fetchone(): continue
-            cursor.execute("INSERT INTO order_line_items (order_id, item_code, package_code, quantity, price_per_unit_cents, style_chosen, item_type) VALUES (?,?,?,?,?,?,?)",
-                           (processed_order_id, li.get('item'), li.get('packageCode'), li.get('quantity'), li.get('price'), li.get('style'), li.get('type')))
+            if not cursor.fetchone():
+                continue
+            description_value = li.get('description') or li.get('style') or ''
+            pricing_mode_value = li.get('pricingMode') or 'fixed'
+            cursor.execute(
+                "INSERT INTO order_line_items (order_id, item_code, package_code, quantity, price_per_unit_cents, style_chosen, item_type, description, pricing_mode) VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    processed_order_id,
+                    li.get('item'),
+                    li.get('packageCode'),
+                    li.get('quantity'),
+                    li.get('price'),
+                    description_value,
+                    li.get('type'),
+                    description_value,
+                    pricing_mode_value,
+                ),
+            )
         for hist in new_order_payload.get('statusHistory',[]):
             cursor.execute("INSERT INTO order_status_history (order_id, status, status_date) VALUES (?,?,?)", (processed_order_id, hist.get('status'), hist.get('date')))
         if not any(h['status'] == new_order_payload.get('status') for h in new_order_payload.get('statusHistory',[])):
