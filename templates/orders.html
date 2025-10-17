@@ -120,12 +120,41 @@ const Textarea = ({ label, placeholder, value, onChange, disabled = false, rows 
 );
 
 const ContactMentionTextarea = ({ label, placeholder, value, onChange, disabled = false, rows = 3, contacts = [] }) => {
-    const { useState, useRef, useEffect } = React;
+    const { useState, useRef, useEffect, useMemo } = React;
     const textareaRef = useRef(null);
+    const overlayRef = useRef(null);
     const [suggestions, setSuggestions] = useState([]);
     const [isOpen, setIsOpen] = useState(false);
     const [highlightIndex, setHighlightIndex] = useState(0);
     const lastCaretRef = useRef(0);
+
+    const escapeHtml = (input = '') => String(input)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+
+    const formatSpaces = (input = '') => input.replace(/ {2,}/g, match => '&nbsp;'.repeat(match.length - 1) + ' ');
+
+    const buildHighlightedHtml = useMemo(() => {
+        const rawValue = value || '';
+        if (!rawValue.trim()) {
+            return `<span class="text-slate-400">${escapeHtml(placeholder || '')}</span>`;
+        }
+        const escaped = escapeHtml(rawValue);
+        const withMentions = escaped.replace(/(@[a-z0-9_.-]+)/gi, '<span class="mention-pill inline-flex items-center gap-1 rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700">$1</span>');
+        const withBreaks = withMentions.replace(/\r?\n/g, '<br />');
+        return formatSpaces(withBreaks);
+    }, [value, placeholder]);
+
+    const syncOverlayScroll = () => {
+        const textarea = textareaRef.current;
+        const overlay = overlayRef.current;
+        if (!textarea || !overlay) return;
+        overlay.scrollTop = textarea.scrollTop;
+        overlay.scrollLeft = textarea.scrollLeft;
+    };
 
     const findMentionQuery = (text, caretPosition) => {
         const uptoCaret = text.slice(0, caretPosition);
@@ -169,14 +198,14 @@ const ContactMentionTextarea = ({ label, placeholder, value, onChange, disabled 
         if (!match) return;
         const queryLength = match[1].length;
         const insertionPoint = caret - queryLength;
-        const replacement = `@${contact.handle}`;
+        const replacement = `@${contact.handle} `;
         const newValue = text.slice(0, insertionPoint) + replacement + text.slice(caret);
         onChange(newValue);
-        setTimeout(() => {
+        requestAnimationFrame(() => {
             textarea.focus();
             const newCaret = insertionPoint + replacement.length;
             textarea.setSelectionRange(newCaret, newCaret);
-        }, 0);
+        });
         setSuggestions([]);
         setIsOpen(false);
     };
@@ -197,7 +226,7 @@ const ContactMentionTextarea = ({ label, placeholder, value, onChange, disabled 
         } else if (event.key === 'ArrowUp') {
             event.preventDefault();
             setHighlightIndex(prev => (prev - 1 + suggestions.length) % suggestions.length);
-        } else if (event.key === 'Enter') {
+        } else if (event.key === 'Enter' || event.key === 'Tab') {
             const selected = suggestions[highlightIndex];
             if (selected) {
                 event.preventDefault();
@@ -218,27 +247,42 @@ const ContactMentionTextarea = ({ label, placeholder, value, onChange, disabled 
         };
         textarea.addEventListener('click', handler);
         textarea.addEventListener('keyup', handler);
+        textarea.addEventListener('scroll', syncOverlayScroll);
         return () => {
             textarea.removeEventListener('click', handler);
             textarea.removeEventListener('keyup', handler);
+            textarea.removeEventListener('scroll', syncOverlayScroll);
         };
     }, [contacts]);
+
+    useEffect(() => {
+        syncOverlayScroll();
+    }, [value]);
 
     return (
         <div className="relative">
             {label !== undefined && label !== null && label !== '' && (
                 <label className="block text-sm font-medium text-slate-600">{label}</label>
             )}
-            <textarea
-                ref={textareaRef}
-                rows={rows}
-                placeholder={placeholder}
-                value={value}
-                onChange={handleChange}
-                onKeyDown={handleKeyDown}
-                disabled={disabled}
-                className="mt-1 block w-full text-sm px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 disabled:bg-slate-100 disabled:text-slate-500"
-            />
+            <div className="relative mt-1">
+                <div
+                    ref={overlayRef}
+                    aria-hidden="true"
+                    className={`pointer-events-none absolute inset-0 px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words ${disabled ? 'text-slate-500' : 'text-slate-700'}`}
+                    dangerouslySetInnerHTML={{ __html: buildHighlightedHtml }}
+                ></div>
+                <textarea
+                    ref={textareaRef}
+                    rows={rows}
+                    placeholder={placeholder}
+                    value={value}
+                    onChange={handleChange}
+                    onKeyDown={handleKeyDown}
+                    disabled={disabled}
+                    className={`relative block w-full resize-y rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 ${disabled ? 'bg-slate-100 text-transparent' : 'bg-white text-transparent'} placeholder-transparent caret-orange-500 selection:bg-orange-200 selection:text-transparent`}
+                    style={{ WebkitTextFillColor: 'transparent' }}
+                />
+            </div>
             {isOpen && suggestions.length > 0 && (
                 <div className="absolute z-20 mt-1 w-full max-h-56 overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg">
                     {suggestions.map((contact, index) => (
@@ -257,6 +301,7 @@ const ContactMentionTextarea = ({ label, placeholder, value, onChange, disabled 
         </div>
     );
 };
+
 const TrashIcon = () => (<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clipRule="evenodd" /></svg>);
 const DollarSignIcon = () => (<svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8v1m0 8v1m-4-4h8m-4-4a8 8 0 100 16 8 8 0 000-16z" /></svg>);
 const ViewIcon = () => (<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>);
@@ -456,13 +501,6 @@ const OrderLogsSection = ({ orderId, canEdit, allContacts = [], onContactsChange
     );
 };
 
-
-const CogIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-    </svg>
-);
 
 const PriceInput = ({ value, onChange, disabled = false }) => {
     const handleChange = (e) => { const digits = e.target.value.replace(/\D/g, ''); onChange(Number(digits)); };
@@ -1471,17 +1509,20 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allContacts, allSelectableIt
                 />
             )}
             {/* EmailModal is now handled globally or by OrderForm, so removed from here directly */}
-            <div className="flex justify-between items-center mb-6">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-8">
                 <h1 className="text-3xl font-bold text-slate-800">Orders</h1>
-                <div className="flex space-x-2">
-                    <button onClick={() => navigateTo('createOrder')} className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors shadow">+ Create New Order</button>
-                </div>
+                <button
+                    onClick={() => navigateTo('createOrder')}
+                    className="inline-flex items-center justify-center gap-2 self-start rounded-md bg-orange-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-orange-700 sm:self-auto"
+                >
+                    + Create New Order
+                </button>
             </div>
-            <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
-                <div className="mb-4 space-y-4">
-                    <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+                <div className="space-y-4">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                         <h2 className="text-xl font-semibold text-slate-700">All Orders</h2>
-                        <div className="w-full sm:flex-1 lg:w-80">
+                        <div className="w-full sm:max-w-sm lg:max-w-xs">
                             <div
                                 className="relative"
                                 onClick={() => searchInputRef.current && searchInputRef.current.focus()}
@@ -1502,7 +1543,7 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allContacts, allSelectableIt
                                         }, 150);
                                     }}
                                     placeholder="Search Orders"
-                                    className="block w-full rounded-md border border-slate-300 px-3 py-1.5 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 appearance-none"
+                                    className="block w-full rounded-md border border-slate-300 px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 appearance-none"
                                 />
                                 {isSearching && (
                                     <span className="absolute inset-y-0 right-3 flex items-center">
@@ -1782,10 +1823,24 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
         }
     }, [formData.id]);
 
-    const [newContactForm, setNewContactForm] = useState({ contactName: '', companyName: '', email: '', phone: '' });
+    const createEmptyContactForm = () => ({
+        contactName: '',
+        companyName: '',
+        email: '',
+        phone: '',
+        shippingAddress: '',
+        shippingCity: '',
+        shippingState: '',
+        shippingZipCode: '',
+        billingAddress: '',
+        billingCity: '',
+        billingState: '',
+        billingZipCode: ''
+    });
+    const [newContactForm, setNewContactForm] = useState(createEmptyContactForm);
     const [isCreatingContact, setIsCreatingContact] = useState(false);
 
-    const resetNewContactForm = () => setNewContactForm({ contactName: '', companyName: '', email: '', phone: '' });
+    const resetNewContactForm = () => setNewContactForm(createEmptyContactForm());
 
     const handleCreateContact = async (event) => {
         event.preventDefault();
@@ -1795,16 +1850,25 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
         }
 
         setIsCreatingContact(true);
+        const payload = {
+            contactName: newContactForm.contactName.trim(),
+            companyName: newContactForm.companyName.trim(),
+            email: newContactForm.email.trim(),
+            phone: newContactForm.phone.trim(),
+            shippingAddress: newContactForm.shippingAddress.trim(),
+            shippingCity: newContactForm.shippingCity.trim(),
+            shippingState: newContactForm.shippingState.trim(),
+            shippingZipCode: newContactForm.shippingZipCode.trim(),
+            billingAddress: newContactForm.billingAddress.trim(),
+            billingCity: newContactForm.billingCity.trim(),
+            billingState: newContactForm.billingState.trim(),
+            billingZipCode: newContactForm.billingZipCode.trim()
+        };
         try {
             const response = await fetch('/api/contacts', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    contactName: newContactForm.contactName.trim(),
-                    companyName: newContactForm.companyName.trim(),
-                    email: newContactForm.email.trim(),
-                    phone: newContactForm.phone.trim()
-                })
+                body: JSON.stringify(payload)
             });
             const result = await response.json();
             if (!response.ok) {
@@ -1817,13 +1881,17 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
             }
             setPrimaryContactId(created.id);
             setPrimaryContactSummary(created);
+            const normalizedShippingAddress = (created.shippingAddress || '').trim();
+            const normalizedShippingCity = (created.shippingCity || '').trim();
+            const normalizedShippingState = (created.shippingState || '').trim();
+            const normalizedShippingZip = (created.shippingZipCode || '').trim();
             setFormData(prev => ({
                 ...prev,
                 contactInfo: { ...created },
-                shippingAddress: prev.shippingAddress || created.shippingAddress || '',
-                shippingCity: prev.shippingCity || created.shippingCity || '',
-                shippingState: prev.shippingState || created.shippingState || '',
-                shippingZipCode: prev.shippingZipCode || created.shippingZipCode || ''
+                shippingAddress: normalizedShippingAddress || prev.shippingAddress || '',
+                shippingCity: normalizedShippingCity || prev.shippingCity || '',
+                shippingState: normalizedShippingState || prev.shippingState || '',
+                shippingZipCode: normalizedShippingZip || prev.shippingZipCode || ''
             }));
             setShowNewContactModal(false);
             resetNewContactForm();
@@ -2234,7 +2302,7 @@ const unpackPackage = (id, pkgCode) => {
                         )}
                         {showNewContactModal && (
                             <div className="absolute inset-0 z-30 flex items-start justify-center bg-black/30 px-4 py-10">
-                                <form onSubmit={handleCreateContact} className="w-full max-w-lg rounded-lg bg-white p-6 shadow-xl space-y-4">
+                                <form onSubmit={handleCreateContact} className="w-full max-w-lg rounded-lg bg-white p-6 shadow-xl space-y-5">
                                     <div className="flex items-center justify-between">
                                         <h3 className="text-lg font-semibold text-slate-800">Create New Contact</h3>
                                         <button type="button" onClick={() => { setShowNewContactModal(false); resetNewContactForm(); }} className="text-slate-400 hover:text-slate-600 text-xl leading-none">&times;</button>
@@ -2244,6 +2312,34 @@ const unpackPackage = (id, pkgCode) => {
                                         <Input label="Company" value={newContactForm.companyName} onChange={e => setNewContactForm(prev => ({ ...prev, companyName: e.target.value }))} disabled={isCreatingContact} />
                                         <Input label="Email" value={newContactForm.email} onChange={e => setNewContactForm(prev => ({ ...prev, email: e.target.value }))} disabled={isCreatingContact} />
                                         <Input label="Phone" value={newContactForm.phone} onChange={e => setNewContactForm(prev => ({ ...prev, phone: e.target.value }))} disabled={isCreatingContact} />
+                                    </div>
+                                    <div className="space-y-3">
+                                        <Textarea
+                                            label="Shipping Address"
+                                            rows={2}
+                                            value={newContactForm.shippingAddress}
+                                            onChange={e => setNewContactForm(prev => ({ ...prev, shippingAddress: e.target.value }))}
+                                            disabled={isCreatingContact}
+                                        />
+                                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                            <Input label="City" value={newContactForm.shippingCity} onChange={e => setNewContactForm(prev => ({ ...prev, shippingCity: e.target.value }))} disabled={isCreatingContact} />
+                                            <Input label="State" value={newContactForm.shippingState} onChange={e => setNewContactForm(prev => ({ ...prev, shippingState: e.target.value }))} disabled={isCreatingContact} />
+                                            <Input label="Zip Code" value={newContactForm.shippingZipCode} onChange={e => setNewContactForm(prev => ({ ...prev, shippingZipCode: e.target.value }))} disabled={isCreatingContact} />
+                                        </div>
+                                    </div>
+                                    <div className="space-y-3">
+                                        <Textarea
+                                            label="Billing Address"
+                                            rows={2}
+                                            value={newContactForm.billingAddress}
+                                            onChange={e => setNewContactForm(prev => ({ ...prev, billingAddress: e.target.value }))}
+                                            disabled={isCreatingContact}
+                                        />
+                                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                            <Input label="City" value={newContactForm.billingCity} onChange={e => setNewContactForm(prev => ({ ...prev, billingCity: e.target.value }))} disabled={isCreatingContact} />
+                                            <Input label="State" value={newContactForm.billingState} onChange={e => setNewContactForm(prev => ({ ...prev, billingState: e.target.value }))} disabled={isCreatingContact} />
+                                            <Input label="Zip Code" value={newContactForm.billingZipCode} onChange={e => setNewContactForm(prev => ({ ...prev, billingZipCode: e.target.value }))} disabled={isCreatingContact} />
+                                        </div>
                                     </div>
                                     <div className="flex items-center justify-end gap-3">
                                         <button type="button" onClick={() => { setShowNewContactModal(false); resetNewContactForm(); }} className="px-4 py-2 text-sm font-semibold text-slate-600 hover:text-slate-800">Cancel</button>
@@ -2349,7 +2445,6 @@ const App = () => {
     const [itemData, setItemData] = useState({});
     const [packageData, setPackageData] = useState({});
     const [orderForEmailModal, setOrderForEmailModal] = useState(null); // State to control EmailModal
-    const [showSettingsMenu, setShowSettingsMenu] = useState(false);
     const [appSettings, setAppSettings] = useState({
         company_name: "Your Company",
         default_email_body: "",
@@ -2717,52 +2812,6 @@ const App = () => {
             <div className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
                 {renderPage()}
             </div>
-            {/* Quick access menu for settings and shutdown actions */}
-            <div className="fixed bottom-4 left-4 z-50">
-                <button
-                    onClick={() => setShowSettingsMenu(!showSettingsMenu)}
-                    className="p-3 bg-slate-600 text-white rounded-full shadow-lg hover:bg-slate-700 transition-colors focus:outline-none focus:ring-2 focus:ring-slate-500 focus:ring-opacity-75"
-                    aria-label="Settings"
-                >
-                    <CogIcon />
-                </button>
-                {showSettingsMenu && (
-                    <div
-                        className="absolute bottom-full left-0 mb-2 w-48 bg-white rounded-md shadow-lg py-1 ring-1 ring-black ring-opacity-5 focus:outline-none"
-                        role="menu"
-                        aria-orientation="vertical"
-                        aria-labelledby="options-menu"
-                    >
-                        <a
-                            href="/dashboard"
-                            onClick={() => setShowSettingsMenu(false)}
-                            className="block px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 hover:text-slate-900"
-                            role="menuitem"
-                        >
-                            Dashboard
-                        </a>
-                        <a
-                            href="/settings"
-                            onClick={() => setShowSettingsMenu(false)}
-                            className="block px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 hover:text-slate-900"
-                            role="menuitem"
-                        >
-                            Settings
-                        </a>
-                        <button
-                            onClick={() => {
-                                handleLogout();
-                                setShowSettingsMenu(false);
-                            }}
-                            className="block w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 hover:text-slate-900"
-                            role="menuitem"
-                        >
-                            Log Out
-                        </button>
-                    </div>
-                )}
-            </div>
-            )}
         </div>
     );
 };
