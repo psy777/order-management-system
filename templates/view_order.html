@@ -27,6 +27,22 @@
             }
         };
 
+        const hexToRgb = (hex) => {
+            if (typeof hex !== 'string') return null;
+            let normalized = hex.trim();
+            if (!/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(normalized)) return null;
+            normalized = normalized.slice(1);
+            if (normalized.length === 3) {
+                normalized = normalized.split('').map(char => char + char).join('');
+            }
+            const intVal = parseInt(normalized, 16);
+            return {
+                r: (intVal >> 16) & 255,
+                g: (intVal >> 8) & 255,
+                b: intVal & 255,
+            };
+        };
+
         const ContactMentionTextarea = ({ label, placeholder, value, onChange, rows = 3, contacts = [] }) => {
             const { useState, useRef, useEffect } = React;
             const textareaRef = useRef(null);
@@ -240,7 +256,7 @@
             );
         };
 
-        const generateInvoicePdf = (order, itemsIndex = {}) => {
+        const generateInvoicePdf = (order, itemsIndex = {}, brandingOverride = {}) => {
             if (!order) return;
             const { jsPDF } = window.jspdf;
             const doc = new jsPDF();
@@ -253,6 +269,22 @@
             const timeZone = "America/Chicago";
             const dateOptions = { year: 'numeric', month: 'long', day: 'numeric' };
             const formattedDate = safeOrder.date ? formatInTimeZone(safeOrder.date, timeZone, dateOptions) : '—';
+
+            const mergedBranding = {
+                ...(window.fireCoastBranding || {}),
+                ...(brandingOverride || {}),
+            };
+            const accentRgb = hexToRgb(mergedBranding.invoice_brand_color) || { r: 249, g: 115, b: 22 };
+            const brandLines = [];
+            const businessName = (mergedBranding.invoice_business_name || '').trim();
+            const businessDetails = (mergedBranding.invoice_business_details || '').trim();
+            if (businessName) {
+                brandLines.push(businessName);
+            }
+            if (businessDetails) {
+                brandLines.push(...businessDetails.split('\n').map(line => line.trim()).filter(Boolean));
+            }
+            const logoDataUrl = (mergedBranding.invoice_logo_data_url || '').trim();
 
             const baseContact = safeOrder.contactInfo || {};
             const contactInfo = {
@@ -301,8 +333,29 @@
                 return lines;
             };
 
-            doc.setFontSize(20);
+            doc.setFontSize(22);
+            doc.setTextColor(accentRgb.r, accentRgb.g, accentRgb.b);
             doc.text("Invoice", 14, 22);
+            doc.setDrawColor(accentRgb.r, accentRgb.g, accentRgb.b);
+            doc.setLineWidth(0.75);
+            doc.line(14, 26, 196, 26);
+            doc.setTextColor(0, 0, 0);
+
+            let rightHeaderTop = 18;
+            if (logoDataUrl) {
+                try {
+                    doc.addImage(logoDataUrl, 'PNG', 150, 10, 40, 20);
+                    rightHeaderTop = 32;
+                } catch (error) {
+                    console.error('Unable to render invoice logo:', error);
+                }
+            }
+            if (brandLines.length) {
+                const wrappedBrand = doc.splitTextToSize(brandLines.join('\n'), 60);
+                doc.setFontSize(12);
+                doc.text(wrappedBrand, 196, rightHeaderTop, { align: 'right' });
+            }
+
             doc.setFontSize(12);
             let headerY = 30;
             doc.text(`Order #: ${orderNumber || '—'}`, 14, headerY);
@@ -443,7 +496,7 @@
                 doc.line(50, summaryY, 120, summaryY);
             }
 
-            doc.save(`${orderId || 'order'}-invoice.pdf`);
+            doc.output('dataurlnewwindow');
         };
 
         const ViewOrderPage = ({ orderId }) => {
@@ -453,6 +506,7 @@
             const [isLogModalOpen, setIsLogModalOpen] = useState(false);
             const [contacts, setContacts] = useState([]);
             const [itemsIndex, setItemsIndex] = useState({});
+            const [branding, setBranding] = useState({});
 
             const fetchOrder = async () => {
                 try {
@@ -503,6 +557,22 @@
                 fetchContactsAndItems();
             }, []);
 
+            useEffect(() => {
+                const loadBranding = async () => {
+                    try {
+                        const response = await fetch('/api/settings');
+                        if (response.ok) {
+                            const settingsData = await response.json();
+                            setBranding(settingsData);
+                            window.fireCoastBranding = settingsData;
+                        }
+                    } catch (error) {
+                        console.error('Failed to load settings for invoice branding:', error);
+                    }
+                };
+                loadBranding();
+            }, []);
+
             if (isLoading) {
                 return <div className="text-center p-8">Loading order details...</div>;
             }
@@ -536,7 +606,7 @@
                         <div className="flex flex-wrap gap-3">
                             <button
                                 type="button"
-                                onClick={() => generateInvoicePdf(order, itemsIndex)}
+                                onClick={() => generateInvoicePdf(order, itemsIndex, branding)}
                                 className="px-4 py-2 bg-white text-slate-700 font-semibold rounded-md border border-slate-300 hover:bg-slate-100 transition-colors shadow-sm"
                             >
                                 Preview Invoice

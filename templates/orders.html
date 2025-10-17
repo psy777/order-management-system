@@ -19,11 +19,12 @@
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex h-16 items-center justify-between">
                 <div class="flex items-center space-x-10">
-                    <a href="/admin" id="nav-home-link" class="text-lg font-semibold tracking-wide">FireCoast OMS</a>
+                    <a href="/dashboard" id="nav-home-link" class="text-lg font-semibold tracking-wide">FireCoast OMS</a>
                     <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
                         <a href="/orders" id="nav-orders-link" class="text-orange-300">Orders</a>
                         <a href="/contacts" class="hover:text-orange-300 transition">Contacts</a>
                         <a href="/analytics" class="hover:text-orange-300 transition">Analytics</a>
+                        <a href="/passwords" class="hover:text-orange-300 transition">Password Manager</a>
                     </div>
                 </div>
                 <div class="flex items-center space-x-3 text-sm font-medium">
@@ -39,7 +40,7 @@
             if (brandLink) {
                 brandLink.addEventListener('click', (event) => {
                     event.preventDefault();
-                    window.location.href = '/admin';
+                    window.location.href = '/dashboard';
                 });
             }
 
@@ -89,6 +90,22 @@ const formatInTimeZone = (dateString, timeZone, options = {}) => {
         console.error("Error formatting date:", e);
         return "Invalid Date";
     }
+};
+
+const hexToRgb = (hex) => {
+    if (typeof hex !== 'string') return null;
+    let normalized = hex.trim();
+    if (!/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(normalized)) return null;
+    normalized = normalized.slice(1);
+    if (normalized.length === 3) {
+        normalized = normalized.split('').map(char => char + char).join('');
+    }
+    const intVal = parseInt(normalized, 16);
+    return {
+        r: (intVal >> 16) & 255,
+        g: (intVal >> 8) & 255,
+        b: intVal & 255,
+    };
 };
 
 // --- SHARED HELPER COMPONENTS & ICONS ---
@@ -453,7 +470,7 @@ const PriceInput = ({ value, onChange, disabled = false }) => {
     return (<input type="text" value={`$${formattedValue}`} onChange={handleChange} disabled={disabled} className="w-24 sm:w-28 text-right bg-white border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm p-2 disabled:bg-slate-100 disabled:text-slate-500" />);
 };
 
-const generateInvoicePdf = (order, allItems, action = 'save') => {
+const generateInvoicePdf = (order, allItems, action = 'save', brandingOverride = {}) => {
     if (!order) return;
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF();
@@ -466,6 +483,22 @@ const generateInvoicePdf = (order, allItems, action = 'save') => {
     const timeZone = "America/Chicago";
     const dateOptions = { year: 'numeric', month: 'long', day: 'numeric' };
     const formattedDate = safeOrder.date ? formatInTimeZone(safeOrder.date, timeZone, dateOptions) : '—';
+
+    const mergedBranding = {
+        ...(window.fireCoastBranding || {}),
+        ...(brandingOverride || {}),
+    };
+    const accentRgb = hexToRgb(mergedBranding.invoice_brand_color) || { r: 249, g: 115, b: 22 };
+    const brandLines = [];
+    const businessName = (mergedBranding.invoice_business_name || '').trim();
+    const businessDetails = (mergedBranding.invoice_business_details || '').trim();
+    if (businessName) {
+        brandLines.push(businessName);
+    }
+    if (businessDetails) {
+        brandLines.push(...businessDetails.split('\n').map(line => line.trim()).filter(Boolean));
+    }
+    const logoDataUrl = (mergedBranding.invoice_logo_data_url || '').trim();
 
     const baseContact = safeOrder.contactInfo || {};
     const contactInfo = {
@@ -514,8 +547,29 @@ const generateInvoicePdf = (order, allItems, action = 'save') => {
         return lines;
     };
 
-    doc.setFontSize(20);
+    doc.setFontSize(22);
+    doc.setTextColor(accentRgb.r, accentRgb.g, accentRgb.b);
     doc.text("Invoice", 14, 22);
+    doc.setDrawColor(accentRgb.r, accentRgb.g, accentRgb.b);
+    doc.setLineWidth(0.75);
+    doc.line(14, 26, 196, 26);
+    doc.setTextColor(0, 0, 0);
+
+    let rightHeaderTop = 18;
+    if (logoDataUrl) {
+        try {
+            doc.addImage(logoDataUrl, 'PNG', 150, 10, 40, 20);
+            rightHeaderTop = 32;
+        } catch (error) {
+            console.error('Unable to render invoice logo:', error);
+        }
+    }
+    if (brandLines.length) {
+        const wrappedBrand = doc.splitTextToSize(brandLines.join('\n'), 60);
+        doc.setFontSize(12);
+        doc.text(wrappedBrand, 196, rightHeaderTop, { align: 'right' });
+    }
+
     doc.setFontSize(12);
     let headerY = 30;
     doc.text(`Order #: ${orderNumber || '—'}`, 14, headerY);
@@ -940,7 +994,7 @@ ${fallbackYourCompanyName}`
                             onClick={() => {
                                 if (order && allItems) {
                                     try {
-                                        generateInvoicePdf(order, allItems, 'save'); // 'save' action directly downloads
+                                        generateInvoicePdf(order, allItems, 'save', appSettings); // 'save' action directly downloads
                                     } catch (e) {
                                         console.error("Error generating PDF for download:", e);
                                         alert("Failed to generate PDF for download.");
@@ -1230,7 +1284,7 @@ const ContactSummaryCard = ({ contact }) => {
 };
 
 // --- COMPONENTS ---
-const Dashboard = ({ orders, navigateTo, viewOrder, allContacts, allSelectableItems, setOrderForEmailModal }) => {
+const Dashboard = ({ orders, navigateTo, viewOrder, allContacts, allSelectableItems, setOrderForEmailModal, branding }) => {
     const { useState, useEffect, useMemo, useRef } = React;
     const [filteredOrders, setFilteredOrders] = useState(orders);
     const [searchPills, setSearchPills] = useState([]);
@@ -1418,7 +1472,7 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allContacts, allSelectableIt
             )}
             {/* EmailModal is now handled globally or by OrderForm, so removed from here directly */}
             <div className="flex justify-between items-center mb-6">
-                <h1 className="text-3xl font-bold text-slate-800">Dashboard</h1>
+                <h1 className="text-3xl font-bold text-slate-800">Orders</h1>
                 <div className="flex space-x-2">
                     <button onClick={() => navigateTo('createOrder')} className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors shadow">+ Create New Order</button>
                 </div>
@@ -1427,51 +1481,38 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allContacts, allSelectableIt
                 <div className="mb-4 space-y-4">
                     <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
                         <h2 className="text-xl font-semibold text-slate-700">All Orders</h2>
-                        <div className="flex flex-col sm:flex-row sm:items-center sm:gap-3 w-full lg:w-auto">
-                            <div className="w-full sm:flex-1 lg:w-80">
-                                <label htmlFor="orders-search-input" className="block text-sm font-medium text-slate-600 mb-1">Search orders</label>
-                                <div
-                                    className="relative"
-                                    onClick={() => searchInputRef.current && searchInputRef.current.focus()}
-                                >
-                                    <input
-                                        id="orders-search-input"
-                                        ref={searchInputRef}
-                                        type="search"
-                                        value={inputValue}
-                                        onChange={handleInputChange}
-                                        onKeyDown={handleKeyDown}
-                                        onBlur={() => {
-                                            parseInputToPills(inputValue);
-                                            setTimeout(() => {
-                                                if (!document.activeElement.closest('.calendar-container')) {
-                                                    setShowCalendar(false);
-                                                }
-                                            }, 150);
-                                        }}
-                                        placeholder="Search by title, contact, status, or filter keyword"
-                                        className="block w-full rounded-md border border-slate-300 px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
-                                    />
-                                    {isSearching && (
-                                        <span className="absolute inset-y-0 right-3 flex items-center">
-                                            <svg className="h-4 w-4 animate-spin text-slate-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
-                                            </svg>
-                                        </span>
-                                    )}
-                                </div>
-                                <p className="mt-1 text-xs text-slate-400">Try filters like <code>status:sent</code>, <code>before:2024-01-01</code>, or <code>after:</code>.</p>
+                        <div className="w-full sm:flex-1 lg:w-80">
+                            <div
+                                className="relative"
+                                onClick={() => searchInputRef.current && searchInputRef.current.focus()}
+                            >
+                                <input
+                                    id="orders-search-input"
+                                    ref={searchInputRef}
+                                    type="search"
+                                    value={inputValue}
+                                    onChange={handleInputChange}
+                                    onKeyDown={handleKeyDown}
+                                    onBlur={() => {
+                                        parseInputToPills(inputValue);
+                                        setTimeout(() => {
+                                            if (!document.activeElement.closest('.calendar-container')) {
+                                                setShowCalendar(false);
+                                            }
+                                        }, 150);
+                                    }}
+                                    placeholder="Search Orders"
+                                    className="block w-full rounded-md border border-slate-300 px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                                />
+                                {isSearching && (
+                                    <span className="absolute inset-y-0 right-3 flex items-center">
+                                        <svg className="h-4 w-4 animate-spin text-slate-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                                        </svg>
+                                    </span>
+                                )}
                             </div>
-                            {(searchPills.length > 0 || inputValue.trim()) && (
-                                <button
-                                    type="button"
-                                    onClick={clearSearch}
-                                    className="mt-3 sm:mt-0 sm:self-end px-3 py-2 text-sm font-semibold text-slate-600 border border-slate-300 rounded-md hover:bg-slate-100 transition-colors"
-                                >
-                                    Clear
-                                </button>
-                            )}
                         </div>
                     </div>
                     {searchPills.length > 0 && (
@@ -1488,7 +1529,7 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allContacts, allSelectableIt
                     )}
                     {searchError && <p className="text-xs text-red-600">{searchError}</p>}
                 </div>
-                <div className="overflow-x-auto"><table className="w-full text-sm text-left text-slate-500"><thead className="text-xs text-slate-700 uppercase bg-slate-100"><tr><th className="px-4 py-3">Order ID</th><th className="px-4 py-3">Customer</th><th className="px-4 py-3">Date</th><th className="px-4 py-3">Total</th><th className="px-4 py-3">Status</th><th className="px-4 py-3 text-center">Actions</th></tr></thead>
+                <div className="overflow-x-auto"><table className="w-full text-sm text-left text-slate-500"><thead className="text-xs text-slate-700 uppercase bg-slate-100"><tr><th className="px-4 py-3">Order</th><th className="px-4 py-3">Customer</th><th className="px-4 py-3">Date</th><th className="px-4 py-3">Total</th><th className="px-4 py-3">Status</th><th className="px-4 py-3 text-center">Actions</th></tr></thead>
                     <tbody>{filteredOrders.map(order => {
                         const timeZone = "America/Chicago";
                         const dateOptions = { year: 'numeric', month: 'long', day: 'numeric' };
@@ -1496,13 +1537,21 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allContacts, allSelectableIt
                         const displayIdValue = typeof order.display_id === 'string' ? order.display_id : '';
                         const trimmedDisplayId = displayIdValue.trim();
                         const hasDisplayId = Boolean(trimmedDisplayId);
-                        const primaryLabel = orderTitle || trimmedDisplayId || order.id;
-                        const idLabel = hasDisplayId ? `${trimmedDisplayId}${trimmedDisplayId === order.id ? '' : ` • ${order.id}`}` : order.id;
+                        const primaryLabel = orderTitle || 'Untitled Order';
+                        const shortId = order.id ? (order.id.length > 12 ? `${order.id.slice(0, 8)}…` : order.id) : '';
+                        const secondaryTags = [];
+                        if (hasDisplayId) {
+                            secondaryTags.push(`Ref: ${trimmedDisplayId}`);
+                        }
+                        if (order.id && (!hasDisplayId || trimmedDisplayId !== order.id)) {
+                            secondaryTags.push(`ID: ${shortId}`);
+                        }
+                        const idLabel = secondaryTags.join(' • ');
                         return (<tr key={order.id} onClick={() => viewOrder(order)} className="bg-white border-b hover:bg-slate-50 cursor-pointer">
                         <td className="px-4 py-3 align-top">
                             <div className="flex flex-col">
                                 <span className="font-medium text-slate-800">{primaryLabel}</span>
-                                <span className="text-xs text-slate-500">{idLabel}</span>
+                                {idLabel && <span className="text-xs text-slate-500" title={order.id}>{idLabel}</span>}
                             </div>
                         </td><td className="px-4 py-3">{getContactDisplayName(order.primaryContact || order.contactInfo)}</td>
                         <td className="px-4 py-3">{formatInTimeZone(order.date, timeZone, dateOptions)}</td><td className="px-4 py-3">${parseFloat(order.total || 0).toFixed(2)}</td>
@@ -1519,7 +1568,7 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allContacts, allSelectableIt
                         </td>
                         <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
                             <div className="flex items-center justify-center space-x-2">
-                                <button onClick={() => generateInvoicePdf(order, allSelectableItems, 'preview')} className="p-1 text-slate-500 hover:text-orange-600"><PdfIcon /></button>
+                                <button onClick={() => generateInvoicePdf(order, allSelectableItems, 'preview', branding)} className="p-1 text-slate-500 hover:text-orange-600"><PdfIcon /></button>
                                 <button onClick={() => setOrderForEmailModal(order)} className="p-1 text-slate-500 hover:text-orange-600"><EmailIcon /></button>
                             </div>
                         </td>
@@ -1546,7 +1595,7 @@ const UnsavedChangesModal = ({ onCancel, onDelete, onSaveAndClose }) => {
     );
 };
 
-const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, allSelectableItems, itemData, packageData, fetchAndUpdateContacts, setOrderForEmailModal, startInEditMode = false }) => { // Added setOrderForEmailModal
+const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, allSelectableItems, itemData, packageData, fetchAndUpdateContacts, setOrderForEmailModal, startInEditMode = false, branding }) => {
     const { useState, useMemo, useEffect, useRef, useCallback } = React;
     const defaultOrderState = {
         id: null,
@@ -1628,7 +1677,7 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
 
     const mentionedContacts = formData.additionalContacts || [];
 
-    const handleReturnToDashboard = () => {
+    const handleReturnToOrders = () => {
         const isNewUnsavedDraft = !order && (formData.lineItems.length > 0 || Boolean(primaryContactId));
 
         if (isNewUnsavedDraft) {
@@ -1954,7 +2003,7 @@ const unpackPackage = (id, pkgCode) => {
         }
     };
 
-    const handlePreviewPdf = () => { const tempOrder = createOrderObject(); generateInvoicePdf(tempOrder, allSelectableItems, 'preview'); };
+    const handlePreviewPdf = () => { const tempOrder = createOrderObject(); generateInvoicePdf(tempOrder, allSelectableItems, 'preview', branding); };
     
     const handleDelete = async () => {
         if (!formData || !formData.id) {
@@ -2047,7 +2096,7 @@ const unpackPackage = (id, pkgCode) => {
                 />
             )}
             {/* EmailModal is now handled at the App level, triggered by setOrderForEmailModal prop */}
-            <div className="mb-6"><button onClick={handleReturnToDashboard} className="text-orange-600 hover:text-orange-800 font-semibold">&larr; Back to Dashboard</button><h1 className="text-3xl font-bold text-slate-800 mt-2">{pageHeading}</h1></div>
+            <div className="mb-6"><button onClick={handleReturnToOrders} className="text-orange-600 hover:text-orange-800 font-semibold">&larr; Back to Orders</button><h1 className="text-3xl font-bold text-slate-800 mt-2">{pageHeading}</h1></div>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 <div className="lg:col-span-2 space-y-6">
                     <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
@@ -2301,7 +2350,14 @@ const App = () => {
     const [packageData, setPackageData] = useState({});
     const [orderForEmailModal, setOrderForEmailModal] = useState(null); // State to control EmailModal
     const [showSettingsMenu, setShowSettingsMenu] = useState(false);
-    const [appSettings, setAppSettings] = useState({ company_name: "Your Company", default_email_body: "" }); // Added appSettings
+    const [appSettings, setAppSettings] = useState({
+        company_name: "Your Company",
+        default_email_body: "",
+        invoice_business_name: "FireCoast OMS",
+        invoice_business_details: "",
+        invoice_brand_color: "#f97316",
+        invoice_logo_data_url: "",
+    });
 
     const updateBrowserUrl = useCallback((updater) => {
         if (typeof window === 'undefined') {
@@ -2356,6 +2412,7 @@ const App = () => {
             const ordersData   = await ordersRes.json();
             const settingsData = await settingsRes.json(); // Get settings data
             setAppSettings(settingsData); // Set app settings
+            window.fireCoastBranding = settingsData;
             const contactsData  = await contactsRes.json();
             const itemsDataArray    = await itemsRes.json(); // Renamed to itemsDataArray
             const packagesData = await packagesRes.json();
@@ -2580,14 +2637,14 @@ const App = () => {
     const renderPage = () => {
         switch(page) {
             case 'createOrder':
-                return <OrderForm navigateTo={navigateTo} saveOrder={saveOrder} allContacts={allContacts} allSelectableItems={allSelectableItems} itemData={itemData} packageData={packageData} fetchAndUpdateContacts={fetchAndUpdateContacts} setOrderForEmailModal={setOrderForEmailModal} startInEditMode={true} />;
+                return <OrderForm navigateTo={navigateTo} saveOrder={saveOrder} allContacts={allContacts} allSelectableItems={allSelectableItems} itemData={itemData} packageData={packageData} fetchAndUpdateContacts={fetchAndUpdateContacts} setOrderForEmailModal={setOrderForEmailModal} startInEditMode={true} branding={appSettings} />;
             case 'viewOrder':
                 // This case is now handled by a separate page, but we keep the OrderForm logic
                 // for when the user navigates back to edit from the view page via URL param.
-                return <OrderForm order={activeOrder} navigateTo={navigateTo} saveOrder={saveOrder} deleteOrder={deleteOrder} allContacts={allContacts} allSelectableItems={allSelectableItems} itemData={itemData} packageData={packageData} fetchAndUpdateContacts={fetchAndUpdateContacts} setOrderForEmailModal={setOrderForEmailModal} startInEditMode={startInEditMode} />;
+                return <OrderForm order={activeOrder} navigateTo={navigateTo} saveOrder={saveOrder} deleteOrder={deleteOrder} allContacts={allContacts} allSelectableItems={allSelectableItems} itemData={itemData} packageData={packageData} fetchAndUpdateContacts={fetchAndUpdateContacts} setOrderForEmailModal={setOrderForEmailModal} startInEditMode={startInEditMode} branding={appSettings} />;
             case 'dashboard':
             default:
-                return <Dashboard orders={orders} navigateTo={navigateTo} viewOrder={viewOrder} allContacts={allContacts} allSelectableItems={allSelectableItems} setOrderForEmailModal={setOrderForEmailModal} />;
+                return <Dashboard orders={orders} navigateTo={navigateTo} viewOrder={viewOrder} allContacts={allContacts} allSelectableItems={allSelectableItems} setOrderForEmailModal={setOrderForEmailModal} branding={appSettings} />;
         }
     }
 
@@ -2677,12 +2734,12 @@ const App = () => {
                         aria-labelledby="options-menu"
                     >
                         <a
-                            href="/admin"
+                            href="/dashboard"
                             onClick={() => setShowSettingsMenu(false)}
                             className="block px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 hover:text-slate-900"
                             role="menuitem"
                         >
-                            Admin Dashboard
+                            Dashboard
                         </a>
                         <a
                             href="/settings"

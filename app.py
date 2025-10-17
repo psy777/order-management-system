@@ -53,6 +53,7 @@ def _ensure_database_initialized():
 
 DATA_DIR = 'data'
 SETTINGS_FILE = os.path.join(DATA_DIR, 'settings.json')
+PASSWORDS_FILE = os.path.join(DATA_DIR, 'passwords.json')
 
 UPLOAD_FOLDER = os.path.join(os.path.dirname(app.root_path), 'data')
 if not os.path.exists(UPLOAD_FOLDER):
@@ -72,6 +73,19 @@ def read_json_file(file_path):
 def write_json_file(file_path, data):
     with open(file_path, 'w') as f:
         json.dump(data, f, indent=4)
+
+
+def read_password_entries():
+    entries_blob = read_json_file(PASSWORDS_FILE)
+    if isinstance(entries_blob, dict):
+        return entries_blob.get('entries', [])
+    if isinstance(entries_blob, list):
+        return entries_blob
+    return []
+
+
+def write_password_entries(entries):
+    write_json_file(PASSWORDS_FILE, {"entries": entries})
 
 
 def _slugify_handle(source_text: str) -> str:
@@ -1777,36 +1791,31 @@ def get_settings():
     settings = read_json_file(SETTINGS_FILE)
     if not isinstance(settings, dict):
         settings = {}
-    
-    if not settings:
-        settings = {
-            "company_name": "Your Company Name",
-            "default_shipping_zip_code": "00000",
-            "default_email_body": "Dear [contactCompany],\n\nPlease find attached the purchase order [orderID] for your records.\n\nWe appreciate your business!\n\nThank you,\n[yourCompany]",
-            "email_address": "",
-            "app_password": ""
-        }
+
+    defaults = {
+        "company_name": "FireCoast OMS",
+        "default_shipping_zip_code": "",
+        "default_email_body": "Dear [contactCompany],\n\nPlease find attached the purchase order [orderID] for your records.\n\nWe appreciate your business!\n\nThank you,\n[yourCompany]",
+        "timezone": 'UTC',
+        "email_address": "",
+        "app_password": "",
+        "email_cc": "",
+        "email_bcc": "",
+        "invoice_business_name": "FireCoast OMS",
+        "invoice_business_details": "123 Harbor Way\nPortland, OR 97203\nhello@firecoast.com",
+        "invoice_brand_color": "#f97316",
+        "invoice_logo_data_url": "",
+    }
+
+    updated = False
+    for key, value in defaults.items():
+        if key not in settings:
+            settings[key] = value
+            updated = True
+
+    if updated:
         write_json_file(SETTINGS_FILE, settings)
-    else:
-        updated = False
-        if 'email_address' not in settings:
-            settings['email_address'] = ""
-            updated = True
-        if 'app_password' not in settings:
-            settings['app_password'] = ""
-            updated = True
-        if 'default_email_body' not in settings:
-            settings['default_email_body'] = "Dear [contactCompany],\n\nPlease find attached the purchase order [orderID] for your records.\n\nWe appreciate your business!\n\nThank you,\n[yourCompany]"
-            updated = True
-        if 'email_cc' not in settings:
-            settings['email_cc'] = ""
-            updated = True
-        if 'email_bcc' not in settings:
-            settings['email_bcc'] = ""
-            updated = True
-        if updated:
-            write_json_file(SETTINGS_FILE, settings)
-            
+
     return jsonify(settings)
 
 @app.route('/api/settings', methods=['POST'])
@@ -1822,7 +1831,11 @@ def update_settings():
     existing_settings['company_name'] = new_settings_payload.get('company_name', existing_settings.get('company_name'))
     existing_settings['default_shipping_zip_code'] = new_settings_payload.get('default_shipping_zip_code', existing_settings.get('default_shipping_zip_code'))
     existing_settings['default_email_body'] = new_settings_payload.get('default_email_body', existing_settings.get('default_email_body'))
-    
+
+    for key in ('invoice_business_name', 'invoice_business_details', 'invoice_brand_color'):
+        if key in new_settings_payload:
+            existing_settings[key] = new_settings_payload.get(key, existing_settings.get(key))
+
     write_json_file(SETTINGS_FILE, existing_settings)
     return jsonify({"message": "Settings updated."}), 200
 
@@ -1833,6 +1846,8 @@ def update_timezone_settings():
         return jsonify({"message": "Invalid request"}), 400
 
     settings = read_json_file(SETTINGS_FILE)
+    if not isinstance(settings, dict):
+        settings = {}
     settings['timezone'] = payload['timezone']
     write_json_file(SETTINGS_FILE, settings)
 
@@ -1860,10 +1875,102 @@ def update_email_settings():
     existing_settings['app_password'] = app_password
     existing_settings['email_cc'] = email_cc
     existing_settings['email_bcc'] = email_bcc
-    
+
     write_json_file(SETTINGS_FILE, existing_settings)
-    
+
     return jsonify({"message": "Email settings updated successfully."}), 200
+
+
+@app.route('/api/settings/invoice', methods=['POST'])
+def update_invoice_settings():
+    invoice_payload = request.json
+    if invoice_payload is None:
+        return jsonify({"message": "Request must be JSON"}), 400
+
+    existing_settings = read_json_file(SETTINGS_FILE)
+    if not isinstance(existing_settings, dict):
+        existing_settings = {}
+
+    for key in ('invoice_business_name', 'invoice_business_details'):
+        if key in invoice_payload:
+            existing_settings[key] = invoice_payload.get(key) or ""
+
+    if 'invoice_brand_color' in invoice_payload:
+        incoming_color = (invoice_payload.get('invoice_brand_color') or '').strip()
+        if not re.fullmatch(r'#([0-9a-fA-F]{6})', incoming_color):
+            incoming_color = existing_settings.get('invoice_brand_color', '#f97316') or '#f97316'
+        existing_settings['invoice_brand_color'] = incoming_color or '#f97316'
+
+    if 'invoice_logo_data_url' in invoice_payload:
+        existing_settings['invoice_logo_data_url'] = invoice_payload.get('invoice_logo_data_url') or ""
+
+    write_json_file(SETTINGS_FILE, existing_settings)
+    return jsonify({"message": "Invoice appearance updated.", "settings": existing_settings}), 200
+
+
+@app.route('/api/passwords', methods=['GET', 'POST'])
+def password_entries_collection():
+    if request.method == 'GET':
+        return jsonify(read_password_entries())
+
+    payload = request.json
+    if payload is None:
+        return jsonify({"message": "Request must be JSON"}), 400
+
+    service = (payload.get('service') or '').strip()
+    username = (payload.get('username') or '').strip()
+    password_value = payload.get('password', '')
+    notes = payload.get('notes', '')
+
+    if not service:
+        return jsonify({"message": "Service name is required."}), 400
+
+    entries = read_password_entries()
+    entry_id = str(uuid.uuid4())
+    created_at = datetime.utcnow().isoformat() + 'Z'
+    new_entry = {
+        "id": entry_id,
+        "service": service,
+        "username": username,
+        "password": password_value,
+        "notes": notes,
+        "updatedAt": created_at,
+    }
+    entries.append(new_entry)
+    write_password_entries(entries)
+    return jsonify(new_entry), 201
+
+
+@app.route('/api/passwords/<entry_id>', methods=['PUT', 'DELETE'])
+def password_entry_detail(entry_id):
+    entries = read_password_entries()
+    index = next((i for i, entry in enumerate(entries) if entry.get('id') == entry_id), None)
+    if index is None:
+        return jsonify({"message": "Password entry not found."}), 404
+
+    if request.method == 'DELETE':
+        removed = entries.pop(index)
+        write_password_entries(entries)
+        return jsonify({"message": "Deleted.", "entry": removed})
+
+    payload = request.json
+    if payload is None:
+        return jsonify({"message": "Request must be JSON"}), 400
+
+    entry = entries[index]
+    if 'service' in payload:
+        entry['service'] = (payload.get('service') or '').strip()
+    if 'username' in payload:
+        entry['username'] = (payload.get('username') or '').strip()
+    if 'password' in payload:
+        entry['password'] = payload.get('password', '')
+    if 'notes' in payload:
+        entry['notes'] = payload.get('notes', '')
+    entry['updatedAt'] = datetime.utcnow().isoformat() + 'Z'
+
+    entries[index] = entry
+    write_password_entries(entries)
+    return jsonify(entry)
 
 @app.route('/manage/customers')
 def manage_customers_page(): return render_template('manage_customers.html')
@@ -1879,9 +1986,14 @@ def settings_page():
     selected_timezone = settings.get('timezone', 'UTC')
     return render_template('settings.html', timezones=timezones, selected_timezone=selected_timezone)
 
-@app.route('/admin')
-def admin_page():
+@app.route('/dashboard')
+def dashboard_page():
     return render_template('admin.html')
+
+
+@app.route('/admin')
+def legacy_admin_redirect():
+    return redirect(url_for('dashboard_page'))
 
 @app.route('/analytics')
 def analytics_page():
@@ -1894,6 +2006,11 @@ def contacts_page():
 @app.route('/orders')
 def orders_page():
     return render_template('orders.html')
+
+
+@app.route('/passwords')
+def passwords_page():
+    return render_template('passwords.html')
 
 @app.route('/api/export-data', methods=['GET'])
 def export_data():
@@ -2016,7 +2133,7 @@ def serve_uploads(filename):
 def serve_assets(filename): return send_from_directory(os.path.join(app.root_path,'assets'),filename)
 @app.route('/')
 def home():
-    return redirect(url_for('admin_page'))
+    return redirect(url_for('dashboard_page'))
 
 @app.route('/shutdown', methods=['POST'])
 def shutdown(): Timer(0.1,lambda:os._exit(0)).start(); return "Shutdown initiated.",200

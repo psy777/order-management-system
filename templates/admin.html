@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Dashboard</title>
+    <title>Dashboard - FireCoast OMS</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="icon" href="../assets/favicon.ico" sizes="any">
     <link rel="stylesheet" href="../assets/css/styles.css">
@@ -13,11 +13,12 @@
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex h-16 items-center justify-between">
                 <div class="flex items-center space-x-10">
-                    <a href="/admin" class="text-lg font-semibold tracking-wide">FireCoast OMS</a>
+                    <a href="/dashboard" class="text-lg font-semibold tracking-wide">FireCoast OMS</a>
                     <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
                         <a href="/orders" class="hover:text-orange-300 transition">Orders</a>
                         <a href="/contacts" class="hover:text-orange-300 transition">Contacts</a>
                         <a href="/analytics" class="hover:text-orange-300 transition">Analytics</a>
+                        <a href="/passwords" class="hover:text-orange-300 transition">Password Manager</a>
                     </div>
                 </div>
                 <div class="flex items-center space-x-3 text-sm font-medium">
@@ -55,8 +56,8 @@
     <main class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-12">
         <header class="space-y-3">
             <p class="text-sm uppercase tracking-[0.3em] text-slate-500">FireCoast Operations</p>
-            <h1 class="text-3xl sm:text-4xl font-bold text-slate-800">Administrative Control Center</h1>
-            <p class="text-slate-600 max-w-2xl">Welcome to the streamlined admin hub. Jump directly into daily order management, review the latest analytics, or keep your relationships current in the contacts workspace.</p>
+            <h1 class="text-3xl sm:text-4xl font-bold text-slate-800">Dashboard</h1>
+            <p class="text-slate-600 max-w-2xl">Welcome back. Jump into orders, review analytics, keep your contacts current, manage saved credentials, or fine-tune settings for the FireCoast OMS.</p>
         </header>
         <section class="space-y-6">
             <h2 class="text-lg font-semibold text-slate-700">Key Workspaces</h2>
@@ -90,6 +91,16 @@
                         <span class="text-orange-500 text-xl">→</span>
                     </div>
                     <p class="mt-4 text-sm text-slate-600">Maintain customer handles, update profile details, and review every @mention tied to their orders.</p>
+                </a>
+                <a href="/passwords" class="group bg-white border border-slate-200 rounded-xl shadow-sm p-6 transition transform hover:-translate-y-1 hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-xs uppercase tracking-wider text-slate-500">Security</p>
+                            <h3 class="mt-2 text-2xl font-semibold text-slate-800 group-hover:text-orange-600">Password Manager</h3>
+                        </div>
+                        <span class="text-orange-500 text-xl">→</span>
+                    </div>
+                    <p class="mt-4 text-sm text-slate-600">Store service credentials in one place with quick copy actions for your team.</p>
                 </a>
             </div>
         </section>

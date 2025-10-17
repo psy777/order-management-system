@@ -16,11 +16,12 @@
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex h-16 items-center justify-between">
                 <div class="flex items-center space-x-10">
-                    <a href="/admin" id="nav-home-link" class="text-lg font-semibold tracking-wide">FireCoast OMS</a>
+                    <a href="/dashboard" id="nav-home-link" class="text-lg font-semibold tracking-wide">FireCoast OMS</a>
                     <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
                         <a href="/orders" class="hover:text-orange-300 transition">Orders</a>
                         <a href="/contacts" class="hover:text-orange-300 transition">Contacts</a>
                         <a href="/analytics" class="text-orange-300">Analytics</a>
+                        <a href="/passwords" class="hover:text-orange-300 transition">Password Manager</a>
                     </div>
                 </div>
                 <div class="flex items-center space-x-3 text-sm font-medium">
@@ -36,7 +37,7 @@
             if (brandLink) {
                 brandLink.addEventListener('click', (event) => {
                     event.preventDefault();
-                    window.location.href = '/admin';
+                    window.location.href = '/dashboard';
                 });
             }
 

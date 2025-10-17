@@ -13,11 +13,12 @@
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex h-16 items-center justify-between">
                 <div class="flex items-center space-x-10">
-                    <a href="/admin" id="nav-home-link" class="text-lg font-semibold tracking-wide">FireCoast OMS</a>
+                    <a href="/dashboard" id="nav-home-link" class="text-lg font-semibold tracking-wide">FireCoast OMS</a>
                     <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
                         <a href="/orders" class="hover:text-orange-300 transition">Orders</a>
                         <a href="/contacts" class="hover:text-orange-300 transition">Contacts</a>
                         <a href="/analytics" class="hover:text-orange-300 transition">Analytics</a>
+                        <a href="/passwords" class="hover:text-orange-300 transition">Password Manager</a>
                     </div>
                 </div>
                 <div class="flex items-center space-x-3 text-sm font-medium">
@@ -33,7 +34,7 @@
             if (brandLink) {
                 brandLink.addEventListener('click', (event) => {
                     event.preventDefault();
-                    window.location.href = '/admin';
+                    window.location.href = '/dashboard';
                 });
             }
 
@@ -63,7 +64,7 @@
     <main class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
         <header class="mb-8">
             <h1 class="text-3xl font-bold text-slate-800">Settings</h1>
-            <p class="mt-2 text-slate-500">Manage workspace defaults, email delivery, and data maintenance tasks.</p>
+            <p class="mt-2 text-slate-500">Manage workspace defaults, fine-tune your invoice presentation, and handle the operational tasks that keep FireCoast OMS running smoothly.</p>
         </header>
 
         <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mb-8">
@@ -104,6 +105,73 @@
                     </button>
                 </div>
             </form>
+        </section>
+
+        <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mb-8">
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <h2 class="text-xl font-semibold text-slate-800">Invoice Appearance</h2>
+                    <p class="text-sm text-slate-500">Set the defaults for every invoice sent from FireCoast OMS.</p>
+                </div>
+                <span id="invoiceStatus" class="text-sm text-slate-400"></span>
+            </div>
+            <div class="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <div class="lg:col-span-2">
+                    <form id="invoiceBrandingForm" class="space-y-6">
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-slate-600" for="invoiceBusinessName">Business Name</label>
+                                <input type="text" id="invoiceBusinessName" name="invoiceBusinessName" class="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="FireCoast OMS" />
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-600" for="invoiceAccentColor">Accent Color</label>
+                                <input type="color" id="invoiceAccentColor" name="invoiceAccentColor" class="mt-1 h-10 w-full rounded-md border border-slate-300 cursor-pointer" value="#f97316" />
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-600" for="invoiceBusinessDetails">Business Details</label>
+                            <textarea id="invoiceBusinessDetails" name="invoiceBusinessDetails" rows="4" class="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="123 Harbor Way&#10;Portland, OR 97203&#10;hello@firecoast.com"></textarea>
+                            <p class="mt-1 text-xs text-slate-500">These lines appear under your logo and business name.</p>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-3">
+                            <input type="file" id="invoiceLogoUpload" accept="image/*" class="hidden" />
+                            <button type="button" id="invoiceLogoButton" class="inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-semibold shadow bg-slate-900 text-white hover:bg-slate-700 transition-colors">
+                                Upload Logo
+                            </button>
+                            <button type="button" id="removeLogoButton" class="inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-semibold border border-slate-300 text-slate-600 hover:bg-slate-100 transition-colors">
+                                Remove Logo
+                            </button>
+                            <span class="text-xs text-slate-500">PNG or SVG recommended, 240×120px.</span>
+                        </div>
+                        <div class="flex justify-end">
+                            <button type="submit" class="inline-flex items-center px-4 py-2 bg-orange-600 text-white font-semibold rounded-md shadow-sm hover:bg-orange-700 transition-colors">
+                                Save Invoice Appearance
+                            </button>
+                        </div>
+                    </form>
+                </div>
+                <aside class="bg-slate-50 border border-slate-200 rounded-xl p-6 space-y-4">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Preview</p>
+                            <p id="previewBusinessName" class="mt-2 text-xl font-semibold text-slate-800">FireCoast OMS</p>
+                        </div>
+                        <div id="invoiceLogoPreview" class="w-16 h-16 bg-white border border-slate-200 rounded-md flex items-center justify-center overflow-hidden">
+                            <span class="text-xs text-slate-400">Logo</span>
+                        </div>
+                    </div>
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Accent</p>
+                        <div id="previewAccentSwatch" class="mt-2 h-2 rounded-full bg-orange-500"></div>
+                    </div>
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Business Details</p>
+                        <p id="previewBusinessDetails" class="mt-2 text-sm text-slate-600 whitespace-pre-line">123 Harbor Way
+Portland, OR 97203
+hello@firecoast.com</p>
+                    </div>
+                </aside>
+            </div>
         </section>
 
         <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mb-8">
@@ -202,11 +270,50 @@
             const databaseStatus = document.getElementById('databaseStatus');
             const timezoneSelect = document.getElementById('timezone');
             const importFileInput = document.getElementById('importFile');
+            const invoiceForm = document.getElementById('invoiceBrandingForm');
+            const invoiceStatus = document.getElementById('invoiceStatus');
+            const invoiceBusinessNameInput = document.getElementById('invoiceBusinessName');
+            const invoiceBusinessDetailsInput = document.getElementById('invoiceBusinessDetails');
+            const invoiceAccentInput = document.getElementById('invoiceAccentColor');
+            const invoiceLogoInput = document.getElementById('invoiceLogoUpload');
+            const invoiceLogoButton = document.getElementById('invoiceLogoButton');
+            const removeLogoButton = document.getElementById('removeLogoButton');
+            const previewName = document.getElementById('previewBusinessName');
+            const previewDetails = document.getElementById('previewBusinessDetails');
+            const previewSwatch = document.getElementById('previewAccentSwatch');
+            const logoPreview = document.getElementById('invoiceLogoPreview');
+            let currentLogoDataUrl = '';
 
             const setStatus = (node, message, tone = 'info') => {
                 if (!node) return;
                 node.textContent = message || '';
                 node.className = `text-sm ${tone === 'error' ? 'text-red-600' : tone === 'success' ? 'text-green-600' : 'text-slate-400'}`;
+            };
+
+            const sanitizeColor = (value) => {
+                if (typeof value !== 'string') return '#f97316';
+                const normalized = value.trim();
+                return /^#([0-9a-fA-F]{6})$/.test(normalized) ? normalized : '#f97316';
+            };
+
+            const updateInvoicePreview = () => {
+                if (previewName) {
+                    previewName.textContent = invoiceBusinessNameInput.value || 'FireCoast OMS';
+                }
+                if (previewDetails) {
+                    previewDetails.textContent = invoiceBusinessDetailsInput.value || '123 Harbor Way\nPortland, OR 97203\nhello@firecoast.com';
+                }
+                if (previewSwatch) {
+                    const color = sanitizeColor(invoiceAccentInput.value);
+                    previewSwatch.style.backgroundColor = color;
+                }
+                if (logoPreview) {
+                    if (currentLogoDataUrl) {
+                        logoPreview.innerHTML = `<img src="${currentLogoDataUrl}" alt="Invoice logo" class="w-full h-full object-contain" />`;
+                    } else {
+                        logoPreview.innerHTML = '<span class="text-xs text-slate-400">Logo</span>';
+                    }
+                }
             };
 
             const loadSettings = async () => {
@@ -223,6 +330,11 @@
                     document.getElementById('appPassword').value = data.app_password || '';
                     document.getElementById('emailCc').value = data.email_cc || '';
                     document.getElementById('emailBcc').value = data.email_bcc || '';
+                    invoiceBusinessNameInput.value = data.invoice_business_name || '';
+                    invoiceBusinessDetailsInput.value = data.invoice_business_details || '';
+                    invoiceAccentInput.value = sanitizeColor(data.invoice_brand_color);
+                    currentLogoDataUrl = data.invoice_logo_data_url || '';
+                    updateInvoicePreview();
                     if (data.timezone && timezoneSelect) {
                         timezoneSelect.value = data.timezone;
                     }
@@ -288,6 +400,83 @@
                     setStatus(emailStatus, 'Unable to save email settings.', 'error');
                 }
             });
+
+            if (invoiceBusinessNameInput) {
+                invoiceBusinessNameInput.addEventListener('input', updateInvoicePreview);
+            }
+            if (invoiceBusinessDetailsInput) {
+                invoiceBusinessDetailsInput.addEventListener('input', updateInvoicePreview);
+            }
+            if (invoiceAccentInput) {
+                invoiceAccentInput.addEventListener('input', () => {
+                    invoiceAccentInput.value = sanitizeColor(invoiceAccentInput.value);
+                    updateInvoicePreview();
+                });
+            }
+            if (invoiceLogoButton && invoiceLogoInput) {
+                invoiceLogoButton.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    invoiceLogoInput.click();
+                });
+                invoiceLogoInput.addEventListener('change', () => {
+                    const file = invoiceLogoInput.files?.[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                        currentLogoDataUrl = reader.result;
+                        updateInvoicePreview();
+                    };
+                    reader.readAsDataURL(file);
+                });
+            }
+            if (removeLogoButton) {
+                removeLogoButton.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    currentLogoDataUrl = '';
+                    if (invoiceLogoInput) {
+                        invoiceLogoInput.value = '';
+                    }
+                    updateInvoicePreview();
+                });
+            }
+
+            if (invoiceForm) {
+                invoiceForm.addEventListener('submit', async (event) => {
+                    event.preventDefault();
+                    setStatus(invoiceStatus, 'Saving…');
+                    try {
+                        const payload = {
+                            invoice_business_name: invoiceBusinessNameInput.value,
+                            invoice_business_details: invoiceBusinessDetailsInput.value,
+                            invoice_brand_color: sanitizeColor(invoiceAccentInput.value),
+                            invoice_logo_data_url: currentLogoDataUrl,
+                        };
+                        const response = await fetch('/api/settings/invoice', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload),
+                        });
+                        if (!response.ok) {
+                            throw new Error('Failed to save invoice branding');
+                        }
+                        const updated = await response.json();
+                        if (updated?.settings) {
+                            currentLogoDataUrl = updated.settings.invoice_logo_data_url || currentLogoDataUrl;
+                            window.fireCoastBranding = updated.settings;
+                            updateInvoicePreview();
+                        } else {
+                            window.fireCoastBranding = {
+                                ...(window.fireCoastBranding || {}),
+                                ...payload,
+                            };
+                        }
+                        setStatus(invoiceStatus, 'Invoice appearance saved.', 'success');
+                    } catch (error) {
+                        console.error(error);
+                        setStatus(invoiceStatus, 'Unable to save invoice appearance.', 'error');
+                    }
+                });
+            }
 
             document.getElementById('manageCustomers').addEventListener('click', () => {
                 window.location.href = '/contacts';
