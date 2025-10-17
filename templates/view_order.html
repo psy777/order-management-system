@@ -107,11 +107,11 @@
             };
         };
 
-        const normalizePhoneDigits = (value = '') => (value || '').replace(/\D/g, '').slice(0, 10);
+const normalizePhoneDigits = (value = '') => (value || '').replace(/\D/g, '').slice(0, 10);
 
-        const formatPhoneNumber = (value = '') => {
-            const digits = normalizePhoneDigits(value);
-            if (!digits) return '';
+const formatPhoneNumber = (value = '') => {
+    const digits = normalizePhoneDigits(value);
+    if (!digits) return '';
             if (digits.length < 4) {
                 const closing = digits.length === 3 ? ')' : '';
                 return `(${digits}${closing}`;
@@ -119,8 +119,53 @@
             if (digits.length < 7) {
                 return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
             }
-            return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)} ${digits.slice(6)}`;
-        };
+    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)} ${digits.slice(6)}`;
+};
+
+const LINE_ITEM_TYPES = {
+    product: { label: 'Product / Goods', quantityLabel: 'Units', priceLabel: 'Unit Price' },
+    service: { label: 'Service / Hours', quantityLabel: 'Hours', priceLabel: 'Hourly Rate' },
+    fee: { label: 'Fee / Surcharge', quantityLabel: 'Qty', priceLabel: 'Fee Amount' },
+    shipping: { label: 'Shipping', quantityLabel: 'Packages', priceLabel: 'Shipping Cost' },
+    discount: { label: 'Discount', quantityLabel: 'Qty', priceLabel: 'Discount Amount' },
+    package: { label: 'Package / Bundle', quantityLabel: 'Qty', priceLabel: 'Bundle Price' },
+    other: { label: 'Other', quantityLabel: 'Qty', priceLabel: 'Unit Price' },
+};
+
+const LEGACY_TYPE_MAP = {
+    cross: 'product',
+    display: 'product',
+};
+
+const normalizeLineItemType = (rawType) => {
+    const normalized = (rawType || '').toString().trim().toLowerCase();
+    if (LINE_ITEM_TYPES[normalized]) {
+        return normalized;
+    }
+    if (LEGACY_TYPE_MAP[normalized]) {
+        return LEGACY_TYPE_MAP[normalized];
+    }
+    if (!normalized) {
+        return 'product';
+    }
+    return 'other';
+};
+
+const getLineItemTypeMeta = (type) => {
+    const key = normalizeLineItemType(type);
+    return LINE_ITEM_TYPES[key] || LINE_ITEM_TYPES.other;
+};
+
+const sanitizePlaceholderValue = (value) => {
+    if (!value) return '';
+    const trimmed = value.toString().trim();
+    if (!trimmed) return '';
+    const lowered = trimmed.toLowerCase();
+    if (lowered === '[no contact found]' || lowered === 'no contact found') {
+        return '';
+    }
+    return trimmed;
+};
 
 const ContactMentionTextarea = ({ label, placeholder, value, onChange, disabled = false, rows = 3, contacts = [] }) => {
     const { useState, useRef, useEffect, useMemo } = React;
@@ -309,8 +354,8 @@ const getContactDisplayName = (contact) => {
     if (!contact) {
         return 'Unnamed contact';
     }
-    const name = (contact.contactName || '').trim();
-    const company = (contact.companyName || '').trim();
+    const name = sanitizePlaceholderValue(contact.contactName);
+    const company = sanitizePlaceholderValue(contact.companyName);
     const email = (contact.email || '').trim();
     const handle = (contact.handle || '').trim();
     return name || company || email || (handle ? `@${handle}` : 'Unnamed contact');
@@ -543,18 +588,22 @@ const formatContactAddress = (address, city, state, zip) => {
             let tableStartY = Math.max(leftColumnY, rightColumnY, headerY + 20) + 5;
 
             const safeLineItems = Array.isArray(safeOrder.lineItems) ? safeOrder.lineItems : [];
-            const tableHead = ["Item", "Style", "Quantity", "Unit Price", "Total"];
+            const tableHead = ["Item", "Type", "Style", "Units", "Rate", "Total"];
             const tableBody = safeLineItems.map((item) => {
                 const itemLookup = item?.item ? safeItems[item.item] : null;
                 const itemName = (itemLookup && itemLookup.name) || item?.item || 'Item';
                 const quantity = Number(item?.quantity) || 0;
                 const unitPriceCents = Number(item?.price) || 0;
+                const meta = getLineItemTypeMeta(item?.type || itemLookup?.type);
+                const quantityLabel = meta.quantityLabel ? ` ${meta.quantityLabel}` : '';
+                const priceLabel = meta.priceLabel && meta.priceLabel !== 'Unit Price' ? ` (${meta.priceLabel})` : '';
                 const lineTotalCents = quantity * unitPriceCents;
                 return [
                     itemName,
+                    meta.label,
                     item?.style || '',
-                    String(quantity),
-                    `$${(unitPriceCents / 100).toFixed(2)}`,
+                    `${quantity}${quantityLabel}`,
+                    `$${(unitPriceCents / 100).toFixed(2)}${priceLabel}`,
                     `$${(lineTotalCents / 100).toFixed(2)}`
                 ];
             });
@@ -671,7 +720,14 @@ const formatContactAddress = (address, city, state, zip) => {
                         throw new Error('Order not found');
                     }
                     const data = await response.json();
-                    setOrder(data);
+                    const normalizedOrder = { ...data };
+                    if (Array.isArray(data?.lineItems)) {
+                        normalizedOrder.lineItems = data.lineItems.map(item => ({
+                            ...item,
+                            type: normalizeLineItemType(item?.type),
+                        }));
+                    }
+                    setOrder(normalizedOrder);
                 } catch (error) {
                     console.error("Failed to fetch order:", error);
                 } finally {
@@ -700,7 +756,10 @@ const formatContactAddress = (address, city, state, zip) => {
                             if (Array.isArray(itemsData)) {
                                 itemsData.forEach(item => {
                                     if (item && item.item_code) {
-                                        nextIndex[item.item_code] = item;
+                                        nextIndex[item.item_code] = {
+                                            ...item,
+                                            type: normalizeLineItemType(item.type),
+                                        };
                                     }
                                 });
                             }
@@ -750,7 +809,7 @@ const formatContactAddress = (address, city, state, zip) => {
             const orderTitle = order.title || order.display_id || order.id;
             const primaryContact = order.contactInfo || {};
             const contactDisplayName = getContactDisplayName(primaryContact);
-            const companyName = (primaryContact.companyName || '').trim();
+            const companyName = sanitizePlaceholderValue(primaryContact.companyName);
             const showCompanyLine = Boolean(companyName && companyName !== contactDisplayName);
             const contactHandle = (primaryContact.handle || '').trim();
             const formattedPhone = formatPhoneNumber(primaryContact.phone);
@@ -875,22 +934,40 @@ const formatContactAddress = (address, city, state, zip) => {
                                     <thead className="text-xs text-slate-700 uppercase bg-slate-100">
                                         <tr>
                                             <th scope="col" className="px-4 py-3">Item</th>
+                                            <th scope="col" className="px-4 py-3">Type</th>
                                             <th scope="col" className="px-4 py-3">Style</th>
-                                            <th scope="col" className="px-4 py-3 text-center">Qty</th>
-                                            <th scope="col" className="px-4 py-3 text-right">Unit Price</th>
+                                            <th scope="col" className="px-4 py-3 text-center">Units</th>
+                                            <th scope="col" className="px-4 py-3 text-right">Rate</th>
                                             <th scope="col" className="px-4 py-3 text-right">Total</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {order.lineItems.map((item, index) => (
-                                            <tr key={index} className="border-b align-middle">
-                                                <td className="px-4 py-2">{itemsIndex[item.item]?.name || item.item}</td>
-                                                <td className="px-4 py-2">{item.style || '—'}</td>
-                                                <td className="px-4 py-2 text-center">{item.quantity}</td>
-                                                <td className="px-4 py-2 text-right">${(item.price / 100).toFixed(2)}</td>
-                                                <td className="px-4 py-2 text-right font-medium text-slate-800">${((item.quantity * item.price) / 100).toFixed(2)}</td>
-                                            </tr>
-                                        ))}
+                                        {order.lineItems.map((item, index) => {
+                                            const lookup = itemsIndex[item.item] || {};
+                                            const meta = getLineItemTypeMeta(item.type || lookup.type);
+                                            const quantityLabel = meta.quantityLabel ? ` ${meta.quantityLabel}` : '';
+                                            const priceLabel = meta.priceLabel && meta.priceLabel !== 'Unit Price' ? meta.priceLabel : '';
+                                            return (
+                                                <tr key={index} className="border-b align-middle">
+                                                    <td className="px-4 py-2">{lookup.name || item.item}</td>
+                                                    <td className="px-4 py-2">{meta.label}</td>
+                                                    <td className="px-4 py-2">{item.style || '—'}</td>
+                                                    <td className="px-4 py-2 text-center">
+                                                        <div className="flex flex-col items-center gap-1">
+                                                            <span>{item.quantity}</span>
+                                                            {quantityLabel && <span className="text-xs text-slate-400">{quantityLabel.trim()}</span>}
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-4 py-2 text-right">
+                                                        <div className="flex flex-col items-end gap-1">
+                                                            <span>${(item.price / 100).toFixed(2)}</span>
+                                                            {priceLabel && <span className="text-xs text-slate-400">{priceLabel}</span>}
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-4 py-2 text-right font-medium text-slate-800">${((item.quantity * item.price) / 100).toFixed(2)}</td>
+                                                </tr>
+                                            );
+                                        })}
                                     </tbody>
                                 </table>
                             </div>

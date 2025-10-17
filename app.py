@@ -28,6 +28,18 @@ from flask import Flask, jsonify, render_template, request, send_from_directory,
 from shipcostestimate import calculate_shipping_cost_for_order
 from database import get_db_connection, init_db
 
+LINE_ITEM_TYPE_WEIGHT_DEFAULTS = {
+    'product': 5,
+    'package': 80,
+    'service': 0,
+    'fee': 0,
+    'shipping': 0,
+    'discount': 0,
+    'other': 5,
+    'cross': 5,
+    'display': 80,
+}
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -1369,10 +1381,61 @@ def calculate_shipping_estimate_endpoint():
     if not dest_zip_str or not isinstance(dest_zip_str,str) or not re.fullmatch(r'\d{5}',dest_zip_str.strip()): return jsonify({"message":"Valid 5-digit ZIP required."}),400
     dest_zip=dest_zip_str.strip(); total_weight_oz=0
     if not line_items: return jsonify({"estimatedShipping":0.0}),200
-    for item in line_items:
-        qty,item_type=item.get('quantity',0),item.get('type')
-        if item_type=='cross': total_weight_oz+=qty*5
-        elif item_type=='display': total_weight_oz+=qty*80
+
+    conn = get_db_connection(); cursor = conn.cursor()
+
+    def resolve_item_weight(item_code, fallback_type):
+        weight = None
+        if item_code:
+            cursor.execute("SELECT weight_oz, type FROM items WHERE item_code=?", (item_code,))
+            row = cursor.fetchone()
+            if row:
+                db_weight = row['weight_oz']
+                if db_weight is not None:
+                    try:
+                        return max(float(db_weight), 0.0)
+                    except (TypeError, ValueError):
+                        pass
+                fallback_type = (row['type'] or fallback_type or '').lower()
+                weight = LINE_ITEM_TYPE_WEIGHT_DEFAULTS.get(fallback_type, LINE_ITEM_TYPE_WEIGHT_DEFAULTS['product'])
+        if weight is None:
+            normalized = (fallback_type or '').lower()
+            weight = LINE_ITEM_TYPE_WEIGHT_DEFAULTS.get(normalized, LINE_ITEM_TYPE_WEIGHT_DEFAULTS['product'])
+        return weight
+
+    try:
+        for item in line_items:
+            qty_raw = item.get('quantity', 0)
+            try:
+                qty = float(qty_raw)
+            except (TypeError, ValueError):
+                qty = 0
+            if qty <= 0:
+                continue
+
+            package_code = item.get('packageCode') or item.get('package_code')
+            if package_code:
+                cursor.execute("SELECT item_code, quantity FROM package_items WHERE package_id=?", (package_code,))
+                for pkg_row in cursor.fetchall():
+                    pkg_item_code = pkg_row['item_code']
+                    pkg_qty_raw = pkg_row['quantity']
+                    try:
+                        pkg_qty = float(pkg_qty_raw)
+                    except (TypeError, ValueError):
+                        pkg_qty = 0
+                    if pkg_qty <= 0:
+                        continue
+                    weight_per_unit = resolve_item_weight(pkg_item_code, 'product')
+                    total_weight_oz += qty * pkg_qty * weight_per_unit
+                continue
+
+            item_code = item.get('item')
+            fallback_type = item.get('type')
+            weight_per_unit = resolve_item_weight(item_code, fallback_type)
+            total_weight_oz += qty * weight_per_unit
+    finally:
+        conn.close()
+
     if total_weight_oz<=0: return jsonify({"estimatedShipping":0.0}),200
     cost=calculate_shipping_cost_for_order(origin_zip,dest_zip,total_weight_oz/16.0)
     if cost is not None: return jsonify({"estimatedShipping":round(cost,2)}),200

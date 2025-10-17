@@ -123,6 +123,53 @@ const formatPhoneNumber = (value = '') => {
     return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)} ${digits.slice(6)}`;
 };
 
+const LINE_ITEM_TYPES = {
+    product: { label: 'Product / Goods', quantityLabel: 'Units', priceLabel: 'Unit Price' },
+    service: { label: 'Service / Hours', quantityLabel: 'Hours', priceLabel: 'Hourly Rate' },
+    fee: { label: 'Fee / Surcharge', quantityLabel: 'Qty', priceLabel: 'Fee Amount' },
+    shipping: { label: 'Shipping', quantityLabel: 'Packages', priceLabel: 'Shipping Cost' },
+    discount: { label: 'Discount', quantityLabel: 'Qty', priceLabel: 'Discount Amount' },
+    package: { label: 'Package / Bundle', quantityLabel: 'Qty', priceLabel: 'Bundle Price' },
+    other: { label: 'Other', quantityLabel: 'Qty', priceLabel: 'Unit Price' },
+};
+
+const LEGACY_TYPE_MAP = {
+    cross: 'product',
+    display: 'product',
+};
+
+const normalizeLineItemType = (rawType) => {
+    const normalized = (rawType || '').toString().trim().toLowerCase();
+    if (LINE_ITEM_TYPES[normalized]) {
+        return normalized;
+    }
+    if (LEGACY_TYPE_MAP[normalized]) {
+        return LEGACY_TYPE_MAP[normalized];
+    }
+    if (!normalized) {
+        return 'product';
+    }
+    return 'other';
+};
+
+const getLineItemTypeMeta = (type) => {
+    const key = normalizeLineItemType(type);
+    return LINE_ITEM_TYPES[key] || LINE_ITEM_TYPES.other;
+};
+
+const LINE_ITEM_TYPE_OPTIONS = ['product', 'service', 'fee', 'shipping', 'discount', 'other'];
+
+const sanitizePlaceholderValue = (value) => {
+    if (!value) return '';
+    const trimmed = value.toString().trim();
+    if (!trimmed) return '';
+    const lowered = trimmed.toLowerCase();
+    if (lowered === '[no contact found]' || lowered === 'no contact found') {
+        return '';
+    }
+    return trimmed;
+};
+
 // --- SHARED HELPER COMPONENTS & ICONS ---
 const Input = ({ label, placeholder, value, onChange, type = "text", disabled = false, onFocus, onBlur }) => (
     <div><label className="block text-sm font-medium text-slate-600">{label}</label><input type={type} placeholder={placeholder} value={value} onChange={onChange} disabled={disabled} onFocus={onFocus} onBlur={onBlur} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm disabled:bg-slate-100 disabled:text-slate-500" /></div>
@@ -517,10 +564,19 @@ const OrderLogsSection = ({ orderId, canEdit, allContacts = [], onContactsChange
 };
 
 
-const PriceInput = ({ value, onChange, disabled = false }) => {
+const PriceInput = ({ value, onChange, disabled = false, ariaLabel }) => {
     const handleChange = (e) => { const digits = e.target.value.replace(/\D/g, ''); onChange(Number(digits)); };
     const formattedValue = (value / 100).toFixed(2);
-    return (<input type="text" value={`$${formattedValue}`} onChange={handleChange} disabled={disabled} className="w-24 sm:w-28 text-right bg-white border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm p-2 disabled:bg-slate-100 disabled:text-slate-500" />);
+    return (
+        <input
+            type="text"
+            value={`$${formattedValue}`}
+            onChange={handleChange}
+            disabled={disabled}
+            aria-label={ariaLabel}
+            className="w-24 sm:w-28 text-right bg-white border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm p-2 disabled:bg-slate-100 disabled:text-slate-500"
+        />
+    );
 };
 
 const generateInvoicePdf = (order, allItems, action = 'save', brandingOverride = {}) => {
@@ -655,18 +711,22 @@ const generateInvoicePdf = (order, allItems, action = 'save', brandingOverride =
     let tableStartY = Math.max(leftColumnY, rightColumnY, headerY + 20) + 5;
 
     const safeLineItems = Array.isArray(safeOrder.lineItems) ? safeOrder.lineItems : [];
-    const tableHead = ["Item", "Style", "Quantity", "Unit Price", "Total"];
+    const tableHead = ["Item", "Type", "Style", "Units", "Rate", "Total"];
     const tableBody = safeLineItems.map((item) => {
         const itemLookup = item?.item ? safeItems[item.item] : null;
         const itemName = (itemLookup && itemLookup.name) || item?.item || 'Item';
         const quantity = Number(item?.quantity) || 0;
         const unitPriceCents = Number(item?.price) || 0;
+        const meta = getLineItemTypeMeta(item?.type || itemLookup?.type);
+        const quantityLabel = meta.quantityLabel ? ` ${meta.quantityLabel}` : '';
+        const priceLabel = meta.priceLabel && meta.priceLabel !== 'Unit Price' ? ` (${meta.priceLabel})` : '';
         const lineTotalCents = quantity * unitPriceCents;
         return [
             itemName,
+            meta.label,
             item?.style || '',
-            String(quantity),
-            `$${(unitPriceCents / 100).toFixed(2)}`,
+            `${quantity}${quantityLabel}`,
+            `$${(unitPriceCents / 100).toFixed(2)}${priceLabel}`,
             `$${(lineTotalCents / 100).toFixed(2)}`
         ];
     });
@@ -1281,8 +1341,8 @@ const getContactDisplayName = (contact) => {
     if (!contact) {
         return 'Unnamed contact';
     }
-    const name = contact.contactName && contact.contactName.trim();
-    const company = contact.companyName && contact.companyName.trim();
+    const name = sanitizePlaceholderValue(contact.contactName);
+    const company = sanitizePlaceholderValue(contact.companyName);
     const email = contact.email && contact.email.trim();
     const handle = contact.handle && contact.handle.trim();
     return name || company || email || (handle ? `@${handle}` : 'Unnamed contact');
@@ -1307,13 +1367,14 @@ const ContactSummaryCard = ({ contact }) => {
     }
 
     const phoneDisplay = formatPhoneNumber(contact.phone);
+    const companyDisplay = sanitizePlaceholderValue(contact.companyName);
 
     return (
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
             <div>
                 <p className="text-lg font-semibold text-slate-800">{getContactDisplayName(contact)}</p>
-                {contact.companyName && contact.companyName.trim() && (
-                    <p className="text-sm text-slate-500">{contact.companyName}</p>
+                {companyDisplay && (
+                    <p className="text-sm text-slate-500">{companyDisplay}</p>
                 )}
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm text-slate-600">
@@ -1561,7 +1622,7 @@ const Dashboard = ({ orders, navigateTo, viewOrder, allContacts, allSelectableIt
                                         }, 150);
                                     }}
                                     placeholder="Search Orders"
-                                    className="block w-full rounded-md border border-slate-300 px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 appearance-none"
+                                    className="block w-full rounded-md border-2 border-orange-400 bg-white px-3 py-2 pr-9 text-sm text-slate-700 placeholder-slate-400 shadow-sm transition focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
                                 />
                                 {isSearching && (
                                     <span className="absolute inset-y-0 right-3 flex items-center">
@@ -1697,7 +1758,12 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
             shippingCity: incomingOrder.shippingCity || '',
             shippingState: incomingOrder.shippingState || '',
             shippingZipCode: incomingOrder.shippingZipCode || '',
-            lineItems: incomingOrder.lineItems || [],
+            lineItems: Array.isArray(incomingOrder.lineItems)
+                ? incomingOrder.lineItems.map(item => ({
+                    ...item,
+                    type: normalizeLineItemType(item?.type || item?.item_type),
+                }))
+                : [],
             notes: incomingOrder.notes || '',
             statusHistory: incomingOrder.statusHistory || defaultOrderState.statusHistory,
             status: incomingOrder.status || 'Draft',
@@ -1932,7 +1998,7 @@ const unpackPackage = (id, pkgCode) => {
       id:       nextId++,
       item:     itemCode,
       style:    (info.styles && info.styles[0]) || '',
-      type:     selectableInfo.type || 'cross',
+      type:     normalizeLineItemType(selectableInfo.type || info.type),
       quantity: quantity,
       price:    (info.price || 0),
       packageCode: pkgCode,
@@ -1958,7 +2024,10 @@ const unpackPackage = (id, pkgCode) => {
                  if (field === 'item' && itemData[value]) {
                      updatedItem.style = itemData[value].styles?.[0] || '';
                      updatedItem.price = (itemData[value].price || 0);
-                     updatedItem.type = allSelectableItems[value]?.type || 'cross';
+                     updatedItem.type = normalizeLineItemType(allSelectableItems[value]?.type || itemData[value].type);
+                 }
+                 if (field === 'type') {
+                     updatedItem.type = normalizeLineItemType(value);
                  }
                  return updatedItem;
              })}));
@@ -1973,18 +2042,26 @@ const unpackPackage = (id, pkgCode) => {
             if (allSelectableItems[itemCode].type === 'package') {
                 unpackPackage(nextId++, itemCode);
             } else {
-                setFormData(prev => ({ ...prev, lineItems: [...prev.lineItems, { id: nextId++, item: itemCode, style: itemData[itemCode]?.styles[0] || '', type: allSelectableItems[itemCode]?.type || 'cross', quantity: 1, price: (itemData[itemCode]?.price || 0), packageCode: null }] })); 
+                setFormData(prev => ({ ...prev, lineItems: [...prev.lineItems, {
+                    id: nextId++,
+                    item: itemCode,
+                    style: itemData[itemCode]?.styles[0] || '',
+                    type: normalizeLineItemType(allSelectableItems[itemCode]?.type || itemData[itemCode]?.type),
+                    quantity: 1,
+                    price: (itemData[itemCode]?.price || 0),
+                    packageCode: null
+                }] }));
             }
             setScanInput('');
-        } else { 
-            console.log("Item code not found:", itemCode); 
+        } else {
+            console.log("Item code not found:", itemCode);
         }
         if (scanInputRef.current) {
             scanInputRef.current.focus();
         }
     };
     
-    const addEmptyLineItem = () => { setFormData(prev => ({ ...prev, lineItems: [...prev.lineItems, { id: nextId++, item: '-- Select Item --', style: '', type: '', quantity: 1, price: 0 }] })); };
+    const addEmptyLineItem = () => { setFormData(prev => ({ ...prev, lineItems: [...prev.lineItems, { id: nextId++, item: '-- Select Item --', style: '', type: 'product', quantity: 1, price: 0, packageCode: null }] })); };
     const removeLineItem = (id) => { setFormData(prev => ({ ...prev, lineItems: prev.lineItems.filter(item => item.id !== id) })); };
 
     const orderTotals = useMemo(() => {
@@ -2028,15 +2105,19 @@ const unpackPackage = (id, pkgCode) => {
         
         // Filter out unselected line items before saving
         const filteredLineItems = formData.lineItems.filter(item => item.item !== '-- Select Item --');
+        const normalizedLineItems = filteredLineItems.map(item => ({
+            ...item,
+            type: normalizeLineItemType(item.type || allSelectableItems[item.item]?.type),
+        }));
 
         // Recalculate totals based on filtered items
-        const subtotal = filteredLineItems.reduce((acc, item) => acc + (item.quantity * item.price), 0);
+        const subtotal = normalizedLineItems.reduce((acc, item) => acc + (item.quantity * item.price), 0);
         const estimatedShippingInCents = Math.round((parseFloat(formData.estimatedShipping) || 0) * 100);
         const finalTotal = subtotal + estimatedShippingInCents;
 
         return {
             ...formData,
-            lineItems: filteredLineItems, // Use the filtered list
+            lineItems: normalizedLineItems, // Use the filtered list
             id: formData.id || null,
             date: isNewOrder ? (formData.date || new Date().toISOString()) : formData.date,
             status: finalStatus,
@@ -2301,18 +2382,21 @@ const unpackPackage = (id, pkgCode) => {
                                         {filteredPrimaryContacts.length === 0 ? (
                                             <p className="text-sm text-slate-500">No contacts match "{primarySearchTerm}".</p>
                                         ) : (
-                                            filteredPrimaryContacts.map(contact => (
-                                                <button
-                                                    key={contact.id}
-                                                    type="button"
-                                                    onClick={() => handlePrimaryContactSelect(contact)}
-                                                    className="w-full rounded-md border border-slate-200 px-3 py-2 text-left hover:border-orange-400 hover:bg-orange-50"
-                                                >
-                                                    <p className="font-semibold text-slate-800">{getContactDisplayName(contact)}</p>
-                                                    {contact.companyName && <p className="text-sm text-slate-500">{contact.companyName}</p>}
-                                                    {contact.email && <p className="text-xs text-slate-400">{contact.email}</p>}
-                                                </button>
-                                            ))
+                                            filteredPrimaryContacts.map(contact => {
+                                                const companyLine = sanitizePlaceholderValue(contact.companyName);
+                                                return (
+                                                    <button
+                                                        key={contact.id}
+                                                        type="button"
+                                                        onClick={() => handlePrimaryContactSelect(contact)}
+                                                        className="w-full rounded-md border border-slate-200 px-3 py-2 text-left hover:border-orange-400 hover:bg-orange-50"
+                                                    >
+                                                        <p className="font-semibold text-slate-800">{getContactDisplayName(contact)}</p>
+                                                        {companyLine && <p className="text-sm text-slate-500">{companyLine}</p>}
+                                                        {contact.email && <p className="text-xs text-slate-400">{contact.email}</p>}
+                                                    </button>
+                                                );
+                                            })
                                         )}
                                     </div>
                                 </div>
@@ -2378,7 +2462,7 @@ const unpackPackage = (id, pkgCode) => {
 
                     <OrderLogsSection orderId={formData.id} canEdit={canEdit} allContacts={allContacts} onContactsChanged={refreshMentionedContacts} />
 
-                    <div className="bg-white rounded-lg shadow-sm border border-slate-200"><div className="p-6 border-b"><h2 className="text-xl font-semibold text-slate-700 mb-4">Line Items</h2>{canEdit && (<div className="flex gap-2"><input ref={scanInputRef} type="text" value={scanInput} onChange={e => setScanInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { handleScanAddItem(e); } }} placeholder="Scan or Enter Item Code" className="flex-grow block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm" /><button onClick={handleScanAddItem} className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors">Add</button></div>)}</div><div className="overflow-x-auto"><table className="w-full text-sm text-left text-slate-500"><thead className="text-xs text-slate-700 uppercase bg-slate-100"><tr><th scope="col" className="px-4 py-3">Item</th><th scope="col" className="px-4 py-3">Style</th><th scope="col" className="px-4 py-3 text-center">Qty</th><th scope="col" className="px-4 py-3 text-right">Unit Price</th><th scope="col" className="px-4 py-3 text-right">Total</th>{canEdit && <th scope="col" className="px-2 py-3"></th>}</tr></thead><tbody>{formData.lineItems.map(item => (<tr key={item.id} className="border-b align-middle"><td className="px-4 py-2"><Select value={item.item} onChange={e => handleLineItemChange(item.id, 'item', e.target.value)} disabled={!canEdit}><option value="-- Select Item --">-- Select Item --</option>{Object.entries(allSelectableItems).map(([id, details]) => (<option key={id} value={id}>{details.name}</option>))}</Select></td><td className="px-4 py-2"><Select value={item.style} onChange={e => handleLineItemChange(item.id, 'style', e.target.value)} disabled={!canEdit}>{(allSelectableItems[item.item]?.styles || []).map(name => (<option key={name} value={name}>{name}</option>))}</Select></td><td className="px-4 py-2"><input type="number" min="0" value={item.quantity} onChange={e => handleLineItemChange(item.id, 'quantity', Number(e.target.value))} className="w-16 sm:w-20 text-center bg-white border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm p-2" disabled={!canEdit} /></td><td className="px-4 py-2 text-right"><PriceInput value={item.price} onChange={newPrice => handleLineItemChange(item.id, 'price', newPrice)} disabled={!canEdit}/></td><td className="px-4 py-2 text-right font-medium text-slate-800">${((item.quantity * item.price) / 100).toFixed(2)}</td>{canEdit && <td className="px-2 py-2 text-center"><button onClick={() => removeLineItem(item.id)} className="text-slate-400 hover:text-red-600 p-1 rounded-full hover:bg-red-100 transition-colors"><TrashIcon /></button></td>}</tr>))}</tbody></table></div>{canEdit && <div className="p-6 border-t"><button onClick={addEmptyLineItem} className="w-full text-center px-4 py-2 bg-orange-100 text-orange-700 font-semibold rounded-md hover:bg-orange-200 transition-colors">+ Add Line Item</button></div>}</div>
+                    <div className="bg-white rounded-lg shadow-sm border border-slate-200"><div className="p-6 border-b"><h2 className="text-xl font-semibold text-slate-700 mb-4">Line Items</h2>{canEdit && (<div className="flex gap-2"><input ref={scanInputRef} type="text" value={scanInput} onChange={e => setScanInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { handleScanAddItem(e); } }} placeholder="Scan or Enter Item Code" className="flex-grow block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm" /><button onClick={handleScanAddItem} className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors">Add</button></div>)}</div><div className="overflow-x-auto"><table className="w-full text-sm text-left text-slate-500"><thead className="text-xs text-slate-700 uppercase bg-slate-100"><tr><th scope="col" className="px-4 py-3">Item</th><th scope="col" className="px-4 py-3">Type</th><th scope="col" className="px-4 py-3">Style</th><th scope="col" className="px-4 py-3 text-center">Units</th><th scope="col" className="px-4 py-3 text-right">Rate</th><th scope="col" className="px-4 py-3 text-right">Total</th>{canEdit && <th scope="col" className="px-2 py-3"></th>}</tr></thead><tbody>{formData.lineItems.map(item => { const selectable = allSelectableItems[item.item] || {}; const normalizedType = normalizeLineItemType(item.type || selectable.type); const meta = getLineItemTypeMeta(normalizedType); const styleOptions = (selectable.styles || []).filter(Boolean); const hasStyles = styleOptions.length > 0; const isPackage = normalizedType === 'package'; const displayName = selectable.name || item.item || 'Line Item'; return (<tr key={item.id} className="border-b align-middle"><td className="px-4 py-2"><Select value={item.item} onChange={e => handleLineItemChange(item.id, 'item', e.target.value)} disabled={!canEdit}><option value="-- Select Item --">-- Select Item --</option>{Object.entries(allSelectableItems).map(([id, details]) => (<option key={id} value={id}>{details.name}</option>))}</Select></td><td className="px-4 py-2"><Select value={normalizedType} onChange={e => handleLineItemChange(item.id, 'type', e.target.value)} disabled={!canEdit || isPackage}>{LINE_ITEM_TYPE_OPTIONS.map(option => (<option key={option} value={option}>{LINE_ITEM_TYPES[option].label}</option>))}{isPackage && <option value="package">{LINE_ITEM_TYPES.package.label}</option>}</Select></td><td className="px-4 py-2">{hasStyles ? (<Select value={item.style} onChange={e => handleLineItemChange(item.id, 'style', e.target.value)} disabled={!canEdit}>{styleOptions.map(name => (<option key={name} value={name}>{name}</option>))}</Select>) : (<span className="text-sm text-slate-400">{item.style || 'No variations'}</span>)}</td><td className="px-4 py-2 text-center"><div className="flex flex-col items-center gap-1"><input type="number" min="0" value={item.quantity} onChange={e => handleLineItemChange(item.id, 'quantity', Number(e.target.value))} className="w-16 sm:w-20 text-center bg-white border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm p-2" disabled={!canEdit} /><span className="text-xs text-slate-400">{meta.quantityLabel}</span></div></td><td className="px-4 py-2 text-right"><div className="flex flex-col items-end gap-1"><PriceInput value={item.price} onChange={newPrice => handleLineItemChange(item.id, 'price', newPrice)} disabled={!canEdit} ariaLabel={`${meta.priceLabel} for ${displayName}`} /><span className="text-xs text-slate-400">{meta.priceLabel}</span></div></td><td className="px-4 py-2 text-right font-medium text-slate-800">${((item.quantity * item.price) / 100).toFixed(2)}</td>{canEdit && <td className="px-2 py-2 text-center"><button onClick={() => removeLineItem(item.id)} className="text-slate-400 hover:text-red-600 p-1 rounded-full hover:bg-red-100 transition-colors"><TrashIcon /></button></td>}</tr>); })}</tbody></table></div>{canEdit && <div className="p-6 border-t"><button onClick={addEmptyLineItem} className="w-full text-center px-4 py-2 bg-orange-100 text-orange-700 font-semibold rounded-md hover:bg-orange-200 transition-colors">+ Add Line Item</button></div>}</div>
                 </div>
                 <div className="lg:col-span-1 space-y-6">
                     <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200"><h2 className="text-xl font-semibold text-slate-700 border-b pb-3 mb-4">Order Metadata</h2><div className="space-y-4"><Input label="Estimated Shipping Date" type="date" value={formData.estimatedShippingDate} onChange={e => setFormData(p=>({...p, estimatedShippingDate: e.target.value}))} disabled={!canEdit} /><div><label className="block text-sm font-medium text-slate-600 mb-1">Priority Level</label><Select value={formData.priorityLevel} onChange={e => setFormData(p=>({...p, priorityLevel: e.target.value}))} disabled={!canEdit}><option value="">No priority set</option><option value="High">High</option><option value="Standard">Standard</option><option value="Low">Low</option></Select></div><div><label className="block text-sm font-medium text-slate-600 mb-1">Fulfillment Channel</label><Select value={formData.fulfillmentChannel} onChange={e => setFormData(p=>({...p, fulfillmentChannel: e.target.value}))} disabled={!canEdit}><option value="">Not specified</option><option value="In-House">In-House</option><option value="Dropship">Dropship</option><option value="Third-Party">Third-Party</option><option value="Pickup">Customer Pickup</option></Select></div><Input label="Customer Reference" placeholder="Optional PO, campaign, or reference" value={formData.customerReference} onChange={e => setFormData(p=>({...p, customerReference: e.target.value}))} disabled={!canEdit} /></div></div>
@@ -2540,18 +2624,32 @@ const App = () => {
 
             // Transform itemsDataArray to an object keyed by item_code
             const itemsDataById = itemsDataArray.reduce((acc, item) => {
-                acc[item.item_code] = item; // Use item_code as the key
+                if (!item || !item.item_code) {
+                    return acc;
+                }
+                const normalizedType = normalizeLineItemType(item.type);
+                acc[item.item_code] = {
+                    ...item,
+                    type: normalizedType,
+                };
                 return acc;
             }, {});
 
             setOrders(ordersData);
             setAllContacts(contactsData);
             // Combine items (now itemsDataById) and packages for the dropdown
-            const combinedSelectableItems = { ...itemsDataById }; // Spread the object
+            const combinedSelectableItems = Object.keys(itemsDataById).reduce((acc, key) => {
+                const entry = itemsDataById[key];
+                acc[key] = {
+                    ...entry,
+                    type: normalizeLineItemType(entry.type),
+                };
+                return acc;
+            }, {});
             for (const pkgId in packagesData) {
-                combinedSelectableItems[pkgId] = { 
-                    name: packagesData[pkgId].name, 
-                    type: packagesData[pkgId].type, 
+                combinedSelectableItems[pkgId] = {
+                    name: packagesData[pkgId].name,
+                    type: normalizeLineItemType(packagesData[pkgId].type || 'package'),
                     styles: [] // Packages don't have styles in the same way items do
                 };
             }
