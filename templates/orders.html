@@ -925,15 +925,6 @@ const tableHead = ["Name", "Description", "Units", "Unit Price", "Total"];
         summaryY += wrappedNotes.length * 4;
     }
 
-    if (invoiceFooter) {
-        summaryY += 7;
-        doc.setFontSize(9);
-        const wrappedFooter = doc.splitTextToSize(invoiceFooter, 180);
-        doc.text(wrappedFooter, 14, summaryY);
-        summaryY += wrappedFooter.length * 4;
-        doc.setFontSize(10);
-    }
-
     summaryY += 15;
     if (summaryY > 260) {
         doc.addPage();
@@ -964,6 +955,18 @@ const tableHead = ["Name", "Description", "Units", "Unit Price", "Total"];
         }
     } else {
         doc.line(50, summaryY, 120, summaryY);
+    }
+
+    let footerY = summaryY + 20;
+    if (invoiceFooter) {
+        if (footerY > 260) {
+            doc.addPage();
+            footerY = 20;
+        }
+        doc.setFontSize(9);
+        const wrappedFooter = doc.splitTextToSize(invoiceFooter, 180);
+        doc.text(wrappedFooter, 14, footerY);
+        doc.setFontSize(10);
     }
 
     if (action === 'save') {
