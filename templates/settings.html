@@ -290,18 +290,31 @@ hello@firecoast.com</p>
                 node.className = `text-sm ${tone === 'error' ? 'text-red-600' : tone === 'success' ? 'text-green-600' : 'text-slate-400'}`;
             };
 
-            const sanitizeColor = (value) => {
-                if (typeof value !== 'string') return '#f97316';
+            const sanitizeColor = (value, fallback = '#f97316') => {
+                if (typeof value !== 'string') return fallback;
                 const normalized = value.trim();
-                return /^#([0-9a-fA-F]{6})$/.test(normalized) ? normalized : '#f97316';
+                if (!normalized) return fallback;
+                const match = normalized.match(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/);
+                if (!match) return fallback;
+                const hex = match[1];
+                if (hex.length === 3) {
+                    return '#' + hex.split('').map(char => char + char).join('').toLowerCase();
+                }
+                return `#${hex.toLowerCase()}`;
             };
 
             const updateInvoicePreview = () => {
                 if (previewName) {
-                    previewName.textContent = invoiceBusinessNameInput.value || 'FireCoast OMS';
+                    const nameValue = invoiceBusinessNameInput.value.trim();
+                    previewName.textContent = nameValue || '—';
+                    previewName.classList.toggle('text-slate-400', !nameValue);
+                    previewName.classList.toggle('text-slate-800', Boolean(nameValue));
                 }
                 if (previewDetails) {
-                    previewDetails.textContent = invoiceBusinessDetailsInput.value || '123 Harbor Way\nPortland, OR 97203\nhello@firecoast.com';
+                    const detailValue = invoiceBusinessDetailsInput.value.replace(/\r\n/g, '\n').trim();
+                    previewDetails.textContent = detailValue || '—';
+                    previewDetails.classList.toggle('text-slate-400', !detailValue);
+                    previewDetails.classList.toggle('text-slate-600', Boolean(detailValue));
                 }
                 if (previewSwatch) {
                     const color = sanitizeColor(invoiceAccentInput.value);
@@ -311,7 +324,7 @@ hello@firecoast.com</p>
                     if (currentLogoDataUrl) {
                         logoPreview.innerHTML = `<img src="${currentLogoDataUrl}" alt="Invoice logo" class="w-full h-full object-contain" />`;
                     } else {
-                        logoPreview.innerHTML = '<span class="text-xs text-slate-400">Logo</span>';
+                        logoPreview.innerHTML = '<span class="text-xs text-slate-400">No logo</span>';
                     }
                 }
             };
@@ -330,10 +343,10 @@ hello@firecoast.com</p>
                     document.getElementById('appPassword').value = data.app_password || '';
                     document.getElementById('emailCc').value = data.email_cc || '';
                     document.getElementById('emailBcc').value = data.email_bcc || '';
-                    invoiceBusinessNameInput.value = data.invoice_business_name || '';
-                    invoiceBusinessDetailsInput.value = data.invoice_business_details || '';
+                    invoiceBusinessNameInput.value = (data.invoice_business_name || '').trim();
+                    invoiceBusinessDetailsInput.value = (data.invoice_business_details || '').replace(/\r\n/g, '\n');
                     invoiceAccentInput.value = sanitizeColor(data.invoice_brand_color);
-                    currentLogoDataUrl = data.invoice_logo_data_url || '';
+                    currentLogoDataUrl = (data.invoice_logo_data_url || '').trim();
                     updateInvoicePreview();
                     if (data.timezone && timezoneSelect) {
                         timezoneSelect.value = data.timezone;
@@ -445,11 +458,14 @@ hello@firecoast.com</p>
                     event.preventDefault();
                     setStatus(invoiceStatus, 'Saving…');
                     try {
+                        const normalizedName = invoiceBusinessNameInput.value.trim();
+                        const normalizedDetails = invoiceBusinessDetailsInput.value.replace(/\r\n/g, '\n').trim();
+                        const normalizedLogo = typeof currentLogoDataUrl === 'string' ? currentLogoDataUrl.trim() : '';
                         const payload = {
-                            invoice_business_name: invoiceBusinessNameInput.value,
-                            invoice_business_details: invoiceBusinessDetailsInput.value,
+                            invoice_business_name: normalizedName,
+                            invoice_business_details: normalizedDetails,
                             invoice_brand_color: sanitizeColor(invoiceAccentInput.value),
-                            invoice_logo_data_url: currentLogoDataUrl,
+                            invoice_logo_data_url: normalizedLogo,
                         };
                         const response = await fetch('/api/settings/invoice', {
                             method: 'POST',
@@ -461,7 +477,7 @@ hello@firecoast.com</p>
                         }
                         const updated = await response.json();
                         if (updated?.settings) {
-                            currentLogoDataUrl = updated.settings.invoice_logo_data_url || currentLogoDataUrl;
+                            currentLogoDataUrl = (updated.settings.invoice_logo_data_url || '').trim() || currentLogoDataUrl;
                             window.fireCoastBranding = updated.settings;
                             updateInvoicePreview();
                         } else {
