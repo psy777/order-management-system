@@ -509,7 +509,7 @@ const formatContactAddress = (address, city, state, zip) => {
             );
         };
 
-        const generateInvoicePdf = (order, itemsIndex = {}, brandingOverride = {}) => {
+        const generateInvoicePdf = (order, itemsIndex = {}, brandingOverride = {}, action = 'preview') => {
             if (!order) return;
             const { jsPDF } = window.jspdf;
             const doc = new jsPDF();
@@ -692,12 +692,15 @@ const formatContactAddress = (address, city, state, zip) => {
                 const unitPriceCents = Number(item?.price) || 0;
                 return acc + (quantity * unitPriceCents);
             }, 0);
-
-            const estimatedShippingValue = typeof safeOrder.estimatedShipping === 'number'
-                ? safeOrder.estimatedShipping
-                : parseFloat(safeOrder.estimatedShipping || '0');
-            const estimatedShippingCents = Math.round((Number.isFinite(estimatedShippingValue) ? estimatedShippingValue : 0) * 100);
-            const totalCents = subtotalCents + estimatedShippingCents;
+            const shippingCents = Math.max(0, Math.round(parseCurrencyToNumber(safeOrder.estimatedShipping) * 100));
+            const taxCents = Math.max(0, Math.round(parseCurrencyToNumber(safeOrder.taxAmount) * 100));
+            const normalizedDiscounts = normalizeDiscountsForTotals(safeOrder.discounts, safeLineItems);
+            const discountTotalCents = Math.min(
+                normalizedDiscounts.reduce((acc, discount) => acc + discount.amountCents, 0),
+                subtotalCents
+            );
+            const subtotalAfterDiscounts = Math.max(0, subtotalCents - discountTotalCents);
+            const totalCents = subtotalAfterDiscounts + shippingCents + taxCents;
 
             const tableResult = doc.lastAutoTable;
             let summaryY = (tableResult ? tableResult.finalY : tableStartY) + 10;
@@ -706,9 +709,24 @@ const formatContactAddress = (address, city, state, zip) => {
             doc.text(`Subtotal: $${(subtotalCents / 100).toFixed(2)}`, 14, summaryY);
             summaryY += 7;
 
-            if (estimatedShippingCents > 0) {
-                doc.text(`Est. Shipping Cost: $${(estimatedShippingCents / 100).toFixed(2)}`, 14, summaryY);
+            if (taxCents > 0) {
+                doc.text(`Taxes: $${(taxCents / 100).toFixed(2)}`, 14, summaryY);
                 summaryY += 7;
+            }
+
+            if (shippingCents > 0) {
+                doc.text(`Shipping: $${(shippingCents / 100).toFixed(2)}`, 14, summaryY);
+                summaryY += 7;
+            }
+
+            if (discountTotalCents > 0) {
+                doc.text(`Discounts: -$${(discountTotalCents / 100).toFixed(2)}`, 14, summaryY);
+                summaryY += 7;
+                normalizedDiscounts.forEach((discount) => {
+                    const label = discount.label || 'Discount';
+                    doc.text(`  ${label}: -$${(discount.amountCents / 100).toFixed(2)}`, 14, summaryY);
+                    summaryY += 6;
+                });
             }
 
             doc.setFontSize(12);
@@ -778,7 +796,13 @@ const formatContactAddress = (address, city, state, zip) => {
                 doc.line(50, summaryY, 120, summaryY);
             }
 
-            doc.output('dataurlnewwindow');
+            if (action === 'save') {
+                doc.save(`Invoice_${orderId || 'Order'}.pdf`);
+            } else if (action === 'datauristring') {
+                return doc.output('datauristring');
+            } else {
+                doc.output('dataurlnewwindow');
+            }
         };
 
         const ViewOrderPage = ({ orderId }) => {
