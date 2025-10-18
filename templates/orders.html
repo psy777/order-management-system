@@ -602,21 +602,75 @@ const generateInvoicePdf = (order, allItems, action = 'save', brandingOverride =
     const dateOptions = { year: 'numeric', month: 'long', day: 'numeric' };
     const formattedDate = safeOrder.date ? formatInTimeZone(safeOrder.date, timeZone, dateOptions) : '—';
 
+    const sanitizeHexColor = (value, fallback = '#f97316') => {
+        if (typeof value !== 'string') return fallback;
+        const trimmed = value.trim();
+        if (!trimmed) return fallback;
+        const match = trimmed.match(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/);
+        if (!match) return fallback;
+        const hex = match[1];
+        if (hex.length === 3) {
+            return '#' + hex.split('').map(char => char + char).join('').toLowerCase();
+        }
+        return `#${hex.toLowerCase()}`;
+    };
+
+    const inferImageFormat = (dataUrl) => {
+        if (typeof dataUrl !== 'string') return null;
+        const match = dataUrl.match(/^data:image/([a-zA-Z0-9+.-]+);/);
+        if (!match) return null;
+        const type = match[1].toLowerCase();
+        if (type.includes('png')) return 'PNG';
+        if (type === 'jpeg' || type === 'jpg') return 'JPEG';
+        if (type.includes('webp')) return 'WEBP';
+        return null;
+    };
+
+    const getImageDimensions = (dataUrl, maxWidth, maxHeight) => {
+        try {
+            const props = doc.getImageProperties(dataUrl);
+            let width = props?.width || maxWidth;
+            let height = props?.height || maxHeight;
+            if (!width || !height) {
+                return { width: maxWidth, height: maxHeight };
+            }
+            const widthScale = maxWidth / width;
+            const heightScale = maxHeight / height;
+            const scale = Math.min(widthScale, heightScale, 1);
+            return { width: width * scale, height: height * scale };
+        } catch (error) {
+            console.error('Unable to evaluate image dimensions for invoice:', error);
+            return { width: maxWidth, height: maxHeight };
+        }
+    };
+
+    const formatCurrency = (cents) => {
+        const numeric = Number.isFinite(cents) ? cents : 0;
+        return `$${(numeric / 100).toFixed(2)}`;
+    };
+
     const mergedBranding = {
         ...(window.fireCoastBranding || {}),
         ...(brandingOverride || {}),
     };
-    const accentRgb = hexToRgb(mergedBranding.invoice_brand_color) || { r: 249, g: 115, b: 22 };
+    const accentHex = sanitizeHexColor(mergedBranding.invoice_brand_color || mergedBranding.brand_color || '#f97316');
+    const accentRgb = hexToRgb(accentHex) || { r: 249, g: 115, b: 22 };
     const brandLines = [];
-    const businessName = (mergedBranding.invoice_business_name || '').trim();
-    const businessDetails = (mergedBranding.invoice_business_details || '').trim();
+    const businessName = (mergedBranding.invoice_business_name || mergedBranding.company_name || '').trim();
     if (businessName) {
         brandLines.push(businessName);
     }
-    if (businessDetails) {
-        brandLines.push(...businessDetails.split('\n').map(line => line.trim()).filter(Boolean));
+    const rawBusinessDetails = (mergedBranding.invoice_business_details || '').replace(/\r\n/g, '\n');
+    if (rawBusinessDetails) {
+        brandLines.push(
+            ...rawBusinessDetails
+                .split('\n')
+                .map(line => line.trim())
+                .filter(Boolean)
+        );
     }
     const logoDataUrl = (mergedBranding.invoice_logo_data_url || '').trim();
+    const logoFormat = inferImageFormat(logoDataUrl);
 
     const baseContact = safeOrder.contactInfo || {};
     const contactInfo = {
@@ -636,10 +690,14 @@ const generateInvoicePdf = (order, allItems, action = 'save', brandingOverride =
     };
 
     const renderBlock = (label, lines, x, y, wrapWidth = null) => {
-        doc.setFontSize(12);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(11);
+        doc.setTextColor(30, 41, 59);
         doc.text(label, x, y);
-        y += 6;
+        y += 5;
+        doc.setFont('helvetica', 'normal');
         doc.setFontSize(10);
+        doc.setTextColor(71, 85, 105);
         if (!lines.length) {
             doc.text('—', x, y);
             return y + 7;
@@ -665,62 +723,83 @@ const generateInvoicePdf = (order, allItems, action = 'save', brandingOverride =
         return lines;
     };
 
+    doc.setFont('helvetica', 'bold');
     doc.setFontSize(22);
     doc.setTextColor(accentRgb.r, accentRgb.g, accentRgb.b);
     doc.text("Invoice", 14, 22);
     doc.setDrawColor(accentRgb.r, accentRgb.g, accentRgb.b);
     doc.setLineWidth(0.75);
     doc.line(14, 26, 196, 26);
-    doc.setTextColor(0, 0, 0);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(15, 23, 42);
 
     let rightHeaderTop = 18;
-    if (logoDataUrl) {
+    if (logoDataUrl && logoFormat) {
         try {
-            doc.addImage(logoDataUrl, 'PNG', 150, 10, 40, 20);
-            rightHeaderTop = 32;
+            const { width: logoWidth, height: logoHeight } = getImageDimensions(logoDataUrl, 44, 22);
+            const logoX = 196 - logoWidth;
+            doc.addImage(logoDataUrl, logoFormat, logoX, 10, logoWidth, logoHeight);
+            rightHeaderTop = Math.max(rightHeaderTop, 10 + logoHeight + 4);
         } catch (error) {
             console.error('Unable to render invoice logo:', error);
         }
-    }
-    if (brandLines.length) {
-        const wrappedBrand = doc.splitTextToSize(brandLines.join('\n'), 60);
-        doc.setFontSize(12);
-        doc.text(wrappedBrand, 196, rightHeaderTop, { align: 'right' });
+    } else if (logoDataUrl) {
+        console.warn('Unsupported invoice logo format; expected PNG, JPEG, or WEBP.');
     }
 
-    doc.setFontSize(12);
-    let headerY = 30;
-    doc.text(`Order #: ${orderNumber || '—'}`, 14, headerY);
+    if (brandLines.length) {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(12);
+        doc.setTextColor(30, 41, 59);
+        const wrappedBrand = doc.splitTextToSize(brandLines.join('\n'), 60);
+        doc.text(wrappedBrand, 196, rightHeaderTop, { align: 'right' });
+        doc.setFont('helvetica', 'normal');
+    }
+    doc.setTextColor(15, 23, 42);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    let headerY = 32;
+    doc.text('Order #:', 14, headerY);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(71, 85, 105);
+    doc.text(orderNumber || '—', 40, headerY);
     if (orderTitle) {
         headerY += 6;
-        doc.text(`Title: ${orderTitle}`, 14, headerY);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(15, 23, 42);
+        doc.text('Title:', 14, headerY);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(71, 85, 105);
+        doc.text(orderTitle, 40, headerY);
     }
     headerY += 6;
-    doc.text(`Date: ${formattedDate}`, 14, headerY);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(15, 23, 42);
+    doc.text('Date:', 14, headerY);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(71, 85, 105);
+    doc.text(formattedDate, 40, headerY);
 
-    let leftColumnY = headerY + 14;
-    let rightColumnY = headerY + 14;
+    let leftColumnY = headerY + 12;
+    let rightColumnY = headerY + 12;
     const leftColumnX = 14;
-    const rightColumnX = 105;
+    const rightColumnX = 110;
 
     const customerPhone = formatPhoneNumber(contactInfo.phone);
     const customerLines = [contactInfo.companyName, contactInfo.contactName, contactInfo.email, customerPhone].filter(Boolean);
     leftColumnY = renderBlock("Bill To", customerLines, leftColumnX, leftColumnY);
 
     const billingLines = buildAddressLines(contactInfo.billingAddress, contactInfo.billingCity, contactInfo.billingState, contactInfo.billingZipCode);
-    if (billingLines.length) {
-        rightColumnY = renderBlock("Billing Address", billingLines, rightColumnX, rightColumnY, 90);
-    }
+    rightColumnY = renderBlock("Billing Address", billingLines, rightColumnX, rightColumnY, 80);
 
     const shippingLines = buildAddressLines(contactInfo.shippingAddress, contactInfo.shippingCity, contactInfo.shippingState, contactInfo.shippingZipCode);
-    if (shippingLines.length) {
-        rightColumnY = renderBlock("Shipping Address", shippingLines, rightColumnX, rightColumnY, 90);
-    }
+    rightColumnY = renderBlock("Shipping Address", shippingLines, rightColumnX, rightColumnY, 80);
 
-    let tableStartY = Math.max(leftColumnY, rightColumnY, headerY + 20) + 5;
+    let tableStartY = Math.max(leftColumnY, rightColumnY, headerY + 20) + 4;
 
     const safeLineItems = Array.isArray(safeOrder.lineItems) ? safeOrder.lineItems : [];
-const tableHead = ["Name", "Description", "Units", "Unit Price", "Total"];
+    const tableHead = ["Name", "Description", "Units", "Unit Price", "Total"];
     const tableBody = safeLineItems.map((item) => {
         const catalogItem = item?.catalogItemId ? safeItems[item.catalogItemId] : null;
         const displayName = (item?.name && item.name.trim()) || catalogItem?.name || 'Item';
@@ -732,12 +811,51 @@ const tableHead = ["Name", "Description", "Units", "Unit Price", "Total"];
             displayName,
             description || '—',
             `${quantity}`,
-            `$${(unitPriceCents / 100).toFixed(2)}`,
-            `$${(lineTotalCents / 100).toFixed(2)}`
+            formatCurrency(unitPriceCents),
+            formatCurrency(lineTotalCents)
         ];
     });
 
-    doc.autoTable({ head: [tableHead], body: tableBody, startY: tableStartY });
+    const lineItemsTableBody = tableBody.length ? tableBody : [[
+        '—',
+        'No line items added',
+        '0',
+        formatCurrency(0),
+        formatCurrency(0)
+    ]];
+
+    doc.autoTable({
+        head: [tableHead],
+        body: lineItemsTableBody,
+        startY: tableStartY,
+        margin: { left: 14, right: 14 },
+        theme: 'grid',
+        headStyles: {
+            fillColor: [accentRgb.r, accentRgb.g, accentRgb.b],
+            textColor: 255,
+            fontStyle: 'bold',
+            halign: 'left'
+        },
+        bodyStyles: {
+            fontSize: 9,
+            textColor: [30, 41, 59],
+            cellPadding: { top: 3, right: 2, bottom: 3, left: 2 }
+        },
+        alternateRowStyles: {
+            fillColor: [248, 250, 252]
+        },
+        styles: {
+            lineWidth: 0.1,
+            lineColor: [226, 232, 240]
+        },
+        columnStyles: {
+            0: { halign: 'left' },
+            1: { halign: 'left' },
+            2: { halign: 'center' },
+            3: { halign: 'right' },
+            4: { halign: 'right' }
+        }
+    });
 
     const subtotalCents = safeLineItems.reduce((acc, item) => {
         const quantity = Number(item?.quantity) || 0;
@@ -752,82 +870,130 @@ const tableHead = ["Name", "Description", "Units", "Unit Price", "Total"];
     const totalCents = subtotalCents + estimatedShippingCents;
 
     const tableResult = doc.lastAutoTable;
-    let summaryY = (tableResult ? tableResult.finalY : tableStartY) + 10;
+    let summaryY = (tableResult ? tableResult.finalY : tableStartY) + 8;
 
-    doc.setFontSize(10);
-    doc.text(`Subtotal: $${(subtotalCents / 100).toFixed(2)}`, 14, summaryY);
-    summaryY += 7;
-
+    const summaryRows = [
+        { label: 'Subtotal', value: formatCurrency(subtotalCents) }
+    ];
     if (estimatedShippingCents > 0) {
-        doc.text(`Est. Shipping Cost: $${(estimatedShippingCents / 100).toFixed(2)}`, 14, summaryY);
-        summaryY += 7;
+        summaryRows.push({ label: 'Est. Shipping', value: formatCurrency(estimatedShippingCents) });
     }
+    summaryRows.push({ label: 'Total Due', value: formatCurrency(totalCents), highlight: true });
 
-    doc.setFontSize(12);
-    doc.text(`Total: $${(totalCents / 100).toFixed(2)}`, 14, summaryY);
-    summaryY += 10;
+    doc.autoTable({
+        body: summaryRows.map(row => [row.label, row.value]),
+        startY: summaryY,
+        theme: 'plain',
+        margin: { left: 120, right: 14 },
+        styles: {
+            fontSize: 10,
+            textColor: [71, 85, 105],
+            cellPadding: { top: 3, right: 2, bottom: 3, left: 2 }
+        },
+        columnStyles: {
+            0: { halign: 'left' },
+            1: { halign: 'right' }
+        },
+        tableLineWidth: 0,
+        didParseCell: (data) => {
+            const rowMeta = summaryRows[data.row.index];
+            if (data.column.index === 0) {
+                data.cell.styles.fontStyle = 'bold';
+                data.cell.styles.textColor = [30, 41, 59];
+            }
+            if (rowMeta?.highlight) {
+                data.cell.styles.fontSize = 12;
+                data.cell.styles.fontStyle = 'bold';
+                data.cell.styles.textColor = [accentRgb.r, accentRgb.g, accentRgb.b];
+            }
+        }
+    });
 
-    doc.setFontSize(10);
+    summaryY = (doc.lastAutoTable ? doc.lastAutoTable.finalY : summaryY) + 8;
+
+    const detailRows = [];
     if (safeOrder.estimatedShippingDate) {
-        doc.text(`Est. Ship Date: ${formatInTimeZone(safeOrder.estimatedShippingDate, timeZone, dateOptions)}`, 14, summaryY);
-        summaryY += 5;
+        detailRows.push(['Est. Ship Date', formatInTimeZone(safeOrder.estimatedShippingDate, timeZone, dateOptions)]);
     }
-
     if (safeOrder.priorityLevel) {
-        doc.text(`Priority: ${safeOrder.priorityLevel}`, 14, summaryY);
-        summaryY += 5;
+        detailRows.push(['Priority', safeOrder.priorityLevel]);
     }
-
     if (safeOrder.fulfillmentChannel) {
-        doc.text(`Fulfillment: ${safeOrder.fulfillmentChannel}`, 14, summaryY);
-        summaryY += 5;
+        detailRows.push(['Fulfillment', safeOrder.fulfillmentChannel]);
+    }
+    if (safeOrder.customerReference) {
+        detailRows.push(['Customer Reference', safeOrder.customerReference]);
     }
 
-    if (safeOrder.customerReference) {
-        doc.text(`Customer Reference: ${safeOrder.customerReference}`, 14, summaryY);
-        summaryY += 5;
+    if (detailRows.length) {
+        doc.autoTable({
+            body: detailRows,
+            startY: summaryY,
+            theme: 'plain',
+            margin: { left: 14, right: 14 },
+            styles: {
+                fontSize: 10,
+                textColor: [71, 85, 105],
+                cellPadding: { top: 2, right: 2, bottom: 2, left: 0 }
+            },
+            columnStyles: {
+                0: { halign: 'left', fontStyle: 'bold', textColor: [30, 41, 59], cellPadding: { left: 0, right: 4 } },
+                1: { halign: 'left' }
+            },
+            tableLineWidth: 0
+        });
+        summaryY = (doc.lastAutoTable ? doc.lastAutoTable.finalY : summaryY) + 8;
     }
 
     const trimmedNotes = (safeOrder.notes || '').trim();
     if (trimmedNotes) {
+        if (summaryY > 260) {
+            doc.addPage();
+            summaryY = 20;
+        }
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(11);
+        doc.setTextColor(30, 41, 59);
+        doc.text("Notes", 14, summaryY);
         summaryY += 5;
-        doc.text("Notes:", 14, summaryY);
-        summaryY += 5;
-        const wrappedNotes = doc.splitTextToSize(trimmedNotes, 180);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10);
+        doc.setTextColor(71, 85, 105);
+        const wrappedNotes = doc.splitTextToSize(trimmedNotes, 182);
         doc.text(wrappedNotes, 14, summaryY);
-        summaryY += wrappedNotes.length * 4;
+        summaryY += wrappedNotes.length * 5 + 4;
     }
 
-    summaryY += 15;
-    if (summaryY > 260) {
+    if (summaryY > 250) {
         doc.addPage();
         summaryY = 20;
     }
 
+    doc.setFont('helvetica', 'bold');
     doc.setFontSize(10);
-    doc.text("Authorized Signature:", 14, summaryY);
-
+    doc.setTextColor(30, 41, 59);
+    doc.text("Authorized Signature", 14, summaryY);
+    const signatureLineY = summaryY + 10;
     const signatureDataUrl = safeOrder.signatureDataUrl;
-    if (signatureDataUrl) {
+    const signatureFormat = inferImageFormat(signatureDataUrl) || 'PNG';
+    let drewSignature = false;
+    if (signatureDataUrl && signatureDataUrl.startsWith('data:image')) {
         try {
-            if (signatureDataUrl.startsWith('data:image')) {
-                const base64Data = signatureDataUrl.substring(signatureDataUrl.indexOf(',') + 1);
-                if (base64Data.length > 150) {
-                    const signatureImgWidth = 70;
-                    const signatureImgHeight = 20;
-                    doc.addImage(signatureDataUrl, 'PNG', 50, summaryY - (signatureImgHeight / 2) + 2, signatureImgWidth, signatureImgHeight);
-                } else {
-                    doc.line(50, summaryY, 120, summaryY);
-                }
-            } else {
-                doc.line(50, summaryY, 120, summaryY);
+            const base64Data = signatureDataUrl.substring(signatureDataUrl.indexOf(',') + 1);
+            if (base64Data.length > 150) {
+                const { width: sigWidth, height: sigHeight } = getImageDimensions(signatureDataUrl, 82, 26);
+                const sigY = signatureLineY - sigHeight + 2;
+                doc.addImage(signatureDataUrl, signatureFormat, 50, sigY, sigWidth, sigHeight);
+                drewSignature = true;
             }
         } catch (error) {
             console.error('Error rendering signature image for PDF:', error);
-            doc.line(50, summaryY, 120, summaryY);
         }
-    } else {
-        doc.line(50, summaryY, 120, summaryY);
+    }
+    doc.setDrawColor(203, 213, 225);
+    doc.line(50, signatureLineY, 130, signatureLineY);
+    if (!drewSignature && signatureDataUrl && !signatureDataUrl.startsWith('data:image')) {
+        console.warn('Unsupported signature format, drawing placeholder line instead.');
     }
 
     if (action === 'save') {

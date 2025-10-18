@@ -2295,16 +2295,37 @@ def update_invoice_settings():
 
     for key in ('invoice_business_name', 'invoice_business_details'):
         if key in invoice_payload:
-            existing_settings[key] = invoice_payload.get(key) or ""
+            value = invoice_payload.get(key)
+            if isinstance(value, str):
+                normalized = value.replace('\r\n', '\n').replace('\r', '\n').strip()
+                existing_settings[key] = normalized
+            else:
+                existing_settings[key] = ""
 
     if 'invoice_brand_color' in invoice_payload:
         incoming_color = (invoice_payload.get('invoice_brand_color') or '').strip()
-        if not re.fullmatch(r'#([0-9a-fA-F]{6})', incoming_color):
+        if re.fullmatch(r'#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})', incoming_color or ''):
+            if len(incoming_color) == 4:
+                incoming_color = '#' + ''.join(ch * 2 for ch in incoming_color[1:]).lower()
+            else:
+                incoming_color = incoming_color.lower()
+        else:
             incoming_color = existing_settings.get('invoice_brand_color', '#f97316') or '#f97316'
         existing_settings['invoice_brand_color'] = incoming_color or '#f97316'
 
     if 'invoice_logo_data_url' in invoice_payload:
-        existing_settings['invoice_logo_data_url'] = invoice_payload.get('invoice_logo_data_url') or ""
+        raw_logo = invoice_payload.get('invoice_logo_data_url') or ""
+        sanitized_logo = existing_settings.get('invoice_logo_data_url', '') or ""
+        if isinstance(raw_logo, str):
+            trimmed = raw_logo.strip()
+            if trimmed == "":
+                sanitized_logo = ""
+            elif trimmed.startswith('data:image/'):
+                mime_match = re.match(r'^data:image/([a-zA-Z0-9+.-]+);', trimmed)
+                allowed_formats = {'png', 'jpeg', 'jpg', 'webp'}
+                if mime_match and mime_match.group(1).lower() in allowed_formats and len(trimmed) <= 2_500_000:
+                    sanitized_logo = trimmed
+        existing_settings['invoice_logo_data_url'] = sanitized_logo
 
     write_json_file(SETTINGS_FILE, existing_settings)
     return jsonify({"message": "Invoice appearance updated.", "settings": existing_settings}), 200
