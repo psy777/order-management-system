@@ -131,7 +131,6 @@ const createEmptyLineItem = (id) => ({
     quantity: 1,
     price: 0,
     packageId: null,
-    weightOz: null,
 });
 
 const normalizeLineItemsForSave = (items) => {
@@ -147,14 +146,6 @@ const normalizeLineItemsForSave = (items) => {
         const quantity = Number.isFinite(quantityRaw) ? Math.max(0, Math.round(quantityRaw)) : 0;
         const priceRaw = Number(safeItem.price);
         const price = Number.isFinite(priceRaw) ? Math.round(priceRaw) : 0;
-        let weightOz = safeItem.weightOz;
-        if (weightOz === '' || weightOz === null || typeof weightOz === 'undefined') {
-            weightOz = null;
-        } else {
-            const parsedWeight = Number(weightOz);
-            weightOz = Number.isFinite(parsedWeight) && parsedWeight >= 0 ? parsedWeight : null;
-        }
-
         return {
             id: safeItem.id != null ? String(safeItem.id) : null,
             catalogItemId: safeItem.catalogItemId || null,
@@ -163,7 +154,6 @@ const normalizeLineItemsForSave = (items) => {
             quantity: quantity,
             price,
             packageId: safeItem.packageId || null,
-            weightOz,
         };
     }).filter(item => item.name && item.quantity > 0);
 };
@@ -1954,7 +1944,6 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
                     quantity: Number(item?.quantity) || 0,
                     price: Number(item?.price) || 0,
                     packageId: item?.packageId ?? item?.package_id ?? null,
-                    weightOz: item?.weightOz ?? item?.weight_oz ?? null,
                 }))
                 : [],
             notes: incomingOrder.notes || '',
@@ -2044,48 +2033,6 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
             navigateTo('dashboard');
         }
     };
-
-    const fetchEstimatedShipping = async (zipCode, items) => {
-        if (!zipCode || !/^\d{5}$/.test(zipCode)) {
-            return;
-        }
-        const normalizedItems = normalizeLineItemsForSave(items);
-        if (!normalizedItems || normalizedItems.length === 0) {
-            setFormData(prev => ({ ...prev, estimatedShipping: '0.00' }));
-            return;
-        }
-
-        try {
-            const response = await fetch('/api/calculate-shipping-estimate', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ shippingZipCode: zipCode, lineItems: normalizedItems })
-            });
-            const data = await response.json();
-            if (response.ok) {
-            setFormData(prev => ({ ...prev, estimatedShipping: centsToCurrency(Math.round(parseCurrencyToNumber(data.estimatedShipping) * 100)) }));
-            } else {
-                console.error('Failed to fetch shipping estimate:', data.message);
-            }
-        } catch (error) {
-            console.error('Error fetching shipping estimate:', error);
-        }
-    };
-
-    useEffect(() => {
-        if (!formData.shippingZipCode || !/^\d{5}$/.test(formData.shippingZipCode)) {
-            return;
-        }
-        if (!formData.lineItems || formData.lineItems.length === 0) {
-            setFormData(prev => ({ ...prev, estimatedShipping: '0.00' }));
-            return;
-        }
-        const timeoutId = setTimeout(() => {
-            fetchEstimatedShipping(formData.shippingZipCode, formData.lineItems);
-        }, 750);
-        return () => clearTimeout(timeoutId);
-    }, [formData.shippingZipCode, formData.lineItems]);
-
 
     const handlePrimaryContactSelect = (contact) => {
         setPrimaryContactId(contact.id);
@@ -2238,7 +2185,6 @@ const unpackPackage = (id, pkgCode) => {
         quantity: resolvedQuantity,
         price: typeof catalog.price === 'number' ? catalog.price : 0,
         packageId: pkgCode,
-        weightOz: catalog.weight_oz ?? null,
       };
     })
     .filter(Boolean);
@@ -2279,15 +2225,6 @@ const unpackPackage = (id, pkgCode) => {
                         updatedItem.price = Number.isFinite(cents) && cents >= 0 ? cents : 0;
                         break;
                     }
-                    case 'weightOz': {
-                        if (value === '' || value === null || value === undefined) {
-                            updatedItem.weightOz = null;
-                        } else {
-                            const numeric = Number(value);
-                            updatedItem.weightOz = Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
-                        }
-                        break;
-                    }
                     default:
                         updatedItem[field] = value;
                 }
@@ -2322,7 +2259,6 @@ const unpackPackage = (id, pkgCode) => {
                     name: catalogItem.name || item.name || '',
                     description: catalogItem.description || item.description || '',
                     price: typeof catalogItem.price === 'number' ? catalogItem.price : item.price,
-                    weightOz: catalogItem.weight_oz ?? item.weightOz ?? null,
                     packageId: null,
                 };
             })
@@ -2352,22 +2288,21 @@ const unpackPackage = (id, pkgCode) => {
         if (matchedEntry) {
             const [matchedId, details] = matchedEntry;
             if (details.kind === 'package') {
-            unpackPackage(String(nextLineItemIdRef.current++), matchedId);
-        } else {
-            const catalogItem = itemData[matchedId] || {};
-            setFormData(prev => ({
-                ...prev,
-                lineItems: [
-                    ...prev.lineItems,
-                    {
-                        id: String(nextLineItemIdRef.current++),
-                        catalogItemId: matchedId,
-                        name: catalogItem.name || '',
-                        description: catalogItem.description || '',
-                        quantity: 1,
-                        price: typeof catalogItem.price === 'number' ? catalogItem.price : 0,
+                unpackPackage(String(nextLineItemIdRef.current++), matchedId);
+            } else {
+                const catalogItem = itemData[matchedId] || {};
+                setFormData(prev => ({
+                    ...prev,
+                    lineItems: [
+                        ...prev.lineItems,
+                        {
+                            id: String(nextLineItemIdRef.current++),
+                            catalogItemId: matchedId,
+                            name: catalogItem.name || '',
+                            description: catalogItem.description || '',
+                            quantity: 1,
+                            price: typeof catalogItem.price === 'number' ? catalogItem.price : 0,
                             packageId: null,
-                            weightOz: catalogItem.weight_oz ?? null,
                         },
                     ],
                 }));
@@ -3371,7 +3306,6 @@ const App = () => {
                     name: item.name || '',
                     description: item.description || '',
                     price: typeof item.price === 'number' ? item.price : 0,
-                    weight_oz: item.weight_oz ?? null,
                 };
                 return acc;
             }, {});
@@ -3385,7 +3319,6 @@ const App = () => {
                     name: entry.name,
                     description: entry.description,
                     price: entry.price,
-                    weight_oz: entry.weight_oz,
                     kind: 'item',
                 };
                 return acc;

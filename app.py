@@ -25,10 +25,7 @@ MENTION_PATTERN = re.compile(r'@([A-Za-z0-9_.-]+)')
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request, send_from_directory, redirect, flash, url_for
-from shipcostestimate import calculate_shipping_cost_for_order
 from database import get_db_connection, init_db
-
-DEFAULT_ITEM_WEIGHT_OZ = 16.0
 
 # Load environment variables from .env file
 load_dotenv()
@@ -320,7 +317,7 @@ def serialize_order(cursor, order_row, user_timezone, include_logs=False):
 
     cursor.execute(
         """
-        SELECT line_item_id, catalog_item_id, name, description, quantity, price_per_unit_cents, package_id, weight_oz, client_reference_id
+        SELECT line_item_id, catalog_item_id, name, description, quantity, price_per_unit_cents, package_id, client_reference_id
         FROM order_line_items
         WHERE order_id = ?
         ORDER BY line_item_id ASC
@@ -336,7 +333,6 @@ def serialize_order(cursor, order_row, user_timezone, include_logs=False):
             'quantity': li['quantity'],
             'price': li['price_per_unit_cents'],
             'packageId': li['package_id'],
-            'weightOz': li['weight_oz'],
         }
         for li in cursor.fetchall()
     ]
@@ -1223,13 +1219,6 @@ def save_order():
             description = (li.get('description') or '').strip()
             catalog_item_id = li.get('catalogItemId') or li.get('catalog_item_id')
             package_id = li.get('packageId') or li.get('package_id')
-            weight_value = li.get('weightOz') or li.get('weight_oz')
-            weight_oz = None
-            if weight_value not in (None, ''):
-                try:
-                    weight_oz = float(weight_value)
-                except (TypeError, ValueError):
-                    weight_oz = None
 
             cursor.execute(
                 """
@@ -1245,7 +1234,7 @@ def save_order():
                     quantity,
                     price_cents,
                     package_id,
-                    weight_oz,
+                    None,
                     str(li.get('id')) if li.get('id') not in (None, '') else None,
                 )
             )
@@ -1352,7 +1341,7 @@ def get_items():
     cursor = conn.cursor()
     cursor.execute(
         """
-        SELECT id, name, description, price_cents, weight_oz
+        SELECT id, name, description, price_cents
         FROM items
         ORDER BY name COLLATE NOCASE ASC
         """
@@ -1366,7 +1355,6 @@ def get_items():
             'name': item_dict['name'],
             'description': item_dict.get('description') or '',
             'price': item_dict['price_cents'],
-            'weight_oz': item_dict.get('weight_oz'),
         })
     conn.close()
     return jsonify(items_list)
@@ -1383,14 +1371,6 @@ def _parse_price_to_cents(price_value):
     return int(round(float(value_str) * 100))
 
 
-def _parse_weight(weight_value):
-    if weight_value is None or weight_value == '':
-        return None
-    if isinstance(weight_value, (int, float)):
-        return float(weight_value)
-    return float(str(weight_value).strip())
-
-
 @app.route('/api/items', methods=['POST'])
 def add_item():
     payload = request.json or {}
@@ -1404,18 +1384,13 @@ def add_item():
     except (ValueError, TypeError):
         return jsonify({"message": "Invalid price."}), 400
 
-    try:
-        weight_oz = _parse_weight(payload.get('weight_oz'))
-    except (ValueError, TypeError):
-        return jsonify({"message": "Invalid weight."}), 400
-
     item_id = str(uuid.uuid4())
 
     conn = get_db_connection(); cursor = conn.cursor()
     try:
         cursor.execute(
             "INSERT INTO items (id, name, description, price_cents, weight_oz) VALUES (?,?,?,?,?)",
-            (item_id, name, description, price_cents, weight_oz)
+            (item_id, name, description, price_cents, None)
         )
         conn.commit()
         created_item = {
@@ -1423,7 +1398,6 @@ def add_item():
             'name': name,
             'description': description,
             'price': price_cents,
-            'weight_oz': weight_oz,
         }
         return jsonify({"message": "Item added.", "item": created_item}), 201
     except sqlite3.Error as e:
@@ -1468,15 +1442,6 @@ def update_item(item_id):
         updates.append("price_cents=?")
         values.append(price_cents)
 
-    if 'weight_oz' in payload:
-        try:
-            weight_oz = _parse_weight(payload.get('weight_oz'))
-        except (ValueError, TypeError):
-            conn.close()
-            return jsonify({"message": "Invalid weight."}), 400
-        updates.append("weight_oz=?")
-        values.append(weight_oz)
-
     try:
         if updates:
             set_clause = ",".join(updates)
@@ -1486,7 +1451,7 @@ def update_item(item_id):
             )
             conn.commit()
 
-        cursor.execute("SELECT id, name, description, price_cents, weight_oz FROM items WHERE id=?", (item_id,))
+        cursor.execute("SELECT id, name, description, price_cents FROM items WHERE id=?", (item_id,))
         row = cursor.fetchone()
         if not row:
             return jsonify({"message": "Item not found."}), 404
@@ -1495,7 +1460,6 @@ def update_item(item_id):
             'name': row['name'],
             'description': row['description'] or '',
             'price': row['price_cents'],
-            'weight_oz': row['weight_oz'],
         }
         return jsonify({"message": "Item updated.", "item": updated_item}), 200
     except sqlite3.Error as e:
@@ -1786,73 +1750,6 @@ def delete_contact(contact_id):
         if cursor.rowcount>0: conn.close(); return jsonify({"message":"Contact deleted."}),200
         else: conn.close(); return jsonify({"message":"Contact not found."}),404
     except sqlite3.Error as e: conn.rollback(); conn.close(); app.logger.error(f"DB err delete contact {contact_id}:{e}"); return jsonify({"message":"DB error."}),500
-
-@app.route('/api/calculate-shipping-estimate', methods=['POST'])
-def calculate_shipping_estimate_endpoint():
-    payload=request.json
-    if not payload: return jsonify({"message":"Request must be JSON"}),400
-    origin_zip="63366"; dest_zip_str=payload.get('shippingZipCode'); line_items=payload.get('lineItems',[])
-    if not dest_zip_str or not isinstance(dest_zip_str,str) or not re.fullmatch(r'\d{5}',dest_zip_str.strip()): return jsonify({"message":"Valid 5-digit ZIP required."}),400
-    dest_zip=dest_zip_str.strip(); total_weight_oz=0
-    if not line_items: return jsonify({"estimatedShipping":0.0}),200
-
-    conn = get_db_connection(); cursor = conn.cursor()
-
-    def resolve_item_weight(catalog_item_id, manual_weight):
-        if manual_weight is not None:
-            try:
-                return max(float(manual_weight), 0.0)
-            except (TypeError, ValueError):
-                pass
-
-        if catalog_item_id:
-            cursor.execute("SELECT weight_oz FROM items WHERE id=?", (catalog_item_id,))
-            row = cursor.fetchone()
-            if row and row['weight_oz'] is not None:
-                try:
-                    return max(float(row['weight_oz']), 0.0)
-                except (TypeError, ValueError):
-                    pass
-
-        return DEFAULT_ITEM_WEIGHT_OZ
-
-    try:
-        for item in line_items:
-            qty_raw = item.get('quantity', 0)
-            try:
-                qty = float(qty_raw)
-            except (TypeError, ValueError):
-                qty = 0
-            if qty <= 0:
-                continue
-
-            package_code = item.get('packageId') or item.get('package_id')
-            if package_code:
-                cursor.execute("SELECT item_id, quantity FROM package_items WHERE package_id=?", (package_code,))
-                for pkg_row in cursor.fetchall():
-                    pkg_item_id = pkg_row['item_id']
-                    pkg_qty_raw = pkg_row['quantity']
-                    try:
-                        pkg_qty = float(pkg_qty_raw)
-                    except (TypeError, ValueError):
-                        pkg_qty = 0
-                    if pkg_qty <= 0:
-                        continue
-                    weight_per_unit = resolve_item_weight(pkg_item_id, None)
-                    total_weight_oz += qty * pkg_qty * weight_per_unit
-                continue
-
-            catalog_item_id = item.get('catalogItemId') or item.get('catalog_item_id') or item.get('item')
-            weight_override = item.get('weightOz') or item.get('weight_oz')
-            weight_per_unit = resolve_item_weight(catalog_item_id, weight_override)
-            total_weight_oz += qty * weight_per_unit
-    finally:
-        conn.close()
-
-    if total_weight_oz<=0: return jsonify({"estimatedShipping":0.0}),200
-    cost=calculate_shipping_cost_for_order(origin_zip,dest_zip,total_weight_oz/16.0)
-    if cost is not None: return jsonify({"estimatedShipping":round(cost,2)}),200
-    else: return jsonify({"estimatedShipping":0.0,"message":"Could not calculate shipping."}),200
 
 @app.route('/api/packages', methods=['GET'])
 def get_packages():
@@ -2211,8 +2108,6 @@ def import_items_csv():
                     column_indices['description'] = idx
                 elif col in ('price', 'price dollars', 'price$'):
                     column_indices['price'] = idx
-                elif col in ('weight oz', 'weight', 'weight_oz'):
-                    column_indices['weight_oz'] = idx
 
             if 'name' not in column_indices:
                 flash("CSV must have at least a 'Name' column.", "danger")
@@ -2247,13 +2142,6 @@ def import_items_csv():
                         except (ValueError, TypeError):
                             price_cents = 0
 
-                    weight_oz = None
-                    if 'weight_oz' in column_indices and column_indices['weight_oz'] < len(row):
-                        try:
-                            weight_oz = _parse_weight(row[column_indices['weight_oz']])
-                        except (ValueError, TypeError):
-                            weight_oz = None
-
                     cursor.execute("SELECT id FROM items WHERE id = ?", (item_id,))
                     existing_item = cursor.fetchone()
 
@@ -2261,19 +2149,19 @@ def import_items_csv():
                         cursor.execute(
                             """
                             UPDATE items
-                            SET name = ?, description = ?, price_cents = ?, weight_oz = ?, updated_at = CURRENT_TIMESTAMP
+                            SET name = ?, description = ?, price_cents = ?, weight_oz = NULL, updated_at = CURRENT_TIMESTAMP
                             WHERE id = ?
                             """,
-                            (name, description, price_cents, weight_oz, item_id)
+                            (name, description, price_cents, item_id)
                         )
                         items_updated += 1
                     else:
                         cursor.execute(
                             """
                             INSERT INTO items (id, name, description, price_cents, weight_oz)
-                            VALUES (?, ?, ?, ?, ?)
+                            VALUES (?, ?, ?, ?, NULL)
                             """,
-                            (item_id, name, description, price_cents, weight_oz)
+                            (item_id, name, description, price_cents)
                         )
                         items_added += 1
                 except IndexError:
