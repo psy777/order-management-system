@@ -2276,6 +2276,7 @@ def get_settings():
         "invoice_business_details": "123 Harbor Way\nPortland, OR 97203\nhello@firecoast.com",
         "invoice_brand_color": "#f97316",
         "invoice_logo_data_url": "",
+        "invoice_footer": "",
     }
 
     updated = False
@@ -2303,7 +2304,7 @@ def update_settings():
     existing_settings['default_shipping_zip_code'] = new_settings_payload.get('default_shipping_zip_code', existing_settings.get('default_shipping_zip_code'))
     existing_settings['default_email_body'] = new_settings_payload.get('default_email_body', existing_settings.get('default_email_body'))
 
-    for key in ('invoice_business_name', 'invoice_business_details', 'invoice_brand_color'):
+    for key in ('invoice_business_name', 'invoice_business_details', 'invoice_brand_color', 'invoice_footer'):
         if key in new_settings_payload:
             existing_settings[key] = new_settings_payload.get(key, existing_settings.get(key))
 
@@ -2374,6 +2375,13 @@ def update_invoice_settings():
 
     if 'invoice_logo_data_url' in invoice_payload:
         existing_settings['invoice_logo_data_url'] = invoice_payload.get('invoice_logo_data_url') or ""
+
+    if 'invoice_footer' in invoice_payload:
+        footer_value = invoice_payload.get('invoice_footer')
+        if isinstance(footer_value, str):
+            existing_settings['invoice_footer'] = footer_value.strip()
+        else:
+            existing_settings['invoice_footer'] = ""
 
     write_json_file(SETTINGS_FILE, existing_settings)
     return jsonify({"message": "Invoice appearance updated.", "settings": existing_settings}), 200

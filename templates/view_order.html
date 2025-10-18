@@ -530,6 +530,7 @@ const formatContactAddress = (address, city, state, zip) => {
             const accentRgb = hexToRgb(mergedBranding.invoice_brand_color) || { r: 249, g: 115, b: 22 };
             const businessName = (mergedBranding.invoice_business_name || '').trim();
             const businessDetails = (mergedBranding.invoice_business_details || '').trim();
+            const invoiceFooter = (mergedBranding.invoice_footer || '').trim();
             const logoDataUrl = (mergedBranding.invoice_logo_data_url || '').trim();
             doc.setFont('helvetica', 'normal');
             doc.setFontSize(10);
@@ -762,6 +763,15 @@ const formatContactAddress = (address, city, state, zip) => {
                 const wrappedNotes = doc.splitTextToSize(trimmedNotes, 180);
                 doc.text(wrappedNotes, 14, summaryY);
                 summaryY += wrappedNotes.length * 4;
+            }
+
+            if (invoiceFooter) {
+                summaryY += 7;
+                doc.setFontSize(9);
+                const wrappedFooter = doc.splitTextToSize(invoiceFooter, 180);
+                doc.text(wrappedFooter, 14, summaryY);
+                summaryY += wrappedFooter.length * 4;
+                doc.setFontSize(10);
             }
 
             summaryY += 15;

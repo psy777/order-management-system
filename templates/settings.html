@@ -133,6 +133,11 @@
                             <textarea id="invoiceBusinessDetails" name="invoiceBusinessDetails" rows="4" class="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="123 Harbor Way&#10;Portland, OR 97203&#10;hello@firecoast.com"></textarea>
                             <p class="mt-1 text-xs text-slate-500">These lines appear under your logo and business name.</p>
                         </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-600" for="invoiceFooter">Invoice Footer</label>
+                            <textarea id="invoiceFooter" name="invoiceFooter" rows="4" class="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="Payment is due within 30 days of receipt.&#10;All warranty claims must be made in writing."></textarea>
+                            <p class="mt-1 text-xs text-slate-500">Appears after per-order notes on every invoice.</p>
+                        </div>
                         <div class="flex flex-wrap items-center gap-3">
                             <input type="file" id="invoiceLogoUpload" accept="image/png" class="hidden" />
                             <button type="button" id="invoiceLogoButton" class="inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-semibold shadow bg-slate-900 text-white hover:bg-slate-700 transition-colors">
@@ -169,6 +174,10 @@
                         <p id="previewBusinessDetails" class="mt-2 text-sm text-slate-600 whitespace-pre-line">123 Harbor Way
 Portland, OR 97203
 hello@firecoast.com</p>
+                    </div>
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Footer</p>
+                        <p id="previewInvoiceFooter" class="mt-2 text-xs text-slate-500 whitespace-pre-line">Add footer text to show it here.</p>
                     </div>
                 </aside>
             </div>
@@ -278,9 +287,11 @@ hello@firecoast.com</p>
             const invoiceLogoInput = document.getElementById('invoiceLogoUpload');
             const invoiceLogoButton = document.getElementById('invoiceLogoButton');
             const removeLogoButton = document.getElementById('removeLogoButton');
+            const invoiceFooterInput = document.getElementById('invoiceFooter');
             const previewName = document.getElementById('previewBusinessName');
             const previewDetails = document.getElementById('previewBusinessDetails');
             const previewSwatch = document.getElementById('previewAccentSwatch');
+            const previewFooter = document.getElementById('previewInvoiceFooter');
             const logoPreview = document.getElementById('invoiceLogoPreview');
             let currentLogoDataUrl = '';
 
@@ -302,6 +313,10 @@ hello@firecoast.com</p>
                 }
                 if (previewDetails) {
                     previewDetails.textContent = invoiceBusinessDetailsInput.value || '123 Harbor Way\nPortland, OR 97203\nhello@firecoast.com';
+                }
+                if (previewFooter) {
+                    const footerValue = (invoiceFooterInput?.value || '').trim();
+                    previewFooter.textContent = footerValue || 'Add footer text to show it here.';
                 }
                 if (previewSwatch) {
                     const color = sanitizeColor(invoiceAccentInput.value);
@@ -333,6 +348,9 @@ hello@firecoast.com</p>
                     invoiceBusinessNameInput.value = data.invoice_business_name || '';
                     invoiceBusinessDetailsInput.value = data.invoice_business_details || '';
                     invoiceAccentInput.value = sanitizeColor(data.invoice_brand_color);
+                    if (invoiceFooterInput) {
+                        invoiceFooterInput.value = data.invoice_footer || '';
+                    }
                     currentLogoDataUrl = data.invoice_logo_data_url || '';
                     updateInvoicePreview();
                     if (data.timezone && timezoneSelect) {
@@ -406,6 +424,9 @@ hello@firecoast.com</p>
             }
             if (invoiceBusinessDetailsInput) {
                 invoiceBusinessDetailsInput.addEventListener('input', updateInvoicePreview);
+            }
+            if (invoiceFooterInput) {
+                invoiceFooterInput.addEventListener('input', updateInvoicePreview);
             }
             if (invoiceAccentInput) {
                 invoiceAccentInput.addEventListener('input', () => {
@@ -511,6 +532,7 @@ hello@firecoast.com</p>
                             invoice_business_details: invoiceBusinessDetailsInput.value,
                             invoice_brand_color: sanitizeColor(invoiceAccentInput.value),
                             invoice_logo_data_url: currentLogoDataUrl,
+                            invoice_footer: invoiceFooterInput ? invoiceFooterInput.value : '',
                         };
                         const response = await fetch('/api/settings/invoice', {
                             method: 'POST',
