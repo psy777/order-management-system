@@ -8,11 +8,77 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.23/jspdf.plugin.autotable.min.js"></script>
     <link rel="stylesheet" href="/assets/css/styles.css">
 </head>
-<body>
-    <div id="root" data-order-id="{{ order_id }}"></div>
-    
+<body class="bg-slate-50 min-h-screen font-sans">
+    <nav class="bg-slate-900 text-white shadow">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex h-16 items-center justify-between">
+                <div class="flex items-center space-x-10">
+                    <a href="/dashboard" id="nav-home-link" class="text-lg font-semibold tracking-wide">FireCoast OMS</a>
+                    <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
+                        <a href="/orders" id="nav-orders-link" class="text-orange-300">Orders</a>
+                        <a href="/contacts" class="hover:text-orange-300 transition">Contacts</a>
+                        <a href="/analytics" class="hover:text-orange-300 transition">Analytics</a>
+                        <a href="/passwords" class="hover:text-orange-300 transition">Password Manager</a>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-3 text-sm font-medium">
+                    <a href="/settings" class="hover:text-orange-300 transition">Settings</a>
+                    <a href="#" id="nav-log-out" class="hover:text-orange-300 transition">Log Out</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const brandLink = document.getElementById('nav-home-link');
+            if (brandLink) {
+                brandLink.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    window.location.href = '/dashboard';
+                });
+            }
+
+            const ordersLink = document.getElementById('nav-orders-link');
+            if (ordersLink) {
+                ordersLink.addEventListener('click', (event) => {
+                    if (window.fireCoastNavigateTo) {
+                        event.preventDefault();
+                        window.fireCoastNavigateTo('dashboard');
+                    }
+                });
+            }
+
+            const logoutLink = document.getElementById('nav-log-out');
+            if (logoutLink) {
+                logoutLink.addEventListener('click', async (event) => {
+                    event.preventDefault();
+                    if (window.fireCoastLogout) {
+                        window.fireCoastLogout();
+                        return;
+                    }
+                    try {
+                        const response = await fetch('/shutdown', { method: 'POST' });
+                        if (response.ok) {
+                            document.body.innerHTML = '<div class="min-h-screen flex items-center justify-center text-slate-700 text-lg">Application has been shut down. You can now close this tab.</div>';
+                        } else {
+                            alert('Failed to log out.');
+                        }
+                    } catch (error) {
+                        console.error('Error logging out:', error);
+                        alert('Error attempting to log out.');
+                    }
+                });
+            }
+        });
+    </script>
+    <main class="py-10">
+        <div id="root" data-order-id="{{ order_id }}" class="orders-app"></div>
+    </main>
+
     {% raw %}
     <script type="text/babel">
         const formatInTimeZone = (dateString, timeZone, options = {}) => {
@@ -25,19 +91,304 @@
             }
         };
 
-        const AddLogModal = ({ orderId, onClose, onLogAdded }) => {
+        const hexToRgb = (hex) => {
+            if (typeof hex !== 'string') return null;
+            let normalized = hex.trim();
+            if (!/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(normalized)) return null;
+            normalized = normalized.slice(1);
+            if (normalized.length === 3) {
+                normalized = normalized.split('').map(char => char + char).join('');
+            }
+            const intVal = parseInt(normalized, 16);
+            return {
+                r: (intVal >> 16) & 255,
+                g: (intVal >> 8) & 255,
+                b: intVal & 255,
+            };
+        };
+
+const normalizePhoneDigits = (value = '') => (value || '').replace(/\D/g, '').slice(0, 10);
+
+const formatPhoneNumber = (value = '') => {
+    const digits = normalizePhoneDigits(value);
+    if (!digits) return '';
+            if (digits.length < 4) {
+                const closing = digits.length === 3 ? ')' : '';
+                return `(${digits}${closing}`;
+            }
+            if (digits.length < 7) {
+                return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+            }
+    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)} ${digits.slice(6)}`;
+};
+
+const LINE_ITEM_TYPES = {
+    product: { label: 'Product / Goods', quantityLabel: 'Units', priceLabel: 'Unit Price' },
+    service: { label: 'Service / Hours', quantityLabel: 'Hours', priceLabel: 'Hourly Rate' },
+    fee: { label: 'Fee / Surcharge', quantityLabel: 'Qty', priceLabel: 'Fee Amount' },
+    shipping: { label: 'Shipping', quantityLabel: 'Packages', priceLabel: 'Shipping Cost' },
+    discount: { label: 'Discount', quantityLabel: 'Qty', priceLabel: 'Discount Amount' },
+    package: { label: 'Package / Bundle', quantityLabel: 'Qty', priceLabel: 'Bundle Price' },
+    other: { label: 'Other', quantityLabel: 'Qty', priceLabel: 'Unit Price' },
+};
+
+const LEGACY_TYPE_MAP = {
+    cross: 'product',
+    display: 'product',
+};
+
+const normalizeLineItemType = (rawType) => {
+    const normalized = (rawType || '').toString().trim().toLowerCase();
+    if (LINE_ITEM_TYPES[normalized]) {
+        return normalized;
+    }
+    if (LEGACY_TYPE_MAP[normalized]) {
+        return LEGACY_TYPE_MAP[normalized];
+    }
+    if (!normalized) {
+        return 'product';
+    }
+    return 'other';
+};
+
+const getLineItemTypeMeta = (type) => {
+    const key = normalizeLineItemType(type);
+    return LINE_ITEM_TYPES[key] || LINE_ITEM_TYPES.other;
+};
+
+const sanitizePlaceholderValue = (value) => {
+    if (!value) return '';
+    const trimmed = value.toString().trim();
+    if (!trimmed) return '';
+    const lowered = trimmed.toLowerCase();
+    if (lowered === '[no contact found]' || lowered === 'no contact found') {
+        return '';
+    }
+    return trimmed;
+};
+
+const ContactMentionTextarea = ({ label, placeholder, value, onChange, disabled = false, rows = 3, contacts = [] }) => {
+    const { useState, useRef, useEffect, useMemo } = React;
+    const textareaRef = useRef(null);
+    const overlayRef = useRef(null);
+    const [suggestions, setSuggestions] = useState([]);
+    const [isOpen, setIsOpen] = useState(false);
+    const [highlightIndex, setHighlightIndex] = useState(0);
+    const lastCaretRef = useRef(0);
+
+    const escapeHtml = (input = '') => String(input)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+
+    const formatSpaces = (input = '') => input.replace(/ {2,}/g, match => '&nbsp;'.repeat(match.length - 1) + ' ');
+
+    const buildHighlightedHtml = useMemo(() => {
+        const rawValue = value || '';
+        if (!rawValue.trim()) {
+            return `<span class="text-slate-400">${escapeHtml(placeholder || '')}</span>`;
+        }
+        const escaped = escapeHtml(rawValue);
+        const withMentions = escaped.replace(/(@[a-z0-9_.-]+)/gi, '<span class="mention-pill inline-flex items-center gap-1 rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700">$1</span>');
+        const withBreaks = withMentions.replace(/\r?\n/g, '<br />');
+        return formatSpaces(withBreaks);
+    }, [value, placeholder]);
+
+    const syncOverlayScroll = () => {
+        const textarea = textareaRef.current;
+        const overlay = overlayRef.current;
+        if (!textarea || !overlay) return;
+        overlay.scrollTop = textarea.scrollTop;
+        overlay.scrollLeft = textarea.scrollLeft;
+    };
+
+    const findMentionQuery = (text, caretPosition) => {
+        const uptoCaret = text.slice(0, caretPosition);
+        const match = uptoCaret.match(/@([a-z0-9_.-]*)$/i);
+        if (match) {
+            return match[1].toLowerCase();
+        }
+        return null;
+    };
+
+    const updateSuggestions = (text, caret) => {
+        const query = findMentionQuery(text, caret);
+        if (query === null) {
+            setSuggestions([]);
+            setIsOpen(false);
+            setHighlightIndex(0);
+            return;
+        }
+        const filtered = contacts
+            .filter(contact => contact.handle)
+            .filter(contact => {
+                if (!query) return true;
+                const handle = contact.handle.toLowerCase();
+                const name = (contact.contactName || '').toLowerCase();
+                const company = (contact.companyName || '').toLowerCase();
+                return handle.startsWith(query) || name.includes(query) || company.includes(query);
+            })
+            .slice(0, 8);
+        setSuggestions(filtered);
+        setIsOpen(filtered.length > 0);
+        setHighlightIndex(0);
+    };
+
+    const applyMention = (contact) => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+        const caret = textarea.selectionStart;
+        const text = textarea.value;
+        const uptoCaret = text.slice(0, caret);
+        const match = uptoCaret.match(/@([a-z0-9_.-]*)$/i);
+        if (!match) return;
+        const queryLength = match[1].length;
+        const insertionPoint = caret - queryLength;
+        const replacement = `@${contact.handle} `;
+        const newValue = text.slice(0, insertionPoint) + replacement + text.slice(caret);
+        onChange(newValue);
+        requestAnimationFrame(() => {
+            textarea.focus();
+            const newCaret = insertionPoint + replacement.length;
+            textarea.setSelectionRange(newCaret, newCaret);
+        });
+        setSuggestions([]);
+        setIsOpen(false);
+    };
+
+    const handleChange = (event) => {
+        const newValue = event.target.value;
+        onChange(newValue);
+        const caret = event.target.selectionStart;
+        lastCaretRef.current = caret;
+        updateSuggestions(newValue, caret);
+    };
+
+    const handleKeyDown = (event) => {
+        if (!isOpen || suggestions.length === 0) return;
+        if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            setHighlightIndex(prev => (prev + 1) % suggestions.length);
+        } else if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            setHighlightIndex(prev => (prev - 1 + suggestions.length) % suggestions.length);
+        } else if (event.key === 'Enter' || event.key === 'Tab') {
+            const selected = suggestions[highlightIndex];
+            if (selected) {
+                event.preventDefault();
+                applyMention(selected);
+            }
+        } else if (event.key === 'Escape') {
+            setIsOpen(false);
+        }
+    };
+
+    useEffect(() => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+        const handler = () => {
+            const caret = textarea.selectionStart;
+            lastCaretRef.current = caret;
+            updateSuggestions(textarea.value, caret);
+        };
+        textarea.addEventListener('click', handler);
+        textarea.addEventListener('keyup', handler);
+        textarea.addEventListener('scroll', syncOverlayScroll);
+        return () => {
+            textarea.removeEventListener('click', handler);
+            textarea.removeEventListener('keyup', handler);
+            textarea.removeEventListener('scroll', syncOverlayScroll);
+        };
+    }, [contacts]);
+
+    useEffect(() => {
+        syncOverlayScroll();
+    }, [value]);
+
+    return (
+        <div className="relative">
+            {label !== undefined && label !== null && label !== '' && (
+                <label className="block text-sm font-medium text-slate-700">{label}</label>
+            )}
+            <div className="relative mt-1">
+                <div
+                    ref={overlayRef}
+                    aria-hidden="true"
+                    className={`pointer-events-none absolute inset-0 px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words rounded-md ${disabled ? 'bg-slate-100 text-slate-500' : 'bg-white text-slate-700'}`}
+                    dangerouslySetInnerHTML={{ __html: buildHighlightedHtml }}
+                ></div>
+                <textarea
+                    ref={textareaRef}
+                    rows={rows}
+                    placeholder={placeholder}
+                    value={value}
+                    onChange={handleChange}
+                    onKeyDown={handleKeyDown}
+                    disabled={disabled}
+                    className={`relative block w-full resize-y rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 bg-transparent text-transparent placeholder-transparent caret-orange-500 selection:bg-orange-200 selection:text-transparent`}
+                    style={{ WebkitTextFillColor: 'transparent' }}
+                />
+            </div>
+            {isOpen && suggestions.length > 0 && (
+                <div className="absolute z-20 mt-1 w-full max-h-56 overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg">
+                    {suggestions.map((contact, index) => (
+                        <button
+                            type="button"
+                            key={contact.id || contact.handle || index}
+                            onMouseDown={(event) => { event.preventDefault(); applyMention(contact); }}
+                            className={`w-full text-left px-3 py-2 text-sm ${highlightIndex === index ? 'bg-orange-100 text-orange-900' : 'text-slate-700 hover:bg-orange-50'}`}
+                        >
+                            <span className="font-semibold">@{contact.handle}</span>
+                            <span className="ml-2 text-xs text-slate-500">{contact.contactName || contact.companyName}</span>
+                        </button>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
+const getContactDisplayName = (contact) => {
+    if (!contact) {
+        return 'Unnamed contact';
+    }
+    const name = sanitizePlaceholderValue(contact.contactName);
+    const company = sanitizePlaceholderValue(contact.companyName);
+    const email = (contact.email || '').trim();
+    const handle = (contact.handle || '').trim();
+    return name || company || email || (handle ? `@${handle}` : 'Unnamed contact');
+};
+
+const formatContactAddress = (address, city, state, zip) => {
+    const parts = [];
+    if (address && address.trim()) {
+        parts.push(address.trim());
+    }
+    const cityState = [city, state].map(part => (part || '').trim()).filter(Boolean).join(', ');
+    if (cityState) {
+        parts.push(cityState);
+    }
+    if (zip && zip.trim()) {
+        parts.push(zip.trim());
+    }
+    return parts.length > 0 ? parts.join(' ') : 'Not provided';
+};
+
+        const AddLogModal = ({ orderId, onClose, onLogAdded, contacts }) => {
             const { useState, useRef } = React;
             const [action, setAction] = useState('Manual Entry');
             const [details, setDetails] = useState('');
             const [isSubmitting, setIsSubmitting] = useState(false);
             const fileInputRef = useRef(null);
 
-            const isStatusUpdate = action === 'status';
+            const isStatusUpdate = ['status update', 'status'].includes(action.toLowerCase());
 
             const handleSubmit = async (e) => {
                 e.preventDefault();
                 setIsSubmitting(true);
-                
+
                 const formData = new FormData();
                 formData.append('action', action);
                 formData.append('details', details);
@@ -74,7 +425,7 @@
                                 <label htmlFor="action" className="block text-sm font-medium text-slate-700">Action</label>
                                 <select id="action" value={action} onChange={e => setAction(e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500">
                                     <option value="Manual Entry">Manual Entry</option>
-                                    <option value="status">Status Update</option>
+                                    <option value="Status Update">Status Update</option>
                                     <option value="Phone Call">Phone Call</option>
                                     <option value="Email">Email</option>
                                     <option value="Internal Note">Internal Note</option>
@@ -82,7 +433,14 @@
                             </div>
                             <div className="mb-4">
                                 <label htmlFor="details" className="block text-sm font-medium text-slate-700">{isStatusUpdate ? 'New Status' : 'Details'}</label>
-                                <textarea id="details" value={details} onChange={e => setDetails(e.target.value)} rows="3" placeholder={isStatusUpdate ? 'Enter the new status...' : 'Enter details about the log...'} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500"></textarea>
+                                <ContactMentionTextarea
+                                    label={isStatusUpdate ? 'New Status' : 'Details'}
+                                    value={details}
+                                    onChange={setDetails}
+                                    placeholder={isStatusUpdate ? 'Enter the new status...' : 'Enter details about the log...'}
+                                    rows={3}
+                                    contacts={contacts}
+                                />
                             </div>
                             <div className="mb-4">
                                 <label htmlFor="attachment" className="block text-sm font-medium text-slate-700">Attachment</label>
@@ -98,11 +456,262 @@
             );
         };
 
+        const generateInvoicePdf = (order, itemsIndex = {}, brandingOverride = {}) => {
+            if (!order) return;
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+            const safeItems = itemsIndex || {};
+            const safeOrder = order || {};
+            const displayId = typeof safeOrder.display_id === 'string' ? safeOrder.display_id : null;
+            const orderId = safeOrder.id || '';
+            const orderTitle = (safeOrder.title || '').trim();
+            const orderNumber = (displayId && displayId.trim()) || orderId;
+            const timeZone = "America/Chicago";
+            const dateOptions = { year: 'numeric', month: 'long', day: 'numeric' };
+            const formattedDate = safeOrder.date ? formatInTimeZone(safeOrder.date, timeZone, dateOptions) : '—';
+
+            const mergedBranding = {
+                ...(window.fireCoastBranding || {}),
+                ...(brandingOverride || {}),
+            };
+            const accentRgb = hexToRgb(mergedBranding.invoice_brand_color) || { r: 249, g: 115, b: 22 };
+            const brandLines = [];
+            const businessName = (mergedBranding.invoice_business_name || '').trim();
+            const businessDetails = (mergedBranding.invoice_business_details || '').trim();
+            if (businessName) {
+                brandLines.push(businessName);
+            }
+            if (businessDetails) {
+                brandLines.push(...businessDetails.split('\n').map(line => line.trim()).filter(Boolean));
+            }
+            const logoDataUrl = (mergedBranding.invoice_logo_data_url || '').trim();
+
+            const baseContact = safeOrder.contactInfo || {};
+            const contactInfo = {
+                companyName: '',
+                contactName: '',
+                email: '',
+                phone: '',
+                billingAddress: '',
+                billingCity: '',
+                billingState: '',
+                billingZipCode: '',
+                shippingAddress: '',
+                shippingCity: '',
+                shippingState: '',
+                shippingZipCode: '',
+                ...baseContact
+            };
+
+            const renderBlock = (label, lines, x, y, wrapWidth = null) => {
+                doc.setFontSize(12);
+                doc.text(label, x, y);
+                y += 6;
+                doc.setFontSize(10);
+                if (!lines.length) {
+                    doc.text('—', x, y);
+                    return y + 7;
+                }
+                if (wrapWidth) {
+                    const wrapped = doc.splitTextToSize(lines.join('\n'), wrapWidth);
+                    doc.text(wrapped, x, y);
+                    return y + (wrapped.length * 4) + 2;
+                }
+                lines.forEach((line) => {
+                    doc.text(line, x, y);
+                    y += 5;
+                });
+                return y + 2;
+            };
+
+            const buildAddressLines = (address, city, state, zip) => {
+                const lines = [];
+                if (address) lines.push(address);
+                const locality = [city, state].filter(Boolean).join(', ');
+                const postalLine = [locality, zip].filter(Boolean).join(' ');
+                if (postalLine.trim()) lines.push(postalLine.trim());
+                return lines;
+            };
+
+            doc.setFontSize(22);
+            doc.setTextColor(accentRgb.r, accentRgb.g, accentRgb.b);
+            doc.text("Invoice", 14, 22);
+            doc.setDrawColor(accentRgb.r, accentRgb.g, accentRgb.b);
+            doc.setLineWidth(0.75);
+            doc.line(14, 26, 196, 26);
+            doc.setTextColor(0, 0, 0);
+
+            let rightHeaderTop = 18;
+            if (logoDataUrl) {
+                try {
+                    doc.addImage(logoDataUrl, 'PNG', 150, 10, 40, 20);
+                    rightHeaderTop = 32;
+                } catch (error) {
+                    console.error('Unable to render invoice logo:', error);
+                }
+            }
+            if (brandLines.length) {
+                const wrappedBrand = doc.splitTextToSize(brandLines.join('\n'), 60);
+                doc.setFontSize(12);
+                doc.text(wrappedBrand, 196, rightHeaderTop, { align: 'right' });
+            }
+
+            doc.setFontSize(12);
+            let headerY = 30;
+            doc.text(`Order #: ${orderNumber || '—'}`, 14, headerY);
+            if (orderTitle) {
+                headerY += 6;
+                doc.text(`Title: ${orderTitle}`, 14, headerY);
+            }
+            headerY += 6;
+            doc.text(`Date: ${formattedDate}`, 14, headerY);
+
+            let leftColumnY = headerY + 14;
+            let rightColumnY = headerY + 14;
+            const leftColumnX = 14;
+            const rightColumnX = 105;
+
+            const customerPhone = formatPhoneNumber(contactInfo.phone);
+            const customerLines = [contactInfo.companyName, contactInfo.contactName, contactInfo.email, customerPhone].filter(Boolean);
+            leftColumnY = renderBlock("Bill To", customerLines, leftColumnX, leftColumnY);
+
+            const billingLines = buildAddressLines(contactInfo.billingAddress, contactInfo.billingCity, contactInfo.billingState, contactInfo.billingZipCode);
+            if (billingLines.length) {
+                rightColumnY = renderBlock("Billing Address", billingLines, rightColumnX, rightColumnY, 90);
+            }
+
+            const shippingLines = buildAddressLines(contactInfo.shippingAddress, contactInfo.shippingCity, contactInfo.shippingState, contactInfo.shippingZipCode);
+            if (shippingLines.length) {
+                rightColumnY = renderBlock("Shipping Address", shippingLines, rightColumnX, rightColumnY, 90);
+            }
+
+            let tableStartY = Math.max(leftColumnY, rightColumnY, headerY + 20) + 5;
+
+            const safeLineItems = Array.isArray(safeOrder.lineItems) ? safeOrder.lineItems : [];
+            const tableHead = ["Item", "Type", "Style", "Units", "Rate", "Total"];
+            const tableBody = safeLineItems.map((item) => {
+                const itemLookup = item?.item ? safeItems[item.item] : null;
+                const itemName = (itemLookup && itemLookup.name) || item?.item || 'Item';
+                const quantity = Number(item?.quantity) || 0;
+                const unitPriceCents = Number(item?.price) || 0;
+                const meta = getLineItemTypeMeta(item?.type || itemLookup?.type);
+                const quantityLabel = meta.quantityLabel ? ` ${meta.quantityLabel}` : '';
+                const priceLabel = meta.priceLabel && meta.priceLabel !== 'Unit Price' ? ` (${meta.priceLabel})` : '';
+                const lineTotalCents = quantity * unitPriceCents;
+                return [
+                    itemName,
+                    meta.label,
+                    item?.style || '',
+                    `${quantity}${quantityLabel}`,
+                    `$${(unitPriceCents / 100).toFixed(2)}${priceLabel}`,
+                    `$${(lineTotalCents / 100).toFixed(2)}`
+                ];
+            });
+
+            doc.autoTable({ head: [tableHead], body: tableBody, startY: tableStartY });
+
+            const subtotalCents = safeLineItems.reduce((acc, item) => {
+                const quantity = Number(item?.quantity) || 0;
+                const unitPriceCents = Number(item?.price) || 0;
+                return acc + (quantity * unitPriceCents);
+            }, 0);
+
+            const estimatedShippingValue = typeof safeOrder.estimatedShipping === 'number'
+                ? safeOrder.estimatedShipping
+                : parseFloat(safeOrder.estimatedShipping || '0');
+            const estimatedShippingCents = Math.round((Number.isFinite(estimatedShippingValue) ? estimatedShippingValue : 0) * 100);
+            const totalCents = subtotalCents + estimatedShippingCents;
+
+            const tableResult = doc.lastAutoTable;
+            let summaryY = (tableResult ? tableResult.finalY : tableStartY) + 10;
+
+            doc.setFontSize(10);
+            doc.text(`Subtotal: $${(subtotalCents / 100).toFixed(2)}`, 14, summaryY);
+            summaryY += 7;
+
+            if (estimatedShippingCents > 0) {
+                doc.text(`Est. Shipping Cost: $${(estimatedShippingCents / 100).toFixed(2)}`, 14, summaryY);
+                summaryY += 7;
+            }
+
+            doc.setFontSize(12);
+            doc.text(`Total: $${(totalCents / 100).toFixed(2)}`, 14, summaryY);
+            summaryY += 10;
+
+            doc.setFontSize(10);
+            if (safeOrder.estimatedShippingDate) {
+                doc.text(`Est. Ship Date: ${formatInTimeZone(safeOrder.estimatedShippingDate, timeZone, dateOptions)}`, 14, summaryY);
+                summaryY += 5;
+            }
+
+            if (safeOrder.priorityLevel) {
+                doc.text(`Priority: ${safeOrder.priorityLevel}`, 14, summaryY);
+                summaryY += 5;
+            }
+
+            if (safeOrder.fulfillmentChannel) {
+                doc.text(`Fulfillment: ${safeOrder.fulfillmentChannel}`, 14, summaryY);
+                summaryY += 5;
+            }
+
+            if (safeOrder.customerReference) {
+                doc.text(`Customer Reference: ${safeOrder.customerReference}`, 14, summaryY);
+                summaryY += 5;
+            }
+
+            const trimmedNotes = (safeOrder.notes || '').trim();
+            if (trimmedNotes) {
+                summaryY += 5;
+                doc.text("Notes:", 14, summaryY);
+                summaryY += 5;
+                const wrappedNotes = doc.splitTextToSize(trimmedNotes, 180);
+                doc.text(wrappedNotes, 14, summaryY);
+                summaryY += wrappedNotes.length * 4;
+            }
+
+            summaryY += 15;
+            if (summaryY > 260) {
+                doc.addPage();
+                summaryY = 20;
+            }
+
+            doc.setFontSize(10);
+            doc.text("Authorized Signature:", 14, summaryY);
+
+            const signatureDataUrl = safeOrder.signatureDataUrl;
+            if (signatureDataUrl) {
+                try {
+                    if (signatureDataUrl.startsWith('data:image')) {
+                        const base64Data = signatureDataUrl.substring(signatureDataUrl.indexOf(',') + 1);
+                        if (base64Data.length > 150) {
+                            const signatureImgWidth = 70;
+                            const signatureImgHeight = 20;
+                            doc.addImage(signatureDataUrl, 'PNG', 50, summaryY - (signatureImgHeight / 2) + 2, signatureImgWidth, signatureImgHeight);
+                        } else {
+                            doc.line(50, summaryY, 120, summaryY);
+                        }
+                    } else {
+                        doc.line(50, summaryY, 120, summaryY);
+                    }
+                } catch (error) {
+                    console.error('Error rendering signature image for PDF:', error);
+                    doc.line(50, summaryY, 120, summaryY);
+                }
+            } else {
+                doc.line(50, summaryY, 120, summaryY);
+            }
+
+            doc.output('dataurlnewwindow');
+        };
+
         const ViewOrderPage = ({ orderId }) => {
             const { useState, useEffect } = React;
             const [order, setOrder] = useState(null);
             const [isLoading, setIsLoading] = useState(true);
             const [isLogModalOpen, setIsLogModalOpen] = useState(false);
+            const [contacts, setContacts] = useState([]);
+            const [itemsIndex, setItemsIndex] = useState({});
+            const [branding, setBranding] = useState({});
 
             const fetchOrder = async () => {
                 try {
@@ -111,7 +720,14 @@
                         throw new Error('Order not found');
                     }
                     const data = await response.json();
-                    setOrder(data);
+                    const normalizedOrder = { ...data };
+                    if (Array.isArray(data?.lineItems)) {
+                        normalizedOrder.lineItems = data.lineItems.map(item => ({
+                            ...item,
+                            type: normalizeLineItemType(item?.type),
+                        }));
+                    }
+                    setOrder(normalizedOrder);
                 } catch (error) {
                     console.error("Failed to fetch order:", error);
                 } finally {
@@ -123,6 +739,55 @@
                 fetchOrder();
             }, [orderId]);
 
+            useEffect(() => {
+                const fetchContactsAndItems = async () => {
+                    try {
+                        const [contactsRes, itemsRes] = await Promise.all([
+                            fetch('/api/contacts'),
+                            fetch('/api/items')
+                        ]);
+                        if (contactsRes.ok) {
+                            const contactsData = await contactsRes.json();
+                            setContacts(Array.isArray(contactsData) ? contactsData : []);
+                        }
+                        if (itemsRes.ok) {
+                            const itemsData = await itemsRes.json();
+                            const nextIndex = {};
+                            if (Array.isArray(itemsData)) {
+                                itemsData.forEach(item => {
+                                    if (item && item.item_code) {
+                                        nextIndex[item.item_code] = {
+                                            ...item,
+                                            type: normalizeLineItemType(item.type),
+                                        };
+                                    }
+                                });
+                            }
+                            setItemsIndex(nextIndex);
+                        }
+                    } catch (error) {
+                        console.error('Failed to fetch contacts or items:', error);
+                    }
+                };
+                fetchContactsAndItems();
+            }, []);
+
+            useEffect(() => {
+                const loadBranding = async () => {
+                    try {
+                        const response = await fetch('/api/settings');
+                        if (response.ok) {
+                            const settingsData = await response.json();
+                            setBranding(settingsData);
+                            window.fireCoastBranding = settingsData;
+                        }
+                    } catch (error) {
+                        console.error('Failed to load settings for invoice branding:', error);
+                    }
+                };
+                loadBranding();
+            }, []);
+
             if (isLoading) {
                 return <div className="text-center p-8">Loading order details...</div>;
             }
@@ -131,61 +796,97 @@
                 return <div className="text-center p-8 text-red-500">Failed to load order. It may not exist.</div>;
             }
 
-            const handleLogAdded = (newLog) => {
-                const updatedLogs = [newLog, ...order.orderLogs];
-                setOrder({ ...order, orderLogs: updatedLogs });
+            const handleLogAdded = () => {
+                fetchOrder();
             };
 
             const orderTotals = {
                 subtotal: order.lineItems.reduce((acc, item) => acc + (item.quantity * item.price), 0),
-                nameDropSurcharge: order.nameDrop ? order.lineItems.reduce((acc, item) => {
-                    if (item.type === 'cross') {
-                        return acc + (item.quantity * 100);
-                    }
-                    return acc;
-                }, 0) : 0,
                 estimatedShipping: parseFloat(order.estimatedShipping) || 0,
             };
-            orderTotals.total = orderTotals.subtotal + orderTotals.nameDropSurcharge + Math.round(orderTotals.estimatedShipping * 100);
+            orderTotals.total = orderTotals.subtotal + Math.round(orderTotals.estimatedShipping * 100);
+
+            const orderTitle = order.title || order.display_id || order.id;
+            const primaryContact = order.contactInfo || {};
+            const contactDisplayName = getContactDisplayName(primaryContact);
+            const companyName = sanitizePlaceholderValue(primaryContact.companyName);
+            const showCompanyLine = Boolean(companyName && companyName !== contactDisplayName);
+            const contactHandle = (primaryContact.handle || '').trim();
+            const formattedPhone = formatPhoneNumber(primaryContact.phone);
+            const formattedShipping = formatContactAddress(
+                primaryContact.shippingAddress,
+                primaryContact.shippingCity,
+                primaryContact.shippingState,
+                primaryContact.shippingZipCode
+            );
+            const formattedBilling = formatContactAddress(
+                primaryContact.billingAddress,
+                primaryContact.billingCity,
+                primaryContact.billingState,
+                primaryContact.billingZipCode
+            );
 
 
             return (
                 <div className="bg-slate-50 min-h-screen font-sans">
                 <div className="max-w-4xl mx-auto p-4 sm:p-6 lg:p-8">
-                    <div className="mb-6 flex justify-between items-center">
+                    <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                         <div>
-                            <a href="/" className="text-orange-600 hover:text-orange-800 font-semibold">&larr; Back to Dashboard</a>
-                            <h1 className="text-3xl font-bold text-slate-800 mt-2">View Order: {order.id}</h1>
+                            <a href="/orders" className="text-orange-600 hover:text-orange-800 font-semibold">&larr; Back to Orders</a>
+                            <h1 className="text-3xl font-bold text-slate-800 mt-2">View Order: {orderTitle}</h1>
+                            <p className="text-sm text-slate-500 mt-1">Order ID: {order.id}</p>
                         </div>
-                        <a href={`/?order_id=${order.id}`} className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors shadow">Edit Order</a>
+                        <div className="flex flex-wrap gap-3">
+                            <button
+                                type="button"
+                                onClick={() => generateInvoicePdf(order, itemsIndex, branding)}
+                                className="px-4 py-2 bg-white text-slate-700 font-semibold rounded-md border border-slate-300 hover:bg-slate-100 transition-colors shadow-sm"
+                            >
+                                Preview Invoice
+                            </button>
+                            <a href={`/orders?order_id=${order.id}&mode=edit`} className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors shadow">Edit Order</a>
+                        </div>
                     </div>
 
-                        <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200 mb-6">
-                            <h2 className="text-xl font-semibold text-slate-700 border-b pb-3 mb-4">Vendor Information</h2>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 mb-6">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                                 <div>
-                                    <p className="text-sm font-medium text-slate-500">Company Name</p>
-                                    <p className="text-slate-800">{order.vendorInfo.companyName}</p>
+                                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Primary Contact</p>
+                                    <h2 className="mt-1 text-2xl font-semibold text-slate-800">{contactDisplayName}</h2>
+                                    {showCompanyLine && <p className="text-sm text-slate-500">{companyName}</p>}
+                                    {contactHandle && (
+                                        <div className="mt-3">
+                                            <span className="inline-flex items-center rounded-full bg-orange-100 px-2.5 py-0.5 text-xs font-semibold text-orange-700">@{contactHandle}</span>
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                    {primaryContact.id && (
+                                        <a
+                                            href={`/contacts?contact_id=${primaryContact.id}`}
+                                            className="inline-flex items-center rounded-md border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                                        >
+                                            View in Contacts
+                                        </a>
+                                    )}
+                                </div>
+                            </div>
+                            <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm text-slate-600">
+                                <div>
+                                    <p className="font-semibold text-slate-700">Email</p>
+                                    <p>{primaryContact.email || 'Not provided'}</p>
                                 </div>
                                 <div>
-                                    <p className="text-sm font-medium text-slate-500">Contact Name</p>
-                                    <p className="text-slate-800">{order.vendorInfo.contactName}</p>
+                                    <p className="font-semibold text-slate-700">Phone</p>
+                                    <p>{formattedPhone || 'Not provided'}</p>
                                 </div>
                                 <div>
-                                    <p className="text-sm font-medium text-slate-500">Email</p>
-                                    <p className="text-slate-800">{order.vendorInfo.email}</p>
+                                    <p className="font-semibold text-slate-700">Shipping Address</p>
+                                    <p>{formattedShipping}</p>
                                 </div>
                                 <div>
-                                    <p className="text-sm font-medium text-slate-500">Phone</p>
-                                    <p className="text-slate-800">{order.vendorInfo.phone}</p>
-                                </div>
-                                <div>
-                                    <p className="text-sm font-medium text-slate-500">Shipping Address</p>
-                                    <p className="text-slate-800">{`${order.vendorInfo.shippingAddress}, ${order.vendorInfo.shippingCity}, ${order.vendorInfo.shippingState} ${order.vendorInfo.shippingZipCode}`}</p>
-                                </div>
-                                 <div>
-                                    <p className="text-sm font-medium text-slate-500">Billing Address</p>
-                                    <p className="text-slate-800">{`${order.vendorInfo.billingAddress}, ${order.vendorInfo.billingCity}, ${order.vendorInfo.billingState} ${order.vendorInfo.billingZipCode}`}</p>
+                                    <p className="font-semibold text-slate-700">Billing Address</p>
+                                    <p>{formattedBilling}</p>
                                 </div>
                             </div>
                         </div>
@@ -209,11 +910,11 @@
                                         <tbody>
                                             {order.orderLogs.map(log => (
                                                 <tr key={log.log_id} className="bg-white border-b hover:bg-slate-50">
-                                                    <td className="px-4 py-3 font-medium text-slate-800">{new Date(log.timestamp).toLocaleString()}</td>
-                                                    <td className="px-4 py-3">{log.action}</td>
-                                                    <td className="px-4 py-3">{log.details || ''}</td>
+                                                    <td className="px-4 py-3 font-medium text-slate-800">{log.timestamp ? new Date(log.timestamp).toLocaleString() : '—'}</td>
+                                                    <td className="px-4 py-3">{log.action || '—'}</td>
+                                                    <td className="px-4 py-3 whitespace-pre-wrap">{log.details || log.note || ''}</td>
                                                     <td className="px-4 py-3">
-                                                        {log.attachment_path ? 
+                                                        {log.attachment_path ?
                                                             <a href={`/data/${log.attachment_path}`} target="_blank" className="text-orange-600 hover:underline">View File</a> : ''}
                                                     </td>
                                                 </tr>
@@ -224,7 +925,7 @@
                             ) : <p className="text-slate-500 italic">No logs for this order yet.</p>}
                         </div>
 
-                        {isLogModalOpen && <AddLogModal orderId={order.id} onClose={() => setIsLogModalOpen(false)} onLogAdded={handleLogAdded} />}
+                        {isLogModalOpen && <AddLogModal orderId={order.id} onClose={() => setIsLogModalOpen(false)} onLogAdded={handleLogAdded} contacts={contacts} />}
 
                         <div className="bg-white rounded-lg shadow-sm border border-slate-200">
                             <div className="p-6 border-b"><h2 className="text-xl font-semibold text-slate-700">Line Items</h2></div>
@@ -233,22 +934,40 @@
                                     <thead className="text-xs text-slate-700 uppercase bg-slate-100">
                                         <tr>
                                             <th scope="col" className="px-4 py-3">Item</th>
+                                            <th scope="col" className="px-4 py-3">Type</th>
                                             <th scope="col" className="px-4 py-3">Style</th>
-                                            <th scope="col" className="px-4 py-3 text-center">Qty</th>
-                                            <th scope="col" className="px-4 py-3 text-right">Unit Price</th>
+                                            <th scope="col" className="px-4 py-3 text-center">Units</th>
+                                            <th scope="col" className="px-4 py-3 text-right">Rate</th>
                                             <th scope="col" className="px-4 py-3 text-right">Total</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {order.lineItems.map((item, index) => (
-                                            <tr key={index} className="border-b align-middle">
-                                                <td className="px-4 py-2">{item.item}</td>
-                                                <td className="px-4 py-2">{item.style}</td>
-                                                <td className="px-4 py-2 text-center">{item.quantity}</td>
-                                                <td className="px-4 py-2 text-right">${(item.price / 100).toFixed(2)}</td>
-                                                <td className="px-4 py-2 text-right font-medium text-slate-800">${((item.quantity * item.price) / 100).toFixed(2)}</td>
-                                            </tr>
-                                        ))}
+                                        {order.lineItems.map((item, index) => {
+                                            const lookup = itemsIndex[item.item] || {};
+                                            const meta = getLineItemTypeMeta(item.type || lookup.type);
+                                            const quantityLabel = meta.quantityLabel ? ` ${meta.quantityLabel}` : '';
+                                            const priceLabel = meta.priceLabel && meta.priceLabel !== 'Unit Price' ? meta.priceLabel : '';
+                                            return (
+                                                <tr key={index} className="border-b align-middle">
+                                                    <td className="px-4 py-2">{lookup.name || item.item}</td>
+                                                    <td className="px-4 py-2">{meta.label}</td>
+                                                    <td className="px-4 py-2">{item.style || '—'}</td>
+                                                    <td className="px-4 py-2 text-center">
+                                                        <div className="flex flex-col items-center gap-1">
+                                                            <span>{item.quantity}</span>
+                                                            {quantityLabel && <span className="text-xs text-slate-400">{quantityLabel.trim()}</span>}
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-4 py-2 text-right">
+                                                        <div className="flex flex-col items-end gap-1">
+                                                            <span>${(item.price / 100).toFixed(2)}</span>
+                                                            {priceLabel && <span className="text-xs text-slate-400">{priceLabel}</span>}
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-4 py-2 text-right font-medium text-slate-800">${((item.quantity * item.price) / 100).toFixed(2)}</td>
+                                                </tr>
+                                            );
+                                        })}
                                     </tbody>
                                 </table>
                             </div>
@@ -260,8 +979,9 @@
                                      <h2 className="text-xl font-semibold text-slate-700 border-b pb-3 mb-4">Order Metadata</h2>
                                     <div className="space-y-4">
                                         <div><p className="text-sm font-medium text-slate-500">Est. Shipping Date</p><p>{order.estimatedShippingDate ? formatInTimeZone(order.estimatedShippingDate, "America/Chicago", { year: 'numeric', month: 'long', day: 'numeric' }) : 'Not set'}</p></div>
-                                        <div><p className="text-sm font-medium text-slate-500">Scent Option</p><p>{order.scentOption}</p></div>
-                                        <div><p className="text-sm font-medium text-slate-500">Name Drop</p><p>{order.nameDrop ? 'Yes' : 'No'}</p></div>
+                                        <div><p className="text-sm font-medium text-slate-500">Priority Level</p><p>{order.priorityLevel || 'Not set'}</p></div>
+                                        <div><p className="text-sm font-medium text-slate-500">Fulfillment Channel</p><p>{order.fulfillmentChannel || 'Not specified'}</p></div>
+                                        <div><p className="text-sm font-medium text-slate-500">Customer Reference</p><p>{order.customerReference || '—'}</p></div>
                                     </div>
                                 </div>
                                 <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
@@ -278,9 +998,6 @@
                                     <h2 className="text-xl font-semibold text-slate-700 mb-4">Order Summary</h2>
                                     <div className="space-y-3">
                                         <div className="flex justify-between items-center text-slate-600"><span>Subtotal</span><span className="font-medium">${(orderTotals.subtotal / 100).toFixed(2)}</span></div>
-                                        {orderTotals.nameDropSurcharge > 0 && (
-                                            <div className="flex justify-between items-center text-slate-600"><span>Name Drop Surcharge</span><span className="font-medium">${(orderTotals.nameDropSurcharge / 100).toFixed(2)}</span></div>
-                                        )}
                                         {orderTotals.estimatedShipping > 0 && (
                                             <div className="flex justify-between items-center text-slate-600"><span>Est. Shipping</span><span className="font-medium">${orderTotals.estimatedShipping.toFixed(2)}</span></div>
                                         )}

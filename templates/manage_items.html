@@ -28,7 +28,8 @@
 <body>
     <div class="container mt-4">
         <a href="/settings" target="_top" class="back-to-settings-button">&larr; Back to Settings</a>
-        <h1>Manage Items (Crosses)</h1>
+        <h1>Manage Items &amp; Services</h1>
+        <p class="text-muted">Define products, services, fees, discounts, and bundles that can appear as order line items.</p>
         <hr>
 
         {% with messages = get_flashed_messages(with_categories=true) %}
@@ -95,12 +96,18 @@
                             <label for="itemPrice">Price ($)</label>
                             <input type="number" class="form-control" id="itemPrice" required min="0" step="0.01">
                         </div>
-                         <div class="form-group">
+                        <div class="form-group">
                             <label for="itemType">Type</label>
                             <select class="form-control" id="itemType">
-                                <option value="cross">Cross</option>
-                                <option value="display">Display</option>
+                                <option value="product">Product / Goods</option>
+                                <option value="service">Service / Hours</option>
+                                <option value="fee">Fee or Surcharge</option>
+                                <option value="shipping">Shipping</option>
+                                <option value="discount">Discount</option>
+                                <option value="package">Package / Bundle</option>
                                 <option value="other">Other</option>
+                                <option value="cross">Legacy: Cross</option>
+                                <option value="display">Legacy: Display</option>
                             </select>
                         </div>
                         <div class="form-group">
@@ -126,6 +133,37 @@
     <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.5.4/dist/umd/popper.min.js"></script>
     <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
     <script>
+        const ITEM_TYPE_LABELS = {
+            product: 'Product / Goods',
+            service: 'Service / Hours',
+            fee: 'Fee or Surcharge',
+            shipping: 'Shipping',
+            discount: 'Discount',
+            package: 'Package / Bundle',
+            other: 'Other',
+            cross: 'Legacy: Cross',
+            display: 'Legacy: Display'
+        };
+
+        const getDisplayTypeLabel = (type) => {
+            const normalized = (type || '').toString().toLowerCase();
+            if (normalized === 'cross' || normalized === 'display') {
+                return ITEM_TYPE_LABELS[normalized];
+            }
+            return ITEM_TYPE_LABELS[normalized] || ITEM_TYPE_LABELS.other;
+        };
+
+        const normalizeTypeForForm = (type) => {
+            const normalized = (type || '').toString().toLowerCase();
+            if (normalized === 'cross' || normalized === 'display') {
+                return 'product';
+            }
+            if (!normalized) {
+                return 'product';
+            }
+            return ITEM_TYPE_LABELS[normalized] ? normalized : 'other';
+        };
+
         $(document).ready(function() {
             loadItems();
         });
@@ -141,11 +179,12 @@
                         const priceFormatted = typeof item.price === 'number' ? (item.price / 100).toFixed(2) : 'N/A';
                         const stylesFormatted = Array.isArray(item.styles) ? item.styles.join(', ') : 'N/A';
                         const weightFormatted = typeof item.weight_oz === 'number' ? item.weight_oz : 'N/A';
+                        const typeLabel = getDisplayTypeLabel(item.type);
                         const row = `
                             <tr>
                                 <td>${item.item_code || 'N/A'}</td>
                                 <td>${item.name || 'N/A'}</td>
-                                <td>${item.type || 'N/A'}</td>
+                                <td>${typeLabel || 'N/A'}</td>
                                 <td>$${priceFormatted}</td>
                                 <td>${stylesFormatted}</td>
                                 <td>${weightFormatted}</td>
@@ -166,6 +205,7 @@
             $('#itemForm')[0].reset();
             $('#itemId').val('');
             $('#itemCode').prop('readonly', false); // Allow editing item code for new items
+            $('#itemType').val('product');
         }
 
         function prepareEditItemModal(itemIdOrCode) {
@@ -175,14 +215,14 @@
                     const item = items.find(i => i.id === itemIdOrCode || i.item_code === itemIdOrCode);
                     if (item) {
                         $('#itemModalLabel').text('Edit Item');
-                        $('#itemId').val(item.id); 
+                        $('#itemId').val(item.id);
                         $('#itemCode').val(item.item_code || '');
                         // $('#itemCode').prop('readonly', true); // Item code is the ID, should not be editable directly here
                                                               // Or, if allowed, backend must handle key change in dict
                         $('#itemName').val(item.name || '');
                         // item.price from API is in cents, convert to dollars for form input
                         $('#itemPrice').val(typeof item.price === 'number' ? (item.price / 100).toFixed(2) : '');
-                        $('#itemType').val(item.type || 'cross');
+                        $('#itemType').val(normalizeTypeForForm(item.type));
                         $('#itemWeightOz').val(item.weight_oz || '');
                         $('#itemStyles').val(Array.isArray(item.styles) ? item.styles.join(', ') : '');
                         $('#itemModal').modal('show');

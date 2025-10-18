@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Contacts</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="icon" href="../assets/favicon.ico" sizes="any">
+    <link rel="stylesheet" href="../assets/css/styles.css">
+</head>
+<body class="bg-slate-50 min-h-screen font-sans">
+    <nav class="bg-slate-900 text-white shadow">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex h-16 items-center justify-between">
+                <div class="flex items-center space-x-10">
+                    <a href="/dashboard" id="nav-home-link" class="text-lg font-semibold tracking-wide">FireCoast OMS</a>
+                    <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
+                        <a href="/orders" class="hover:text-orange-300 transition">Orders</a>
+                        <a href="/contacts" class="text-orange-300">Contacts</a>
+                        <a href="/analytics" class="hover:text-orange-300 transition">Analytics</a>
+                        <a href="/passwords" class="hover:text-orange-300 transition">Password Manager</a>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-3 text-sm font-medium">
+                    <a href="/settings" class="hover:text-orange-300 transition">Settings</a>
+                    <a href="#" id="nav-log-out" class="hover:text-orange-300 transition">Log Out</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const brandLink = document.getElementById('nav-home-link');
+            if (brandLink) {
+                brandLink.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    window.location.href = '/dashboard';
+                });
+            }
+
+            const logoutLink = document.getElementById('nav-log-out');
+            if (logoutLink) {
+                logoutLink.addEventListener('click', async (event) => {
+                    event.preventDefault();
+                    if (window.fireCoastLogout) {
+                        window.fireCoastLogout();
+                        return;
+                    }
+                    try {
+                        const response = await fetch('/shutdown', { method: 'POST' });
+                        if (response.ok) {
+                            document.body.innerHTML = '<div class="min-h-screen flex items-center justify-center text-slate-700 text-lg">Application has been shut down. You can now close this tab.</div>';
+                        } else {
+                            alert('Failed to log out.');
+                        }
+                    } catch (error) {
+                        console.error('Error logging out:', error);
+                        alert('Error attempting to log out.');
+                    }
+                });
+            }
+        });
+    </script>
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+        <div id="root"></div>
+    </main>
+    {% raw %}
+    <script type="text/babel">
+const { useState, useEffect, useMemo } = React;
+
+const EMPTY_CONTACT = {
+    id: null,
+    contactName: '',
+    companyName: '',
+    email: '',
+    phone: '',
+    billingAddress: '',
+    billingCity: '',
+    billingState: '',
+    billingZipCode: '',
+    shippingAddress: '',
+    shippingCity: '',
+    shippingState: '',
+    shippingZipCode: '',
+    handle: '',
+    notes: '',
+    primaryOrders: [],
+    mentions: [],
+};
+
+const sortContactsByName = (list) => {
+    return [...list].sort((a, b) => {
+        const left = (a.contactName && a.contactName.trim()) || (a.companyName && a.companyName.trim()) || '';
+        const right = (b.contactName && b.contactName.trim()) || (b.companyName && b.companyName.trim()) || '';
+        return left.toLowerCase().localeCompare(right.toLowerCase());
+    });
+};
+
+const formatDateTime = (dateString) => {
+    if (!dateString) return 'Unknown';
+    try {
+        return new Date(dateString).toLocaleString();
+    } catch (error) {
+        console.error('Failed to format date', error);
+        return dateString;
+    }
+};
+
+const normalizePhoneDigits = (value = '') => (value || '').replace(/\D/g, '').slice(0, 10);
+
+const formatPhoneNumber = (value = '') => {
+    const digits = normalizePhoneDigits(value);
+    if (!digits) return '';
+    if (digits.length < 4) {
+        const closing = digits.length === 3 ? ')' : '';
+        return `(${digits}${closing}`;
+    }
+    if (digits.length < 7) {
+        return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+    }
+    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)} ${digits.slice(6)}`;
+};
+
+const ContactMentionTextarea = ({ label, placeholder, value, onChange, disabled = false, rows = 3, contacts = [] }) => {
+    const { useState, useRef, useEffect, useMemo } = React;
+    const textareaRef = useRef(null);
+    const overlayRef = useRef(null);
+    const [suggestions, setSuggestions] = useState([]);
+    const [isOpen, setIsOpen] = useState(false);
+    const [highlightIndex, setHighlightIndex] = useState(0);
+    const lastCaretRef = useRef(0);
+
+    const escapeHtml = (input = '') => String(input)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+
+    const formatSpaces = (input = '') => input.replace(/ {2,}/g, match => '&nbsp;'.repeat(match.length - 1) + ' ');
+
+    const buildHighlightedHtml = useMemo(() => {
+        const rawValue = value || '';
+        if (!rawValue.trim()) {
+            return `<span class="text-slate-400">${escapeHtml(placeholder || '')}</span>`;
+        }
+        const escaped = escapeHtml(rawValue);
+        const withMentions = escaped.replace(/(@[a-z0-9_.-]+)/gi, '<span class="mention-pill inline-flex items-center gap-1 rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700">$1</span>');
+        const withBreaks = withMentions.replace(/\r?\n/g, '<br />');
+        return formatSpaces(withBreaks);
+    }, [value, placeholder]);
+
+    const syncOverlayScroll = () => {
+        const textarea = textareaRef.current;
+        const overlay = overlayRef.current;
+        if (!textarea || !overlay) return;
+        overlay.scrollTop = textarea.scrollTop;
+        overlay.scrollLeft = textarea.scrollLeft;
+    };
+
+    const findMentionQuery = (text, caretPosition) => {
+        const uptoCaret = text.slice(0, caretPosition);
+        const match = uptoCaret.match(/@([a-z0-9_.-]*)$/i);
+        if (match) {
+            return match[1].toLowerCase();
+        }
+        return null;
+    };
+
+    const updateSuggestions = (text, caret) => {
+        const query = findMentionQuery(text, caret);
+        if (query === null) {
+            setSuggestions([]);
+            setIsOpen(false);
+            setHighlightIndex(0);
+            return;
+        }
+        const filtered = contacts
+            .filter(contact => contact.handle)
+            .filter(contact => {
+                if (!query) return true;
+                const handle = contact.handle.toLowerCase();
+                const name = (contact.contactName || '').toLowerCase();
+                const company = (contact.companyName || '').toLowerCase();
+                return handle.startsWith(query) || name.includes(query) || company.includes(query);
+            })
+            .slice(0, 8);
+        setSuggestions(filtered);
+        setIsOpen(filtered.length > 0);
+        setHighlightIndex(0);
+    };
+
+    const applyMention = (contact) => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+        const caret = textarea.selectionStart;
+        const text = textarea.value;
+        const uptoCaret = text.slice(0, caret);
+        const match = uptoCaret.match(/@([a-z0-9_.-]*)$/i);
+        if (!match) return;
+        const queryLength = match[1].length;
+        const insertionPoint = caret - queryLength;
+        const replacement = `@${contact.handle} `;
+        const newValue = text.slice(0, insertionPoint) + replacement + text.slice(caret);
+        onChange(newValue);
+        requestAnimationFrame(() => {
+            textarea.focus();
+            const newCaret = insertionPoint + replacement.length;
+            textarea.setSelectionRange(newCaret, newCaret);
+        });
+        setSuggestions([]);
+        setIsOpen(false);
+    };
+
+    const handleChange = (event) => {
+        const newValue = event.target.value;
+        onChange(newValue);
+        const caret = event.target.selectionStart;
+        lastCaretRef.current = caret;
+        updateSuggestions(newValue, caret);
+    };
+
+    const handleKeyDown = (event) => {
+        if (!isOpen || suggestions.length === 0) return;
+        if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            setHighlightIndex(prev => (prev + 1) % suggestions.length);
+        } else if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            setHighlightIndex(prev => (prev - 1 + suggestions.length) % suggestions.length);
+        } else if (event.key === 'Enter' || event.key === 'Tab') {
+            const selected = suggestions[highlightIndex];
+            if (selected) {
+                event.preventDefault();
+                applyMention(selected);
+            }
+        } else if (event.key === 'Escape') {
+            setIsOpen(false);
+        }
+    };
+
+    useEffect(() => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+        const handler = () => {
+            const caret = textarea.selectionStart;
+            lastCaretRef.current = caret;
+            updateSuggestions(textarea.value, caret);
+        };
+        textarea.addEventListener('click', handler);
+        textarea.addEventListener('keyup', handler);
+        textarea.addEventListener('scroll', syncOverlayScroll);
+        return () => {
+            textarea.removeEventListener('click', handler);
+            textarea.removeEventListener('keyup', handler);
+            textarea.removeEventListener('scroll', syncOverlayScroll);
+        };
+    }, [contacts]);
+
+    useEffect(() => {
+        syncOverlayScroll();
+    }, [value]);
+
+    return (
+        <div className="relative">
+            {label !== undefined && label !== null && label !== '' && (
+                <label className="block text-sm font-medium text-slate-600 mb-1">{label}</label>
+            )}
+            <div className="relative mt-1">
+                <div
+                    ref={overlayRef}
+                    aria-hidden="true"
+                    className={`pointer-events-none absolute inset-0 px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words rounded-md ${disabled ? 'bg-slate-100 text-slate-500' : 'bg-white text-slate-700'}`}
+                    dangerouslySetInnerHTML={{ __html: buildHighlightedHtml }}
+                ></div>
+                <textarea
+                    ref={textareaRef}
+                    rows={rows}
+                    placeholder={placeholder}
+                    value={value}
+                    onChange={handleChange}
+                    onKeyDown={handleKeyDown}
+                    disabled={disabled}
+                    className={`relative block w-full resize-y rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 bg-transparent text-transparent placeholder-transparent caret-orange-500 selection:bg-orange-200 selection:text-transparent`}
+                    style={{ WebkitTextFillColor: 'transparent' }}
+                />
+            </div>
+            {isOpen && suggestions.length > 0 && (
+                <div className="absolute z-20 mt-1 w-full max-h-56 overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg">
+                    {suggestions.map((contact, index) => (
+                        <button
+                            type="button"
+                            key={contact.id || contact.handle || index}
+                            onMouseDown={(event) => { event.preventDefault(); applyMention(contact); }}
+                            className={`w-full text-left px-3 py-2 text-sm ${highlightIndex === index ? 'bg-orange-100 text-orange-900' : 'text-slate-700 hover:bg-orange-50'}`}
+                        >
+                            <span className="font-semibold">@{contact.handle}</span>
+                            <span className="ml-2 text-xs text-slate-500">{contact.contactName || contact.companyName}</span>
+                        </button>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
+const ContactListItem = ({ contact, isActive, onSelect }) => {
+    const rawName = (contact.contactName || '').trim();
+    const rawCompany = (contact.companyName || '').trim();
+    const email = (contact.email || '').trim();
+    const displayName = rawName || rawCompany || email || 'Unnamed contact';
+    let secondary = '';
+    if (rawName && rawCompany) {
+        secondary = rawCompany;
+    } else if ((rawName || rawCompany) && email) {
+        secondary = email;
+    }
+    return (
+        <button
+            onClick={() => onSelect(contact.id)}
+            className={`w-full text-left px-4 py-3 border-b border-slate-200 transition ${isActive ? 'bg-orange-50 border-l-4 border-l-orange-500 text-orange-700 font-semibold' : 'hover:bg-slate-100 text-slate-700'}`}
+        >
+            <div className="flex items-center justify-between">
+                <div>
+                    <p className="text-sm font-semibold">{displayName}</p>
+                    {secondary && <p className="text-xs text-slate-500">{secondary}</p>}
+                </div>
+                {contact.handle && <span className="text-xs bg-slate-200 text-slate-700 px-2 py-0.5 rounded-full">@{contact.handle}</span>}
+            </div>
+        </button>
+    );
+};
+
+const ContactMentions = ({ mentions }) => {
+    if (!mentions || mentions.length === 0) {
+        return <p className="text-sm text-slate-500">No mentions yet. Encourage your team to @mention this contact when they collaborate.</p>;
+    }
+    return (
+        <ul className="space-y-4">
+            {mentions.map(mention => (
+                <li key={mention.id} className="bg-white border border-slate-200 rounded-lg shadow-sm p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-slate-700">
+                            {mention.contextType === 'order_log' && 'Order Log'}
+                            {mention.contextType === 'order_note' && 'Order Notes'}
+                            {mention.contextType === 'contact_profile_note' && 'Contact Profile'}
+                        </p>
+                        <div className="flex items-center gap-2">
+                            {mention.isPrimaryContact && (
+                                <span className="text-xs font-semibold text-green-700 bg-green-100 px-2 py-0.5 rounded-full">Primary contact</span>
+                            )}
+                            <span className="text-xs text-slate-400">{formatDateTime(mention.createdAt)}</span>
+                        </div>
+                    </div>
+                    <p className="text-sm text-slate-600 mt-3 whitespace-pre-line">{mention.snippet}</p>
+                    {(mention.orderId || mention.orderDisplayId) && (
+                        <div className="mt-3 flex items-center justify-between text-sm">
+                            <div>
+                                <span className="text-slate-500">Order:</span>
+                                <span className="ml-1 font-medium text-slate-700">{mention.orderDisplayId || mention.orderId}</span>
+                            </div>
+                            <a
+                                href={`/order/${mention.orderId}`}
+                                className="text-orange-600 hover:text-orange-800"
+                            >
+                                View Order →
+                            </a>
+                        </div>
+                    )}
+                </li>
+            ))}
+        </ul>
+    );
+};
+
+const ContactDetail = ({ contact, onSave, isSaving, contactsCatalog, onCancelCreate }) => {
+    const mapContactToFormState = (contactData = EMPTY_CONTACT) => ({
+        id: contactData?.id || null,
+        contactName: contactData?.contactName || '',
+        companyName: contactData?.companyName || '',
+        email: contactData?.email || '',
+        phone: formatPhoneNumber(contactData?.phone || ''),
+        shippingAddress: contactData?.shippingAddress || '',
+        shippingCity: contactData?.shippingCity || '',
+        shippingState: contactData?.shippingState || '',
+        shippingZipCode: contactData?.shippingZipCode || '',
+        billingAddress: contactData?.billingAddress || '',
+        billingCity: contactData?.billingCity || '',
+        billingState: contactData?.billingState || '',
+        billingZipCode: contactData?.billingZipCode || '',
+        handle: contactData?.handle || '',
+        notes: contactData?.notes || '',
+    });
+
+    const [formState, setFormState] = useState(mapContactToFormState(contact));
+    const [isDirty, setIsDirty] = useState(false);
+    const [mode, setMode] = useState(contact?.id ? 'view' : 'create');
+
+    useEffect(() => {
+        setFormState(mapContactToFormState(contact));
+        setIsDirty(false);
+        setMode(contact?.id ? 'view' : 'create');
+    }, [contact]);
+
+    if (!contact) {
+        return (
+            <div className="flex items-center justify-center h-full text-slate-500">
+                Select a contact to view their details.
+            </div>
+        );
+    }
+
+    const handleChange = (field, value) => {
+        const nextValue = field === 'phone' ? formatPhoneNumber(value) : value;
+        setFormState(prev => ({ ...prev, [field]: nextValue }));
+        setIsDirty(true);
+    };
+
+    const handleSubmit = async (event) => {
+        event.preventDefault();
+        const saved = await onSave(formState);
+        if (saved) {
+            setFormState(mapContactToFormState(saved));
+            setMode('view');
+        }
+        setIsDirty(false);
+    };
+
+    const formatAddress = (line1, city, state, zip) => {
+        if (!line1) return 'Not provided';
+        const segments = [line1];
+        const cityState = [city, state].filter(Boolean).join(', ');
+        if (cityState) {
+            segments.push(cityState);
+        }
+        if (zip) {
+            segments.push(zip);
+        }
+        return segments.join(' ');
+    };
+
+    const primaryOrders = contact.primaryOrders || [];
+    const displayName = (formState.contactName && formState.contactName.trim()) || (formState.companyName && formState.companyName.trim()) || (formState.email && formState.email.trim()) || 'Unnamed contact';
+    const showCompanyLine = Boolean(formState.companyName && formState.companyName.trim() && formState.companyName.trim() !== formState.contactName?.trim());
+    const hasIdentity = Boolean((formState.contactName && formState.contactName.trim()) || (formState.companyName && formState.companyName.trim()));
+    const isCreateMode = mode === 'create';
+    const isViewMode = mode === 'view';
+    const canSubmit = hasIdentity && !isSaving && (isCreateMode ? true : isDirty);
+
+    const handleStartEdit = () => setMode('edit');
+    const handleCancelEdit = () => {
+        setFormState(mapContactToFormState(contact));
+        setIsDirty(false);
+        setMode(contact?.id ? 'view' : 'create');
+    };
+
+    return (
+        <div className="space-y-6">
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                        <p className="text-xs uppercase tracking-wider text-slate-500">{isCreateMode ? 'New Contact' : 'Contact'}</p>
+                        <h2 className="mt-1 text-2xl font-semibold text-slate-800">{displayName}</h2>
+                        {showCompanyLine && <p className="text-sm text-slate-500">{formState.companyName}</p>}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                        {formState.handle && (
+                            <span className="inline-flex items-center space-x-1 bg-orange-100 text-orange-700 px-3 py-1 rounded-full text-sm font-semibold">
+                                <span>@{formState.handle}</span>
+                            </span>
+                        )}
+                        {primaryOrders.length > 0 && (
+                            <span className="inline-flex items-center bg-slate-100 text-slate-700 px-3 py-1 rounded-full text-xs font-semibold">
+                                Primary for {primaryOrders.length} order{primaryOrders.length === 1 ? '' : 's'}
+                            </span>
+                        )}
+                        {isViewMode && formState.id && (
+                            <button
+                                type="button"
+                                onClick={handleStartEdit}
+                                className="inline-flex items-center px-3 py-1.5 text-sm font-semibold text-white bg-orange-600 rounded-md shadow-sm hover:bg-orange-700 transition-colors"
+                            >
+                                Edit Contact
+                            </button>
+                        )}
+                    </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6 text-sm text-slate-600">
+                    <div>
+                        <p className="font-semibold text-slate-700">Email</p>
+                        <p>{formState.email || 'Not provided'}</p>
+                    </div>
+                    <div>
+                        <p className="font-semibold text-slate-700">Phone</p>
+                        <p>{formatPhoneNumber(formState.phone) || 'Not provided'}</p>
+                    </div>
+                    <div>
+                        <p className="font-semibold text-slate-700">Shipping Address</p>
+                        <p>{formatAddress(formState.shippingAddress, formState.shippingCity, formState.shippingState, formState.shippingZipCode)}</p>
+                    </div>
+                    <div>
+                        <p className="font-semibold text-slate-700">Billing Address</p>
+                        <p>{formatAddress(formState.billingAddress, formState.billingCity, formState.billingState, formState.billingZipCode)}</p>
+                    </div>
+                </div>
+                {primaryOrders.length > 0 && (
+                    <div className="mt-6">
+                        <h3 className="text-sm font-semibold text-slate-700 mb-3">Primary Orders</h3>
+                        <ul className="space-y-2">
+                            {primaryOrders.map(order => (
+                                <li key={order.orderId} className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+                                    <div>
+                                        <p className="font-semibold text-slate-700">{order.orderDisplayId}</p>
+                                        <p className="text-xs text-slate-500">{order.status || 'Status unknown'} · Updated {formatDateTime(order.updatedAt)}</p>
+                                    </div>
+                                    <a href={`/order/${order.orderId}`} className="text-xs font-semibold text-orange-600 hover:text-orange-800">View</a>
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
+            </div>
+
+            {isViewMode ? (
+                <section className="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
+                    <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-semibold text-slate-800">Internal Notes</h3>
+                        <span className="text-xs text-slate-500">Last updated {formatDateTime(contact.updatedAt)}</span>
+                    </div>
+                    <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 min-h-[96px] whitespace-pre-wrap">
+                        {formState.notes && formState.notes.trim() ? formState.notes : 'No internal notes yet.'}
+                    </div>
+                </section>
+            ) : (
+                <form onSubmit={handleSubmit} className="bg-white border border-slate-200 rounded-xl shadow-sm p-6 space-y-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <h3 className="text-lg font-semibold text-slate-800">{isCreateMode ? 'Create Contact' : 'Edit Contact'}</h3>
+                        <div className="flex gap-2">
+                            <button
+                                type="button"
+                                onClick={isCreateMode ? (onCancelCreate || handleCancelEdit) : handleCancelEdit}
+                                className="px-4 py-2 rounded-md text-sm font-semibold text-slate-600 border border-slate-300 hover:bg-slate-100 transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="submit"
+                                disabled={!canSubmit}
+                                className={`px-4 py-2 rounded-md text-sm font-semibold ${canSubmit ? 'bg-orange-600 text-white hover:bg-orange-700' : 'bg-slate-200 text-slate-500 cursor-not-allowed'} ${isSaving ? 'opacity-75' : ''}`}
+                            >
+                                {isSaving ? 'Saving…' : isCreateMode ? 'Create Contact' : 'Save Changes'}
+                            </button>
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-sm font-medium text-slate-600">Contact Name</label>
+                            <input value={formState.contactName} onChange={e => handleChange('contactName', e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-slate-600">Company</label>
+                            <input value={formState.companyName} onChange={e => handleChange('companyName', e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="Optional" />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-slate-600">Handle</label>
+                            <input value={formState.handle} onChange={e => handleChange('handle', e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="autogenerate" />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-slate-600">Email</label>
+                            <input value={formState.email} onChange={e => handleChange('email', e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-slate-600">Phone</label>
+                            <input value={formState.phone} onChange={e => handleChange('phone', e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-sm font-medium text-slate-600">Shipping Address</label>
+                            <textarea value={formState.shippingAddress} onChange={e => handleChange('shippingAddress', e.target.value)} rows={2} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500"></textarea>
+                            <div className="grid grid-cols-3 gap-2 mt-2">
+                                <input value={formState.shippingCity} onChange={e => handleChange('shippingCity', e.target.value)} placeholder="City" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                                <input value={formState.shippingState} onChange={e => handleChange('shippingState', e.target.value)} placeholder="State" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                                <input value={formState.shippingZipCode} onChange={e => handleChange('shippingZipCode', e.target.value)} placeholder="Zip" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                            </div>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-slate-600">Billing Address</label>
+                            <textarea value={formState.billingAddress} onChange={e => handleChange('billingAddress', e.target.value)} rows={2} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500"></textarea>
+                            <div className="grid grid-cols-3 gap-2 mt-2">
+                                <input value={formState.billingCity} onChange={e => handleChange('billingCity', e.target.value)} placeholder="City" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                                <input value={formState.billingState} onChange={e => handleChange('billingState', e.target.value)} placeholder="State" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                                <input value={formState.billingZipCode} onChange={e => handleChange('billingZipCode', e.target.value)} placeholder="Zip" className="px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" />
+                            </div>
+                        </div>
+                    </div>
+                    <ContactMentionTextarea
+                        label="Internal Notes"
+                        placeholder="Keep shared notes and mention teammates with @handle"
+                        value={formState.notes}
+                        onChange={value => handleChange('notes', value)}
+                        contacts={contactsCatalog}
+                        rows={4}
+                    />
+                </form>
+            )}
+
+            <section className="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
+                <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold text-slate-800">Mention Activity</h3>
+                    <span className="text-xs text-slate-500">Last updated {formatDateTime(contact.updatedAt)}</span>
+                </div>
+                <ContactMentions mentions={contact.mentions} />
+            </section>
+        </div>
+    );
+};
+
+const ContactsApp = () => {
+    const [contacts, setContacts] = useState([]);
+    const [selectedId, setSelectedId] = useState(null);
+    const [contactDetail, setContactDetail] = useState(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [error, setError] = useState(null);
+    const [searchTerm, setSearchTerm] = useState('');
+    const [isSaving, setIsSaving] = useState(false);
+    const [previousSelectedId, setPreviousSelectedId] = useState(null);
+
+
+    useEffect(() => {
+        const fetchContacts = async () => {
+            try {
+                const response = await fetch('/api/contacts');
+                const data = await response.json();
+                const sorted = sortContactsByName(data);
+                setContacts(sorted);
+                if (sorted.length > 0) {
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const fromUrl = urlParams.get('contact_id');
+                    const initialId = fromUrl || sorted[0].id;
+                    setSelectedId(initialId);
+                }
+            } catch (err) {
+                console.error('Failed to load contacts', err);
+                setError('Failed to load contacts');
+            } finally {
+                setIsLoading(false);
+            }
+        };
+        fetchContacts();
+    }, []);
+
+    useEffect(() => {
+        if (!selectedId) {
+            setContactDetail(null);
+            return;
+        }
+        if (selectedId === 'new') {
+            setContactDetail({ ...EMPTY_CONTACT });
+            return;
+        }
+        const fetchDetail = async () => {
+            try {
+                const response = await fetch(`/api/contacts/${selectedId}`);
+                if (!response.ok) {
+                    throw new Error('Failed to load contact');
+                }
+                const data = await response.json();
+                setContactDetail({ ...data.contact, mentions: data.mentions || [] });
+            } catch (err) {
+                console.error('Failed to load contact detail', err);
+                setError('Unable to load contact detail');
+            }
+        };
+        fetchDetail();
+    }, [selectedId]);
+
+    const filteredContacts = useMemo(() => {
+        const term = searchTerm.trim().toLowerCase();
+        if (!term) return contacts;
+        return contacts.filter(contact => {
+            return [
+                contact.companyName,
+                contact.contactName,
+                contact.email,
+                contact.handle,
+                contact.phone
+            ].some(field => field && field.toLowerCase().includes(term));
+        });
+    }, [contacts, searchTerm]);
+
+    const handleSaveContact = async (formState) => {
+        const payload = {
+            contactName: formState.contactName?.trim() || '',
+            companyName: formState.companyName?.trim() || '',
+            email: formState.email?.trim() || '',
+            phone: normalizePhoneDigits(formState.phone),
+            shippingAddress: formState.shippingAddress || '',
+            shippingCity: formState.shippingCity || '',
+            shippingState: formState.shippingState || '',
+            shippingZipCode: formState.shippingZipCode || '',
+            billingAddress: formState.billingAddress || '',
+            billingCity: formState.billingCity || '',
+            billingState: formState.billingState || '',
+            billingZipCode: formState.billingZipCode || '',
+            handle: formState.handle?.trim() || '',
+            notes: formState.notes || '',
+        };
+
+        setIsSaving(true);
+        try {
+            if (formState?.id) {
+                const response = await fetch(`/api/contacts/${formState.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+                if (!response.ok) {
+                    throw new Error(result.message || 'Failed to save contact');
+                }
+                const updated = result.contact || {};
+                setContacts(prev => sortContactsByName(prev.map(contact => contact.id === updated.id ? { ...contact, ...updated } : contact)));
+                const mergedDetail = contactDetail && contactDetail.id === updated.id ? { ...contactDetail, ...updated } : { ...updated };
+                setContactDetail(prev => prev && prev.id === updated.id ? { ...prev, ...updated } : prev);
+                return mergedDetail;
+            }
+
+            const response = await fetch('/api/contacts', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const result = await response.json();
+            if (!response.ok) {
+                throw new Error(result.message || 'Failed to create contact');
+            }
+            const created = result.contact;
+            setContacts(prev => sortContactsByName([created, ...prev.filter(contact => contact.id !== created.id)]));
+            const newDetail = { ...EMPTY_CONTACT, ...created, id: created.id, mentions: [], primaryOrders: [] };
+            setContactDetail(newDetail);
+            setSelectedId(created.id);
+            setPreviousSelectedId(null);
+            return newDetail;
+        } catch (err) {
+            console.error('Failed to save contact', err);
+            alert(err.message || 'Failed to save contact');
+            return null;
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    const startCreateContact = () => {
+        setError(null);
+        if (selectedId && selectedId !== 'new') {
+            setPreviousSelectedId(selectedId);
+        } else if (!selectedId && contacts.length > 0) {
+            setPreviousSelectedId(contacts[0].id);
+        }
+        setSelectedId('new');
+        setContactDetail({ ...EMPTY_CONTACT });
+    };
+
+    const cancelCreateContact = () => {
+        const fallbackId = previousSelectedId || (contacts[0] && contacts[0].id) || null;
+        setPreviousSelectedId(null);
+        if (fallbackId) {
+            setContactDetail(null);
+            setSelectedId(fallbackId);
+        } else {
+            setSelectedId(null);
+            setContactDetail(null);
+        }
+    };
+
+    if (isLoading) {
+        return <div className="min-h-[60vh] flex items-center justify-center text-slate-500">Loading contacts…</div>;
+    }
+
+    if (error && contacts.length === 0) {
+        return <div className="min-h-[60vh] flex items-center justify-center text-red-500">{error}</div>;
+    }
+
+    const isNewContactActive = selectedId === 'new';
+
+    return (
+        <div className="space-y-6">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <h1 className="text-3xl font-bold text-slate-800">Contacts</h1>
+                <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+                    <button
+                        type="button"
+                        onClick={startCreateContact}
+                        disabled={isNewContactActive}
+                        className={`inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold shadow transition-colors ${isNewContactActive ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-orange-600 text-white hover:bg-orange-700'}`}
+                    >
+                        + New Contact
+                    </button>
+                </div>
+            </div>
+            {error && (
+                <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-lg text-sm">
+                    {error}
+                </div>
+            )}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <aside className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+                    <div className="px-4 py-3 border-b border-slate-200 space-y-3">
+                        <div className="flex items-center justify-between gap-3">
+                            <h2 className="text-lg font-semibold text-slate-800">All Contacts</h2>
+                        </div>
+                        <input
+                            type="search"
+                            value={searchTerm}
+                            onChange={e => setSearchTerm(e.target.value)}
+                            placeholder="Search by name, handle, or company"
+                            className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500"
+                        />
+                    </div>
+                    <div className="max-h-[70vh] overflow-y-auto">
+                        {filteredContacts.length === 0 && (
+                            <div className="px-4 py-6 text-sm text-slate-500">
+                                No contacts match "{searchTerm}".
+                            </div>
+                        )}
+                        {filteredContacts.map(contact => (
+                            <ContactListItem
+                                key={contact.id}
+                                contact={contact}
+                                isActive={contact.id === selectedId}
+                                onSelect={setSelectedId}
+                            />
+                        ))}
+                    </div>
+                </aside>
+                <section className="lg:col-span-2">
+                    {contactDetail ? (
+                        <ContactDetail
+                            contact={contactDetail}
+                            onSave={handleSaveContact}
+                            isSaving={isSaving}
+                            contactsCatalog={contacts}
+                            onCancelCreate={cancelCreateContact}
+                        />
+                    ) : (
+                        <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-10 flex items-center justify-center text-slate-500">
+                            Select a contact to get started.
+                        </div>
+                    )}
+                </section>
+            </div>
+        </div>
+    );
+};
+
+ReactDOM.createRoot(document.getElementById('root')).render(<ContactsApp />);
+    </script>
+    {% endraw %}
+</body>
+</html>
