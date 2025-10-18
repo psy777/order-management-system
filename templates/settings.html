@@ -134,14 +134,14 @@
                             <p class="mt-1 text-xs text-slate-500">These lines appear under your logo and business name.</p>
                         </div>
                         <div class="flex flex-wrap items-center gap-3">
-                            <input type="file" id="invoiceLogoUpload" accept="image/*" class="hidden" />
+                            <input type="file" id="invoiceLogoUpload" accept="image/png" class="hidden" />
                             <button type="button" id="invoiceLogoButton" class="inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-semibold shadow bg-slate-900 text-white hover:bg-slate-700 transition-colors">
                                 Upload Logo
                             </button>
                             <button type="button" id="removeLogoButton" class="inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-semibold border border-slate-300 text-slate-600 hover:bg-slate-100 transition-colors">
                                 Remove Logo
                             </button>
-                            <span class="text-xs text-slate-500">PNG or SVG recommended, 240×120px.</span>
+                            <span class="text-xs text-slate-500">PNG only, ideally 240×180px. Transparent backgrounds are preserved.</span>
                         </div>
                         <div class="flex justify-end">
                             <button type="submit" class="inline-flex items-center px-4 py-2 bg-orange-600 text-white font-semibold rounded-md shadow-sm hover:bg-orange-700 transition-colors">
@@ -413,6 +413,42 @@ hello@firecoast.com</p>
                     updateInvoicePreview();
                 });
             }
+            const isPngFile = (file) => {
+                if (!file) return false;
+                if (file.type === 'image/png') return true;
+                return file.name ? file.name.toLowerCase().endsWith('.png') : false;
+            };
+
+            const prepareLogoDataUrl = (dataUrl) => new Promise((resolve, reject) => {
+                const image = new Image();
+                image.onload = () => {
+                    try {
+                        const targetWidth = 240;
+                        const targetHeight = 180;
+                        const canvas = document.createElement('canvas');
+                        canvas.width = targetWidth;
+                        canvas.height = targetHeight;
+                        const context = canvas.getContext('2d');
+                        if (!context) {
+                            reject(new Error('Unable to prepare canvas context.'));
+                            return;
+                        }
+                        context.clearRect(0, 0, targetWidth, targetHeight);
+                        const scale = Math.min(targetWidth / image.width, targetHeight / image.height);
+                        const renderWidth = Math.max(1, Math.round(image.width * scale));
+                        const renderHeight = Math.max(1, Math.round(image.height * scale));
+                        const offsetX = Math.round((targetWidth - renderWidth) / 2);
+                        const offsetY = Math.round((targetHeight - renderHeight) / 2);
+                        context.drawImage(image, offsetX, offsetY, renderWidth, renderHeight);
+                        resolve(canvas.toDataURL('image/png'));
+                    } catch (err) {
+                        reject(err);
+                    }
+                };
+                image.onerror = () => reject(new Error('Unable to load logo image.'));
+                image.src = dataUrl;
+            });
+
             if (invoiceLogoButton && invoiceLogoInput) {
                 invoiceLogoButton.addEventListener('click', (event) => {
                     event.preventDefault();
@@ -421,10 +457,35 @@ hello@firecoast.com</p>
                 invoiceLogoInput.addEventListener('change', () => {
                     const file = invoiceLogoInput.files?.[0];
                     if (!file) return;
+                    if (!isPngFile(file)) {
+                        setStatus(invoiceStatus, 'Logo must be a PNG file.', 'error');
+                        invoiceLogoInput.value = '';
+                        return;
+                    }
+                    setStatus(invoiceStatus, 'Processing logo…');
                     const reader = new FileReader();
                     reader.onload = () => {
-                        currentLogoDataUrl = reader.result;
-                        updateInvoicePreview();
+                        const result = reader.result;
+                        if (typeof result !== 'string') {
+                            setStatus(invoiceStatus, 'Unsupported logo format.', 'error');
+                            invoiceLogoInput.value = '';
+                            return;
+                        }
+                        prepareLogoDataUrl(result)
+                            .then((prepared) => {
+                                currentLogoDataUrl = prepared;
+                                updateInvoicePreview();
+                                setStatus(invoiceStatus, 'Logo ready. Don’t forget to save!', 'info');
+                            })
+                            .catch((error) => {
+                                console.error(error);
+                                setStatus(invoiceStatus, 'Unable to process logo.', 'error');
+                                invoiceLogoInput.value = '';
+                            });
+                    };
+                    reader.onerror = () => {
+                        setStatus(invoiceStatus, 'Unable to read logo file.', 'error');
+                        invoiceLogoInput.value = '';
                     };
                     reader.readAsDataURL(file);
                 });

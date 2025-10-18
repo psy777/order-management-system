@@ -441,16 +441,71 @@ const formatContactAddress = (address, city, state, zip) => {
                 ...(brandingOverride || {}),
             };
             const accentRgb = hexToRgb(mergedBranding.invoice_brand_color) || { r: 249, g: 115, b: 22 };
-            const brandLines = [];
             const businessName = (mergedBranding.invoice_business_name || '').trim();
             const businessDetails = (mergedBranding.invoice_business_details || '').trim();
-            if (businessName) {
-                brandLines.push(businessName);
-            }
-            if (businessDetails) {
-                brandLines.push(...businessDetails.split('\n').map(line => line.trim()).filter(Boolean));
-            }
             const logoDataUrl = (mergedBranding.invoice_logo_data_url || '').trim();
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(10);
+            const businessDetailLines = businessDetails
+                ? doc.splitTextToSize(businessDetails, 90)
+                : [];
+            const invoiceInfoLines = [
+                `Order #: ${orderNumber || '—'}`,
+                orderTitle ? `Title: ${orderTitle}` : null,
+                `Date: ${formattedDate}`,
+            ].filter(Boolean);
+            const logoHeight = logoDataUrl ? 24 : 0;
+            const nameHeight = businessName ? 7 : 0;
+            const detailHeight = businessDetailLines.length * 4;
+            const invoiceInfoHeight = 10 + (invoiceInfoLines.length * 5);
+            const topSectionContentHeight = Math.max(logoHeight, nameHeight + detailHeight, invoiceInfoHeight) || 0;
+            const backgroundTop = 14;
+            const backgroundHeight = topSectionContentHeight + 16;
+            doc.setDrawColor(226, 232, 240);
+            doc.setFillColor(248, 250, 252);
+            doc.roundedRect(12, backgroundTop, 186, Math.max(backgroundHeight, 28), 4, 4, 'FD');
+
+            const contentLeft = 14;
+            const contentTop = backgroundTop + 12;
+            let leftTextX = contentLeft;
+            let leftTextY = contentTop;
+            if (logoDataUrl) {
+                try {
+                    doc.addImage(logoDataUrl, 'PNG', leftTextX, contentTop - 6, 32, 24);
+                    leftTextX += 36;
+                } catch (error) {
+                    console.error('Unable to render invoice logo:', error);
+                }
+            }
+            if (businessName) {
+                doc.setFont('helvetica', 'bold');
+                doc.setFontSize(14);
+                doc.text(businessName, leftTextX, leftTextY);
+                leftTextY += 7;
+            }
+            if (businessDetailLines.length) {
+                doc.setFont('helvetica', 'normal');
+                doc.setFontSize(10);
+                businessDetailLines.forEach((line) => {
+                    doc.text(line, leftTextX, leftTextY);
+                    leftTextY += 4;
+                });
+            }
+
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(18);
+            doc.setTextColor(accentRgb.r, accentRgb.g, accentRgb.b);
+            doc.text('Invoice', 196, contentTop, { align: 'right' });
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(10);
+            doc.setTextColor(0, 0, 0);
+            let invoiceLineY = contentTop + 6;
+            invoiceInfoLines.forEach((line) => {
+                doc.text(line, 196, invoiceLineY, { align: 'right' });
+                invoiceLineY += 5;
+            });
+
+            const topSectionBottom = backgroundTop + Math.max(backgroundHeight, 28);
 
             const baseContact = safeOrder.contactInfo || {};
             const contactInfo = {
@@ -499,41 +554,13 @@ const formatContactAddress = (address, city, state, zip) => {
                 return lines;
             };
 
-            doc.setFontSize(22);
-            doc.setTextColor(accentRgb.r, accentRgb.g, accentRgb.b);
-            doc.text("Invoice", 14, 22);
-            doc.setDrawColor(accentRgb.r, accentRgb.g, accentRgb.b);
-            doc.setLineWidth(0.75);
-            doc.line(14, 26, 196, 26);
-            doc.setTextColor(0, 0, 0);
-
-            let rightHeaderTop = 18;
-            if (logoDataUrl) {
-                try {
-                    doc.addImage(logoDataUrl, 'PNG', 150, 10, 40, 20);
-                    rightHeaderTop = 32;
-                } catch (error) {
-                    console.error('Unable to render invoice logo:', error);
-                }
-            }
-            if (brandLines.length) {
-                const wrappedBrand = doc.splitTextToSize(brandLines.join('\n'), 60);
-                doc.setFontSize(12);
-                doc.text(wrappedBrand, 196, rightHeaderTop, { align: 'right' });
-            }
-
+            doc.setFont('helvetica', 'normal');
             doc.setFontSize(12);
-            let headerY = 30;
-            doc.text(`Order #: ${orderNumber || '—'}`, 14, headerY);
-            if (orderTitle) {
-                headerY += 6;
-                doc.text(`Title: ${orderTitle}`, 14, headerY);
-            }
-            headerY += 6;
-            doc.text(`Date: ${formattedDate}`, 14, headerY);
+            doc.setDrawColor(0, 0, 0);
+            doc.setLineWidth(0.2);
 
-            let leftColumnY = headerY + 14;
-            let rightColumnY = headerY + 14;
+            let leftColumnY = topSectionBottom + 10;
+            let rightColumnY = topSectionBottom + 10;
             const leftColumnX = 14;
             const rightColumnX = 105;
 
@@ -551,7 +578,7 @@ const formatContactAddress = (address, city, state, zip) => {
                 rightColumnY = renderBlock("Shipping Address", shippingLines, rightColumnX, rightColumnY, 90);
             }
 
-            let tableStartY = Math.max(leftColumnY, rightColumnY, headerY + 20) + 5;
+            let tableStartY = Math.max(leftColumnY, rightColumnY, topSectionBottom + 20) + 5;
 
             const safeLineItems = Array.isArray(safeOrder.lineItems) ? safeOrder.lineItems : [];
             const tableHead = ["Name", "Description", "Units", "Unit Price", "Total"];
