@@ -617,7 +617,7 @@ const generateInvoicePdf = (order, allItems, action = 'save', brandingOverride =
 
     const inferImageFormat = (dataUrl) => {
         if (typeof dataUrl !== 'string') return null;
-        const match = dataUrl.match(/^data:image/([a-zA-Z0-9+.-]+);/);
+        const match = dataUrl.match(/^data:image\/([a-zA-Z0-9+.-]+);/);
         if (!match) return null;
         const type = match[1].toLowerCase();
         if (type.includes('png')) return 'PNG';
