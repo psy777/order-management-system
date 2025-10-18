@@ -141,7 +141,7 @@
                             <button type="button" id="removeLogoButton" class="inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-semibold border border-slate-300 text-slate-600 hover:bg-slate-100 transition-colors">
                                 Remove Logo
                             </button>
-                            <span class="text-xs text-slate-500">PNG or SVG recommended, 240×120px.</span>
+                            <span class="text-xs text-slate-500">PNG (transparency preserved) or SVG recommended, 240×120px.</span>
                         </div>
                         <div class="flex justify-end">
                             <button type="submit" class="inline-flex items-center px-4 py-2 bg-orange-600 text-white font-semibold rounded-md shadow-sm hover:bg-orange-700 transition-colors">
@@ -296,6 +296,31 @@ hello@firecoast.com</p>
                 return /^#([0-9a-fA-F]{6})$/.test(normalized) ? normalized : '#f97316';
             };
 
+            const prepareLogoDataUrl = (image) => {
+                if (!image) return '';
+                const originalWidth = image.naturalWidth || image.width;
+                const originalHeight = image.naturalHeight || image.height;
+                if (!originalWidth || !originalHeight) return '';
+
+                const maxWidth = 240;
+                const maxHeight = 120;
+                const scale = Math.min(maxWidth / originalWidth, maxHeight / originalHeight, 1);
+                const targetWidth = Math.max(1, Math.round(originalWidth * scale));
+                const targetHeight = Math.max(1, Math.round(originalHeight * scale));
+
+                const canvas = document.createElement('canvas');
+                canvas.width = targetWidth;
+                canvas.height = targetHeight;
+
+                const context = canvas.getContext('2d');
+                if (!context) return '';
+
+                context.clearRect(0, 0, targetWidth, targetHeight);
+                context.drawImage(image, 0, 0, targetWidth, targetHeight);
+
+                return canvas.toDataURL('image/png');
+            };
+
             const updateInvoicePreview = () => {
                 if (previewName) {
                     previewName.textContent = invoiceBusinessNameInput.value || 'FireCoast OMS';
@@ -423,8 +448,24 @@ hello@firecoast.com</p>
                     if (!file) return;
                     const reader = new FileReader();
                     reader.onload = () => {
-                        currentLogoDataUrl = reader.result;
-                        updateInvoicePreview();
+                        const base64Result = typeof reader.result === 'string' ? reader.result : '';
+                        if (!base64Result) {
+                            currentLogoDataUrl = '';
+                            updateInvoicePreview();
+                            return;
+                        }
+                        const image = new Image();
+                        image.onload = () => {
+                            const processedDataUrl = prepareLogoDataUrl(image) || base64Result;
+                            currentLogoDataUrl = processedDataUrl;
+                            updateInvoicePreview();
+                        };
+                        image.onerror = (error) => {
+                            console.error('Unable to process invoice logo:', error);
+                            currentLogoDataUrl = base64Result;
+                            updateInvoicePreview();
+                        };
+                        image.src = base64Result;
                     };
                     reader.readAsDataURL(file);
                 });
