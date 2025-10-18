@@ -73,13 +73,183 @@ def init_db():
 
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_handle ON contacts(handle)")
     cursor.execute("CREATE TRIGGER IF NOT EXISTS update_contacts_updated_at AFTER UPDATE ON contacts FOR EACH ROW BEGIN UPDATE contacts SET updated_at = CURRENT_TIMESTAMP WHERE id = OLD.id; END;")
-    cursor.execute("CREATE TABLE IF NOT EXISTS items (item_code TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, type TEXT, price_cents INTEGER NOT NULL, weight_oz INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);")
-    cursor.execute("CREATE TRIGGER IF NOT EXISTS update_items_updated_at AFTER UPDATE ON items FOR EACH ROW BEGIN UPDATE items SET updated_at = CURRENT_TIMESTAMP WHERE item_code = OLD.item_code; END;")
-    cursor.execute("CREATE TABLE IF NOT EXISTS styles (id INTEGER PRIMARY KEY AUTOINCREMENT, style_name TEXT UNIQUE NOT NULL);")
-    cursor.execute("CREATE TABLE IF NOT EXISTS item_styles (item_code TEXT NOT NULL, style_id INTEGER NOT NULL, PRIMARY KEY (item_code, style_id), FOREIGN KEY (item_code) REFERENCES items (item_code) ON DELETE CASCADE, FOREIGN KEY (style_id) REFERENCES styles (id) ON DELETE CASCADE);")
-    cursor.execute("CREATE TABLE IF NOT EXISTS packages (package_id INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL UNIQUE, type TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);")
-    cursor.execute("CREATE TRIGGER IF NOT EXISTS update_packages_updated_at AFTER UPDATE ON packages FOR EACH ROW BEGIN UPDATE packages SET updated_at = CURRENT_TIMESTAMP WHERE package_id = OLD.package_id; END;")
-    cursor.execute("CREATE TABLE IF NOT EXISTS package_items (package_id INTEGER NOT NULL, item_code TEXT NOT NULL, quantity INTEGER NOT NULL DEFAULT 1, PRIMARY KEY (package_id, item_code), FOREIGN KEY (package_id) REFERENCES packages (package_id) ON DELETE CASCADE, FOREIGN KEY (item_code) REFERENCES items (item_code) ON DELETE CASCADE);")
+    # Drop legacy style tables that are no longer used
+    cursor.execute("DROP TABLE IF EXISTS item_styles")
+    cursor.execute("DROP TABLE IF EXISTS styles")
+
+    # Ensure the items table uses the simplified schema (id, name, description, price, weight)
+    cursor.execute("PRAGMA table_info(items)")
+    item_columns = [row[1] for row in cursor.fetchall()]
+    needs_item_migration = False
+    if not item_columns:
+        needs_item_migration = True
+    else:
+        if 'id' not in item_columns:
+            needs_item_migration = True
+        if 'description' not in item_columns:
+            needs_item_migration = True
+        if 'type' in item_columns or 'item_code' in item_columns:
+            needs_item_migration = True
+
+    if needs_item_migration:
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS items_migrated (
+                id TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT,
+                price_cents INTEGER NOT NULL,
+                weight_oz REAL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+
+        if item_columns:
+            selectable_columns = set(item_columns)
+            if 'item_code' in selectable_columns:
+                cursor.execute(
+                    """
+                    INSERT OR IGNORE INTO items_migrated (id, name, description, price_cents, weight_oz, created_at, updated_at)
+                    SELECT item_code, name, '' AS description, price_cents, weight_oz,
+                           COALESCE(created_at, CURRENT_TIMESTAMP),
+                           COALESCE(updated_at, CURRENT_TIMESTAMP)
+                    FROM items
+                    """
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT OR IGNORE INTO items_migrated (id, name, description, price_cents, weight_oz, created_at, updated_at)
+                    SELECT id, name, description, price_cents, weight_oz,
+                           COALESCE(created_at, CURRENT_TIMESTAMP),
+                           COALESCE(updated_at, CURRENT_TIMESTAMP)
+                    FROM items
+                    """
+                )
+
+        cursor.execute("DROP TABLE IF EXISTS items")
+        cursor.execute("ALTER TABLE items_migrated RENAME TO items")
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS items (
+            id TEXT PRIMARY KEY NOT NULL,
+            name TEXT NOT NULL,
+            description TEXT,
+            price_cents INTEGER NOT NULL,
+            weight_oz REAL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS update_items_updated_at
+        AFTER UPDATE ON items
+        FOR EACH ROW
+        BEGIN
+            UPDATE items SET updated_at = CURRENT_TIMESTAMP WHERE id = OLD.id;
+        END;
+        """
+    )
+
+    cursor.execute("PRAGMA table_info(packages)")
+    package_columns = [row[1] for row in cursor.fetchall()]
+    needs_package_migration = False
+    if package_columns and ('type' in package_columns or 'style' in package_columns):
+        needs_package_migration = True
+
+    if needs_package_migration:
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS packages_migrated (
+                package_id INTEGER PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL UNIQUE,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO packages_migrated (package_id, name, created_at, updated_at)
+            SELECT
+                package_id,
+                name,
+                COALESCE(created_at, CURRENT_TIMESTAMP),
+                COALESCE(updated_at, CURRENT_TIMESTAMP)
+            FROM packages
+            """
+        )
+        cursor.execute("DROP TABLE IF EXISTS packages")
+        cursor.execute("ALTER TABLE packages_migrated RENAME TO packages")
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS packages (
+            package_id INTEGER PRIMARY KEY NOT NULL,
+            name TEXT NOT NULL UNIQUE,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS update_packages_updated_at
+        AFTER UPDATE ON packages
+        FOR EACH ROW
+        BEGIN
+            UPDATE packages SET updated_at = CURRENT_TIMESTAMP WHERE package_id = OLD.package_id;
+        END;
+        """
+    )
+
+    cursor.execute("PRAGMA table_info(package_items)")
+    package_item_columns = [row[1] for row in cursor.fetchall()]
+    needs_package_items_migration = False
+    if 'item_id' not in package_item_columns:
+        needs_package_items_migration = True
+
+    if needs_package_items_migration:
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS package_items_migrated (
+                package_id INTEGER NOT NULL,
+                item_id TEXT NOT NULL,
+                quantity INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (package_id, item_id),
+                FOREIGN KEY (package_id) REFERENCES packages (package_id) ON DELETE CASCADE,
+                FOREIGN KEY (item_id) REFERENCES items (id) ON DELETE CASCADE
+            );
+            """
+        )
+        if package_item_columns:
+            if 'item_code' in package_item_columns:
+                cursor.execute(
+                    """
+                    INSERT OR IGNORE INTO package_items_migrated (package_id, item_id, quantity)
+                    SELECT package_id, item_code, quantity FROM package_items
+                    """
+                )
+        cursor.execute("DROP TABLE IF EXISTS package_items")
+        cursor.execute("ALTER TABLE package_items_migrated RENAME TO package_items")
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS package_items (
+            package_id INTEGER NOT NULL,
+            item_id TEXT NOT NULL,
+            quantity INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (package_id, item_id),
+            FOREIGN KEY (package_id) REFERENCES packages (package_id) ON DELETE CASCADE,
+            FOREIGN KEY (item_id) REFERENCES items (id) ON DELETE CASCADE
+        );
+        """
+    )
     # Ensure orders table references contacts instead of vendors
     cursor.execute("PRAGMA table_info(orders)")
     order_columns = {row[1] for row in cursor.fetchall()}
@@ -101,7 +271,72 @@ def init_db():
 
     cursor.execute("CREATE TABLE IF NOT EXISTS orders (order_id TEXT PRIMARY KEY NOT NULL, display_id TEXT UNIQUE, contact_id TEXT, order_date TEXT, status TEXT, notes TEXT, estimated_shipping_date TEXT, shipping_address TEXT, shipping_city TEXT, shipping_state TEXT, shipping_zip_code TEXT, estimated_shipping_cost REAL, signature_data_url TEXT, total_amount REAL, title TEXT, priority_level TEXT, fulfillment_channel TEXT, customer_reference TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (contact_id) REFERENCES contacts (id) ON DELETE SET NULL);")
     cursor.execute("CREATE TRIGGER IF NOT EXISTS update_orders_updated_at AFTER UPDATE ON orders FOR EACH ROW BEGIN UPDATE orders SET updated_at = CURRENT_TIMESTAMP WHERE order_id = OLD.order_id; END;")
-    cursor.execute("CREATE TABLE IF NOT EXISTS order_line_items (line_item_id INTEGER PRIMARY KEY AUTOINCREMENT, order_id TEXT NOT NULL, item_code TEXT NOT NULL, package_code TEXT, quantity INTEGER NOT NULL, price_per_unit_cents INTEGER NOT NULL, style_chosen TEXT, item_type TEXT, FOREIGN KEY (order_id) REFERENCES orders (order_id) ON DELETE CASCADE, FOREIGN KEY (item_code) REFERENCES items (item_code) ON DELETE RESTRICT);")
+    cursor.execute("PRAGMA table_info(order_line_items)")
+    order_line_item_columns = [row[1] for row in cursor.fetchall()]
+    needs_order_line_item_migration = False
+    if 'name' not in order_line_item_columns or 'catalog_item_id' not in order_line_item_columns:
+        needs_order_line_item_migration = True
+
+    if needs_order_line_item_migration:
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS order_line_items_migrated (
+                line_item_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_id TEXT NOT NULL,
+                catalog_item_id TEXT,
+                name TEXT NOT NULL,
+                description TEXT,
+                quantity INTEGER NOT NULL,
+                price_per_unit_cents INTEGER NOT NULL,
+                package_id TEXT,
+                weight_oz REAL,
+                FOREIGN KEY (order_id) REFERENCES orders (order_id) ON DELETE CASCADE,
+                FOREIGN KEY (catalog_item_id) REFERENCES items (id) ON DELETE SET NULL
+            );
+            """
+        )
+
+        if order_line_item_columns:
+            selectable_cols = set(order_line_item_columns)
+            if 'item_code' in selectable_cols:
+                cursor.execute(
+                    """
+                    INSERT OR IGNORE INTO order_line_items_migrated (line_item_id, order_id, catalog_item_id, name, description, quantity, price_per_unit_cents, package_id, weight_oz)
+                    SELECT
+                        line_item_id,
+                        order_id,
+                        item_code,
+                        COALESCE(i.name, item_code, 'Line Item'),
+                        '' AS description,
+                        quantity,
+                        price_per_unit_cents,
+                        package_code,
+                        NULL
+                    FROM order_line_items
+                    LEFT JOIN items i ON i.id = order_line_items.item_code
+                    """
+                )
+
+        cursor.execute("DROP TABLE IF EXISTS order_line_items")
+        cursor.execute("ALTER TABLE order_line_items_migrated RENAME TO order_line_items")
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS order_line_items (
+            line_item_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id TEXT NOT NULL,
+            catalog_item_id TEXT,
+            name TEXT NOT NULL,
+            description TEXT,
+            quantity INTEGER NOT NULL,
+            price_per_unit_cents INTEGER NOT NULL,
+            package_id TEXT,
+            weight_oz REAL,
+            FOREIGN KEY (order_id) REFERENCES orders (order_id) ON DELETE CASCADE,
+            FOREIGN KEY (catalog_item_id) REFERENCES items (id) ON DELETE SET NULL
+        );
+        """
+    )
     cursor.execute("CREATE TABLE IF NOT EXISTS order_status_history (history_id INTEGER PRIMARY KEY AUTOINCREMENT, order_id TEXT NOT NULL, status TEXT NOT NULL, status_date TEXT NOT NULL, FOREIGN KEY (order_id) REFERENCES orders (order_id) ON DELETE CASCADE);")
     cursor.execute("CREATE TABLE IF NOT EXISTS order_logs (log_id INTEGER PRIMARY KEY AUTOINCREMENT, order_id TEXT NOT NULL, timestamp TEXT DEFAULT CURRENT_TIMESTAMP, user TEXT, action TEXT NOT NULL, details TEXT, note TEXT, attachment_path TEXT, FOREIGN KEY (order_id) REFERENCES orders (order_id) ON DELETE CASCADE);")
     cursor.execute("""
