@@ -141,7 +141,7 @@
                             <button type="button" id="removeLogoButton" class="inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-semibold border border-slate-300 text-slate-600 hover:bg-slate-100 transition-colors">
                                 Remove Logo
                             </button>
-                            <span class="text-xs text-slate-500">PNG only, ideally 240×180px. Transparent backgrounds are flattened to white.</span>
+                            <span class="text-xs text-slate-500">PNG only, ideally 240×180px. Transparent backgrounds are preserved.</span>
                         </div>
                         <div class="flex justify-end">
                             <button type="submit" class="inline-flex items-center px-4 py-2 bg-orange-600 text-white font-semibold rounded-md shadow-sm hover:bg-orange-700 transition-colors">
@@ -433,8 +433,7 @@ hello@firecoast.com</p>
                             reject(new Error('Unable to prepare canvas context.'));
                             return;
                         }
-                        context.fillStyle = '#ffffff';
-                        context.fillRect(0, 0, targetWidth, targetHeight);
+                        context.clearRect(0, 0, targetWidth, targetHeight);
                         const scale = Math.min(targetWidth / image.width, targetHeight / image.height);
                         const renderWidth = Math.max(1, Math.round(image.width * scale));
                         const renderHeight = Math.max(1, Math.round(image.height * scale));
