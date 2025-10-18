@@ -133,6 +133,93 @@ const sanitizePlaceholderValue = (value) => {
     return trimmed;
 };
 
+const parseCurrencyToNumber = (value) => {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+    }
+    if (typeof value === 'string') {
+        const cleaned = value.replace(/[^0-9.-]/g, '');
+        const parsed = parseFloat(cleaned);
+        return Number.isFinite(parsed) ? parsed : 0;
+    }
+    return 0;
+};
+
+const centsToCurrency = (cents) => {
+    return (Math.round(cents) / 100).toFixed(2);
+};
+
+const normalizeDiscountsForTotals = (discounts, lineItems) => {
+    const lineItemTotals = new Map();
+    const orderedKeys = [];
+    (Array.isArray(lineItems) ? lineItems : []).forEach((item) => {
+        const key = item && item.id != null ? String(item.id) : null;
+        if (!key || lineItemTotals.has(key)) {
+            return;
+        }
+        const quantity = Number(item.quantity) || 0;
+        const price = Number(item.price) || 0;
+        const total = Math.max(0, quantity) * Math.max(0, price);
+        lineItemTotals.set(key, total);
+        orderedKeys.push(key);
+    });
+
+    const normalized = [];
+    if (!Array.isArray(discounts)) {
+        return normalized;
+    }
+
+    discounts.forEach((entry, index) => {
+        const rawId = entry && entry.id != null ? entry.id : `discount-${index + 1}`;
+        const id = String(rawId);
+        const label = typeof entry?.label === 'string' ? entry.label.trim() : '';
+        const type = entry?.type === 'percentage' ? 'percentage' : 'fixed';
+        const rawValue = entry?.value ?? '';
+
+        const appliesRaw = Array.isArray(entry?.appliesTo) ? entry.appliesTo : [];
+        const appliesSanitized = [];
+        const appliesKeys = [];
+        appliesRaw.forEach((candidate) => {
+            const key = String(candidate);
+            if (lineItemTotals.has(key) && !appliesKeys.includes(key)) {
+                appliesKeys.push(key);
+                appliesSanitized.push(String(candidate));
+            }
+        });
+
+        const baseKeys = appliesKeys.length ? appliesKeys : orderedKeys;
+        const baseAmountCents = baseKeys.reduce((sum, key) => sum + (lineItemTotals.get(key) || 0), 0);
+        let amountCents = 0;
+
+        if (type === 'percentage') {
+            let percentage = parseFloat(rawValue);
+            if (!Number.isFinite(percentage) || percentage < 0) {
+                percentage = 0;
+            }
+            amountCents = Math.round(baseAmountCents * (percentage / 100));
+        } else {
+            const numeric = parseCurrencyToNumber(rawValue);
+            const fixedCents = Math.round(Math.max(0, numeric) * 100);
+            amountCents = Math.min(fixedCents, baseAmountCents);
+        }
+
+        amountCents = Math.max(0, amountCents);
+
+        normalized.push({
+            id,
+            label,
+            type,
+            value: rawValue,
+            appliesTo: appliesSanitized,
+            appliesToAll: appliesKeys.length === 0,
+            amountCents,
+            baseAmountCents,
+        });
+    });
+
+    return normalized;
+};
+
 const ContactMentionTextarea = ({ label, placeholder, value, onChange, disabled = false, rows = 3, contacts = [] }) => {
     const { useState, useRef, useEffect, useMemo } = React;
     const textareaRef = useRef(null);
@@ -805,12 +892,23 @@ const formatContactAddress = (address, city, state, zip) => {
                 const price = Number(item.price) || 0;
                 return acc + (quantity * price);
             }, 0);
-            const estimatedShippingDollars = parseFloat(order.estimatedShipping) || 0;
+            const shippingCents = Math.max(0, Math.round(parseCurrencyToNumber(order.estimatedShipping) * 100));
+            const taxCents = Math.max(0, Math.round(parseCurrencyToNumber(order.taxAmount) * 100));
+            const normalizedDiscounts = normalizeDiscountsForTotals(order.discounts, order.lineItems || []);
+            const discountTotalCents = Math.min(
+                normalizedDiscounts.reduce((acc, discount) => acc + discount.amountCents, 0),
+                subtotalCents
+            );
+            const subtotalAfterDiscounts = Math.max(0, subtotalCents - discountTotalCents);
+            const totalCents = subtotalAfterDiscounts + shippingCents + taxCents;
             const orderTotals = {
                 subtotal: subtotalCents,
-                estimatedShipping: estimatedShippingDollars,
+                shippingCents,
+                taxCents,
+                discounts: normalizedDiscounts,
+                discountTotalCents,
+                total: totalCents,
             };
-            orderTotals.total = subtotalCents + Math.round(estimatedShippingDollars * 100);
 
             const orderTitle = order.title || order.display_id || order.id;
             const primaryContact = order.contactInfo || {};
@@ -991,13 +1089,40 @@ const formatContactAddress = (address, city, state, zip) => {
                                     {order.signatureDataUrl ? <img src={order.signatureDataUrl} alt="Signature" className="max-w-full h-auto border rounded"/> : <p>No signature provided.</p>}
                                 </div>
                                 <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
-                                    <h2 className="text-xl font-semibold text-slate-700 mb-4">Order Summary</h2>
-                                    <div className="space-y-3">
-                                        <div className="flex justify-between items-center text-slate-600"><span>Subtotal</span><span className="font-medium">${(orderTotals.subtotal / 100).toFixed(2)}</span></div>
-                                        {orderTotals.estimatedShipping > 0 && (
-                                            <div className="flex justify-between items-center text-slate-600"><span>Est. Shipping</span><span className="font-medium">${orderTotals.estimatedShipping.toFixed(2)}</span></div>
+                                    <div className="border-b border-slate-200 pb-3">
+                                        <h2 className="text-xl font-semibold text-slate-700">Order Summary</h2>
+                                    </div>
+                                    <div className="mt-4 ml-auto max-w-xs space-y-2 text-right text-sm text-slate-600">
+                                        <div className="flex justify-between gap-4">
+                                            <span>Subtotal</span>
+                                            <span className="font-medium text-slate-700">${centsToCurrency(orderTotals.subtotal)}</span>
+                                        </div>
+                                        <div className="flex justify-between gap-4">
+                                            <span>Taxes</span>
+                                            <span className="font-medium text-slate-700">${centsToCurrency(orderTotals.taxCents)}</span>
+                                        </div>
+                                        <div className="flex justify-between gap-4">
+                                            <span>Shipping</span>
+                                            <span className="font-medium text-slate-700">${centsToCurrency(orderTotals.shippingCents)}</span>
+                                        </div>
+                                        <div className={`flex justify-between gap-4 ${orderTotals.discountTotalCents > 0 ? 'text-rose-600' : 'text-slate-600'}`}>
+                                            <span>Discounts</span>
+                                            <span className="font-medium">{orderTotals.discountTotalCents > 0 ? '-' : ''}${centsToCurrency(orderTotals.discountTotalCents)}</span>
+                                        </div>
+                                        {orderTotals.discounts.length > 0 && (
+                                            <div className="space-y-1 text-xs text-rose-500">
+                                                {orderTotals.discounts.map(discount => (
+                                                    <div key={discount.id} className="flex justify-between gap-3">
+                                                        <span className="truncate">{discount.label || 'Discount'}</span>
+                                                        <span>- ${centsToCurrency(discount.amountCents)}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
                                         )}
-                                        <div className="flex justify-between items-center font-bold text-xl text-slate-800 pt-2 border-t mt-2"><span>Total</span><span>${(orderTotals.total / 100).toFixed(2)}</span></div>
+                                        <div className="flex justify-between items-center gap-4 border-t border-slate-200 pt-2 text-lg font-semibold text-slate-800">
+                                            <span>Total</span>
+                                            <span>${centsToCurrency(orderTotals.total)}</span>
+                                        </div>
                                     </div>
                                 </div>
                             </div>

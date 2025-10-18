@@ -167,6 +167,111 @@ def _build_contact_display(contact_dict):
     }
 
 
+def _safe_parse_float(value, default=0.0):
+    if isinstance(value, (int, float)):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+    if isinstance(value, str):
+        cleaned = value.strip().replace('$', '').replace(',', '')
+        if not cleaned:
+            return default
+        try:
+            return float(cleaned)
+        except ValueError:
+            return default
+    return default
+
+
+def _normalize_discount_entries(discounts_payload, line_items_payload):
+    normalized_entries = []
+    total_discount_cents = 0
+
+    if not isinstance(line_items_payload, list):
+        line_items_payload = []
+
+    line_item_totals = {}
+    for item in line_items_payload:
+        if not isinstance(item, dict):
+            continue
+        raw_identifier = (
+            item.get('id')
+            or item.get('line_item_id')
+            or item.get('client_reference_id')
+        )
+        if raw_identifier in (None, ''):
+            continue
+        key = str(raw_identifier)
+        try:
+            quantity = int(item.get('quantity', 0))
+        except (TypeError, ValueError):
+            quantity = 0
+        try:
+            price_cents = int(item.get('price', 0))
+        except (TypeError, ValueError):
+            price_cents = 0
+        quantity = max(0, quantity)
+        price_cents = max(0, price_cents)
+        line_item_totals[key] = quantity * price_cents
+
+    if not isinstance(discounts_payload, list):
+        return normalized_entries, 0
+
+    all_line_item_keys = list(line_item_totals.keys())
+
+    for entry in discounts_payload:
+        if not isinstance(entry, dict):
+            continue
+
+        entry_type_raw = entry.get('type', 'fixed')
+        entry_type = entry_type_raw.lower() if isinstance(entry_type_raw, str) else 'fixed'
+        if entry_type not in {'percentage', 'fixed'}:
+            entry_type = 'fixed'
+
+        label_raw = entry.get('label')
+        label = label_raw.strip() if isinstance(label_raw, str) else ''
+
+        applies_raw = entry.get('appliesTo') if isinstance(entry.get('appliesTo'), list) else []
+        applies_clean = []
+        applies_keys = []
+        for candidate in applies_raw:
+            candidate_key = str(candidate)
+            if candidate_key in line_item_totals:
+                applies_clean.append(candidate)
+                applies_keys.append(candidate_key)
+
+        if applies_keys:
+            base_keys = applies_keys
+        else:
+            base_keys = all_line_item_keys
+
+        base_total_cents = sum(line_item_totals.get(key, 0) for key in base_keys)
+        amount_cents = 0
+
+        if entry_type == 'percentage':
+            percentage_value = max(0.0, _safe_parse_float(entry.get('value', 0.0)))
+            amount_cents = int(round(base_total_cents * (percentage_value / 100.0))) if base_total_cents > 0 else 0
+        else:
+            fixed_value = max(0.0, _safe_parse_float(entry.get('value', 0.0)))
+            fixed_cents = int(round(fixed_value * 100))
+            amount_cents = min(fixed_cents, base_total_cents)
+
+        amount_cents = max(0, amount_cents)
+        total_discount_cents += amount_cents
+
+        normalized_entries.append({
+            'id': entry.get('id'),
+            'label': label,
+            'type': entry_type,
+            'value': entry.get('value'),
+            'appliesTo': applies_clean,
+            'amount_cents': amount_cents,
+        })
+
+    return normalized_entries, total_discount_cents
+
+
 def serialize_order(cursor, order_row, user_timezone, include_logs=False):
     order_dict = dict(order_row)
 
@@ -215,7 +320,7 @@ def serialize_order(cursor, order_row, user_timezone, include_logs=False):
 
     cursor.execute(
         """
-        SELECT line_item_id, catalog_item_id, name, description, quantity, price_per_unit_cents, package_id, weight_oz
+        SELECT line_item_id, catalog_item_id, name, description, quantity, price_per_unit_cents, package_id, weight_oz, client_reference_id
         FROM order_line_items
         WHERE order_id = ?
         ORDER BY line_item_id ASC
@@ -224,7 +329,7 @@ def serialize_order(cursor, order_row, user_timezone, include_logs=False):
     )
     order_dict['lineItems'] = [
         {
-            'id': li['line_item_id'],
+            'id': li['client_reference_id'] or li['line_item_id'],
             'catalogItemId': li['catalog_item_id'],
             'name': li['name'],
             'description': li['description'] or '',
@@ -278,7 +383,39 @@ def serialize_order(cursor, order_row, user_timezone, include_logs=False):
     order_dict['display_id'] = order_dict.pop('display_id')
     order_dict['date'] = order_dict.pop('order_date')
     order_dict['total'] = order_dict.pop('total_amount')
-    order_dict['estimatedShipping'] = order_dict.pop('estimated_shipping_cost') or 0
+
+    shipping_cost = order_dict.pop('estimated_shipping_cost')
+    try:
+        shipping_value = float(shipping_cost) if shipping_cost is not None else 0.0
+    except (TypeError, ValueError):
+        shipping_value = 0.0
+    order_dict['estimatedShipping'] = f"{shipping_value:.2f}" if shipping_value else "0.00"
+
+    tax_amount_value = order_dict.pop('tax_amount', 0) or 0
+    try:
+        tax_amount_value = float(tax_amount_value)
+    except (TypeError, ValueError):
+        tax_amount_value = 0.0
+    order_dict['taxAmount'] = f"{tax_amount_value:.2f}" if tax_amount_value else "0.00"
+
+    raw_discounts = order_dict.pop('discounts_json', None)
+    discounts_list = []
+    if isinstance(raw_discounts, str) and raw_discounts.strip():
+        try:
+            discounts_list = json.loads(raw_discounts)
+        except json.JSONDecodeError:
+            discounts_list = []
+    elif isinstance(raw_discounts, (list, tuple)):
+        discounts_list = list(raw_discounts)
+    order_dict['discounts'] = discounts_list
+
+    discount_total_value = order_dict.pop('discount_total', 0) or 0
+    try:
+        discount_total_value = float(discount_total_value)
+    except (TypeError, ValueError):
+        discount_total_value = 0.0
+    order_dict['discountTotal'] = int(round(discount_total_value * 100))
+
     order_dict['estimatedShippingDate'] = order_dict.pop('estimated_shipping_date')
 
     raw_priority = order_dict.pop('priority_level', None)
@@ -924,22 +1061,59 @@ def save_order():
         additional_contact_ids = normalized_additional
         new_order_payload['additionalContactIds'] = additional_contact_ids
         
-        subtotal_cents = sum(item.get('quantity',0) * item.get('price',0) for item in new_order_payload.get('lineItems',[]))
-        
-        estimated_shipping_cost_dollars = new_order_payload.get('estimatedShipping', 0.0)
-        if not isinstance(estimated_shipping_cost_dollars, (int, float)):
-            estimated_shipping_cost_dollars = 0.0
-        
-        # Use the total from the payload if it exists, otherwise calculate it.
-        # The payload total is in cents, so convert to dollars for the database.
-        if 'total' in new_order_payload and isinstance(new_order_payload['total'], (int, float)):
-            final_total_dollars = round(new_order_payload['total'] / 100.0, 2)
-        else:
-            estimated_shipping_cents = int(round(estimated_shipping_cost_dollars * 100))
-            final_total_dollars = round((subtotal_cents + estimated_shipping_cents) / 100.0, 2)
+        raw_line_items = new_order_payload.get('lineItems', [])
+        sanitized_line_items = []
+        subtotal_cents = 0
+        for li in raw_line_items:
+            if not isinstance(li, dict):
+                continue
+            name = (li.get('name') or '').strip()
+            if not name:
+                continue
+            try:
+                quantity = int(float(li.get('quantity', 0)))
+            except (TypeError, ValueError):
+                quantity = 0
+            if quantity <= 0:
+                continue
+            try:
+                price_cents = int(round(float(li.get('price', 0))))
+            except (TypeError, ValueError):
+                price_cents = 0
+            if price_cents < 0:
+                price_cents = 0
+            subtotal_cents += quantity * price_cents
+            sanitized_item = dict(li)
+            sanitized_item['name'] = name
+            sanitized_item['quantity'] = quantity
+            sanitized_item['price'] = price_cents
+            sanitized_line_items.append(sanitized_item)
 
+        new_order_payload['lineItems'] = sanitized_line_items
+
+        estimated_shipping_cost_dollars = max(0.0, _safe_parse_float(new_order_payload.get('estimatedShipping', 0.0)))
+        tax_amount_dollars = max(0.0, _safe_parse_float(new_order_payload.get('taxAmount', 0.0)))
+
+        normalized_discounts, discount_total_cents = _normalize_discount_entries(
+            new_order_payload.get('discounts', []),
+            sanitized_line_items,
+        )
+        discount_total_cents = min(discount_total_cents, subtotal_cents)
+        discount_total_dollars = round(discount_total_cents / 100.0, 2)
+        new_order_payload['discounts'] = normalized_discounts
+        discounts_json_str = json.dumps(normalized_discounts or [])
+
+        estimated_shipping_cents = int(round(estimated_shipping_cost_dollars * 100))
+        tax_amount_cents = int(round(tax_amount_dollars * 100))
+        subtotal_after_discounts = max(0, subtotal_cents - discount_total_cents)
+        total_cents = subtotal_after_discounts + estimated_shipping_cents + tax_amount_cents
+        final_total_dollars = round(total_cents / 100.0, 2)
+
+        new_order_payload['estimatedShipping'] = f"{estimated_shipping_cost_dollars:.2f}"
+        new_order_payload['taxAmount'] = f"{tax_amount_dollars:.2f}"
+        new_order_payload['discountTotal'] = discount_total_cents
         new_order_payload['total'] = final_total_dollars
-        
+
         title_value = new_order_payload.get('title', '')
         if isinstance(title_value, str):
             title_value = title_value.strip()
@@ -968,7 +1142,7 @@ def save_order():
 
         if current_order_id_for_db_ops:
             cursor.execute(
-                "UPDATE orders SET display_id=?, contact_id=?, order_date=?, status=?, notes=?, estimated_shipping_date=?, shipping_address=?, shipping_city=?, shipping_state=?, shipping_zip_code=?, estimated_shipping_cost=?, signature_data_url=?, total_amount=?, title=?, priority_level=?, fulfillment_channel=?, customer_reference=?, updated_at=CURRENT_TIMESTAMP WHERE order_id=?",
+                "UPDATE orders SET display_id=?, contact_id=?, order_date=?, status=?, notes=?, estimated_shipping_date=?, shipping_address=?, shipping_city=?, shipping_state=?, shipping_zip_code=?, estimated_shipping_cost=?, tax_amount=?, discounts_json=?, discount_total=?, signature_data_url=?, total_amount=?, title=?, priority_level=?, fulfillment_channel=?, customer_reference=?, updated_at=CURRENT_TIMESTAMP WHERE order_id=?",
                 (
                     display_id,
                     db_processed_contact_id,
@@ -981,6 +1155,9 @@ def save_order():
                     new_order_payload.get('shippingState'),
                     new_order_payload.get('shippingZipCode'),
                     estimated_shipping_cost_dollars,
+                    tax_amount_dollars,
+                    discounts_json_str,
+                    discount_total_dollars,
                     new_order_payload.get('signatureDataUrl'),
                     final_total_dollars,
                     title_value,
@@ -996,7 +1173,7 @@ def save_order():
             current_order_id_for_db_ops = f"ORD-{uuid.uuid4()}"
             new_order_payload['id'] = current_order_id_for_db_ops
             cursor.execute(
-                "INSERT INTO orders (order_id, display_id, contact_id, order_date, status, notes, estimated_shipping_date, shipping_address, shipping_city, shipping_state, shipping_zip_code, estimated_shipping_cost, signature_data_url, total_amount, title, priority_level, fulfillment_channel, customer_reference) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO orders (order_id, display_id, contact_id, order_date, status, notes, estimated_shipping_date, shipping_address, shipping_city, shipping_state, shipping_zip_code, estimated_shipping_cost, tax_amount, discounts_json, discount_total, signature_data_url, total_amount, title, priority_level, fulfillment_channel, customer_reference) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     current_order_id_for_db_ops,
                     display_id,
@@ -1010,6 +1187,9 @@ def save_order():
                     new_order_payload.get('shippingState'),
                     new_order_payload.get('shippingZipCode'),
                     estimated_shipping_cost_dollars,
+                    tax_amount_dollars,
+                    discounts_json_str,
+                    discount_total_dollars,
                     new_order_payload.get('signatureDataUrl'),
                     final_total_dollars,
                     title_value,
@@ -1054,8 +1234,8 @@ def save_order():
             cursor.execute(
                 """
                 INSERT INTO order_line_items
-                (order_id, catalog_item_id, name, description, quantity, price_per_unit_cents, package_id, weight_oz)
-                VALUES (?,?,?,?,?,?,?,?)
+                (order_id, catalog_item_id, name, description, quantity, price_per_unit_cents, package_id, weight_oz, client_reference_id)
+                VALUES (?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     processed_order_id,
@@ -1066,6 +1246,7 @@ def save_order():
                     price_cents,
                     package_id,
                     weight_oz,
+                    str(li.get('id')) if li.get('id') not in (None, '') else None,
                 )
             )
         for hist in new_order_payload.get('statusHistory',[]):
