@@ -423,353 +423,353 @@ const formatContactAddress = (address, city, state, zip) => {
         };
 
         const generateInvoicePdf = (order, itemsIndex = {}, brandingOverride = {}) => {
-            if (!order) return;
-            const { jsPDF } = window.jspdf;
-            const doc = new jsPDF();
-            const safeItems = itemsIndex || {};
-            const safeOrder = order || {};
-            const timeZone = "America/Chicago";
-            const dateOptions = { year: 'numeric', month: 'long', day: 'numeric' };
-            const formattedDate = safeOrder.date ? formatInTimeZone(safeOrder.date, timeZone, dateOptions) : '—';
+    if (!order) return;
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+    const safeItems = itemsIndex || {};
+    const safeOrder = order || {};
+    const timeZone = "America/Chicago";
+    const dateOptions = { year: 'numeric', month: 'long', day: 'numeric' };
+    const formattedDate = safeOrder.date ? formatInTimeZone(safeOrder.date, timeZone, dateOptions) : '—';
 
-            const mergedBranding = {
-                ...(window.fireCoastBranding || {}),
-                ...(brandingOverride || {}),
-            };
-            const accentRgb = hexToRgb(mergedBranding.invoice_brand_color) || { r: 249, g: 115, b: 22 };
-            const brandLines = [];
-            const businessName = (mergedBranding.invoice_business_name || '').trim();
-            const businessDetails = (mergedBranding.invoice_business_details || '').trim();
-            if (businessName) {
-                brandLines.push(businessName);
-            }
-            if (businessDetails) {
-                brandLines.push(...businessDetails.split('\n').map(line => line.trim()).filter(Boolean));
-            }
-            const logoDataUrl = (mergedBranding.invoice_logo_data_url || '').trim();
+    const mergedBranding = {
+        ...(window.fireCoastBranding || {}),
+        ...(brandingOverride || {}),
+    };
+    const accentRgb = hexToRgb(mergedBranding.invoice_brand_color) || { r: 249, g: 115, b: 22 };
+    const brandLines = [];
+    const businessName = (mergedBranding.invoice_business_name || '').trim();
+    const businessDetails = (mergedBranding.invoice_business_details || '').trim();
+    if (businessName) {
+        brandLines.push(businessName);
+    }
+    if (businessDetails) {
+        brandLines.push(...businessDetails.split('
+').map(line => line.trim()).filter(Boolean));
+    }
+    const logoDataUrl = (mergedBranding.invoice_logo_data_url || '').trim();
 
-            const safeLineItems = Array.isArray(safeOrder.lineItems) ? safeOrder.lineItems : [];
-            const baseContact = safeOrder.contactInfo || {};
-            const contactInfo = {
-                companyName: '',
-                contactName: '',
-                email: '',
-                phone: '',
-                billingAddress: '',
-                billingCity: '',
-                billingState: '',
-                billingZipCode: '',
-                shippingAddress: '',
-                shippingCity: '',
-                shippingState: '',
-                shippingZipCode: '',
-                ...baseContact
-            };
+    const safeLineItems = Array.isArray(safeOrder.lineItems) ? safeOrder.lineItems : [];
+    const baseContact = safeOrder.contactInfo || {};
+    const contactInfo = {
+        companyName: '',
+        contactName: '',
+        email: '',
+        phone: '',
+        billingAddress: '',
+        billingCity: '',
+        billingState: '',
+        billingZipCode: '',
+        shippingAddress: '',
+        shippingCity: '',
+        shippingState: '',
+        shippingZipCode: '',
+        ...baseContact
+    };
 
-            const invoiceNumber = ((safeOrder.display_id || '').trim()) || ((safeOrder.customerReference || '').trim());
-            const referenceLine = (safeOrder.title || '').trim();
+    const displayId = (safeOrder.display_id || '').trim();
+    const customerReference = (safeOrder.customerReference || '').trim();
+    const invoiceNumber = displayId || customerReference;
+    const referenceLine = (safeOrder.title || '').trim();
+    const paymentTerms = 'Due on receipt';
+    const showCustomerReference = Boolean(customerReference && customerReference !== invoiceNumber);
 
-            const formatCurrency = (cents) => {
-                const safeCents = Number.isFinite(cents) ? cents : 0;
-                return `$${(safeCents / 100).toFixed(2)}`;
-            };
+    const formatCurrency = (cents) => {
+        const safeCents = Number.isFinite(cents) ? cents : 0;
+        return `$${(safeCents / 100).toFixed(2)}`;
+    };
 
-            const buildAddressLines = (address, city, state, zip) => {
-                const lines = [];
-                if (address) lines.push(address);
-                const locality = [city, state].filter(Boolean).join(', ');
-                const postalLine = [locality, zip].filter(Boolean).join(' ');
-                if (postalLine.trim()) lines.push(postalLine.trim());
-                return lines;
-            };
+    const buildAddressLines = (address, city, state, zip) => {
+        const lines = [];
+        if (address) lines.push(address);
+        const locality = [city, state].filter(Boolean).join(', ');
+        const postalLine = [locality, zip].filter(Boolean).join(' ');
+        if (postalLine.trim()) lines.push(postalLine.trim());
+        return lines;
+    };
 
-            const pageWidth = doc.internal.pageSize.getWidth();
-            const pageHeight = doc.internal.pageSize.getHeight();
-            const marginX = 14;
-            const usableWidth = pageWidth - (marginX * 2);
+    const fitImageInBox = (dataUrl, x, y, maxWidth, maxHeight) => {
+        try {
+            const imageProps = doc.getImageProperties(dataUrl);
+            const ratio = Math.min(maxWidth / imageProps.width, maxHeight / imageProps.height, 1);
+            const width = imageProps.width * ratio;
+            const height = imageProps.height * ratio;
+            const offsetX = x + ((maxWidth - width) / 2);
+            const offsetY = y + ((maxHeight - height) / 2);
+            doc.addImage(dataUrl, imageProps.fileType || 'PNG', offsetX, offsetY, width, height);
+            return offsetY + height;
+        } catch (error) {
+            console.error('Unable to render invoice logo:', error);
+            return y + maxHeight;
+        }
+    };
 
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const marginX = 14;
+    const usableWidth = pageWidth - (marginX * 2);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(22);
+    doc.setTextColor(accentRgb.r, accentRgb.g, accentRgb.b);
+    doc.text('Invoice', marginX, 22);
+
+    doc.setDrawColor(accentRgb.r, accentRgb.g, accentRgb.b);
+    doc.setLineWidth(0.6);
+    doc.line(marginX, 26, pageWidth - marginX, 26);
+
+    let brandBlockBottom = 26;
+    if (logoDataUrl) {
+        const logoBottom = fitImageInBox(logoDataUrl, pageWidth - marginX - 46, 10, 46, 22);
+        brandBlockBottom = Math.max(brandBlockBottom, logoBottom + 2);
+    }
+
+    if (brandLines.length) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10);
+        doc.setTextColor(71, 85, 105);
+        const wrappedBrand = doc.splitTextToSize(brandLines.join('
+'), 60);
+        const brandTop = logoDataUrl ? brandBlockBottom : 30;
+        doc.text(wrappedBrand, pageWidth - marginX, brandTop, { align: 'right' });
+        brandBlockBottom = Math.max(brandBlockBottom, brandTop + (wrappedBrand.length * 4));
+    }
+
+    let currentY = Math.max(brandBlockBottom + 6, 34);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(100, 116, 139);
+    doc.text('INVOICE DETAILS', marginX, currentY);
+    currentY += 5;
+
+    const infoRows = [
+        invoiceNumber ? ['Invoice #', invoiceNumber] : null,
+        ['Invoice Date', formattedDate || '—'],
+        referenceLine ? ['Reference', referenceLine] : null,
+        showCustomerReference ? ['Customer Reference', customerReference] : null,
+        paymentTerms ? ['Payment Terms', paymentTerms] : null,
+    ].filter(Boolean);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    doc.setTextColor(15, 23, 42);
+    infoRows.forEach(([label, value]) => {
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(100, 116, 139);
+        doc.text(`${label}:`, marginX, currentY);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(15, 23, 42);
+        const textX = marginX + 28;
+        const wrappedValue = doc.splitTextToSize(value || '—', usableWidth / 2);
+        doc.text(wrappedValue, textX, currentY);
+        currentY += (wrappedValue.length * 4);
+        if (wrappedValue.length === 0) {
+            currentY += 4;
+        }
+        currentY += 2;
+    });
+
+    currentY += 2;
+
+    const columnGap = 12;
+    const columnWidth = (usableWidth - columnGap) / 2;
+
+    const renderBlock = (title, lines, x, y) => {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9);
+        doc.setTextColor(100, 116, 139);
+        doc.text(title.toUpperCase(), x, y);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10);
+        doc.setTextColor(15, 23, 42);
+        const safeLines = lines.length ? lines : ['—'];
+        let lineY = y + 5;
+        safeLines.forEach((line) => {
+            const wrapped = doc.splitTextToSize(line || ' ', columnWidth);
+            wrapped.forEach((segment) => {
+                doc.text(segment, x, lineY);
+                lineY += 4;
+            });
+        });
+        return lineY;
+    };
+
+    const customerPhone = formatPhoneNumber(contactInfo.phone);
+    const billToLines = [
+        contactInfo.companyName,
+        contactInfo.contactName,
+        contactInfo.email,
+        customerPhone
+    ].filter(Boolean);
+    const billingAddressLines = buildAddressLines(contactInfo.billingAddress, contactInfo.billingCity, contactInfo.billingState, contactInfo.billingZipCode);
+    if (billingAddressLines.length) {
+        if (billToLines.length) billToLines.push('');
+        billToLines.push(...billingAddressLines);
+    }
+
+    const shippingLines = buildAddressLines(contactInfo.shippingAddress, contactInfo.shippingCity, contactInfo.shippingState, contactInfo.shippingZipCode);
+
+    let blockBottom = currentY;
+    blockBottom = Math.max(blockBottom, renderBlock('Bill To', billToLines, marginX, currentY));
+    if (shippingLines.length) {
+        blockBottom = Math.max(blockBottom, renderBlock('Ship To', shippingLines, marginX + columnWidth + columnGap, currentY));
+    }
+
+    currentY = blockBottom + 6;
+
+    const tableHead = [['Name', 'Description', 'Units', 'Unit Price', 'Total']];
+    const tableBody = safeLineItems.map((item) => {
+        const catalogItem = item?.catalogItemId ? safeItems[item.catalogItemId] : null;
+        const displayName = (item?.name && item.name.trim()) || catalogItem?.name || 'Item';
+        const description = (item?.description && item.description.trim()) || catalogItem?.description || '';
+        const quantity = Number(item?.quantity) || 0;
+        const unitPriceCents = Number(item?.price) || 0;
+        const lineTotalCents = quantity * unitPriceCents;
+        return [
+            displayName,
+            description || '—',
+            `${quantity}`,
+            formatCurrency(unitPriceCents),
+            formatCurrency(lineTotalCents)
+        ];
+    });
+
+    if (!tableBody.length) {
+        tableBody.push(['—', 'No line items recorded', '0', formatCurrency(0), formatCurrency(0)]);
+    }
+
+    doc.autoTable({
+        startY: currentY,
+        head: tableHead,
+        body: tableBody,
+        margin: { left: marginX, right: marginX },
+        styles: {
+            fontSize: 10,
+            lineColor: [226, 232, 240],
+            lineWidth: 0.4,
+            textColor: [15, 23, 42],
+            valign: 'top'
+        },
+        headStyles: {
+            fillColor: [accentRgb.r, accentRgb.g, accentRgb.b],
+            textColor: [255, 255, 255],
+            fontSize: 10,
+            fontStyle: 'bold'
+        },
+        alternateRowStyles: {
+            fillColor: [249, 250, 251]
+        },
+        columnStyles: {
+            0: { cellWidth: 38 },
+            1: { cellWidth: Math.max(usableWidth - 116, 60) },
+            2: { cellWidth: 18, halign: 'center' },
+            3: { cellWidth: 30, halign: 'right' },
+            4: { cellWidth: 30, halign: 'right' }
+        }
+    });
+
+    const subtotalCents = safeLineItems.reduce((acc, item) => {
+        const quantity = Number(item?.quantity) || 0;
+        const unitPriceCents = Number(item?.price) || 0;
+        return acc + (quantity * unitPriceCents);
+    }, 0);
+
+    const estimatedShippingValue = typeof safeOrder.estimatedShipping === 'number'
+        ? safeOrder.estimatedShipping
+        : parseFloat(safeOrder.estimatedShipping || '0');
+    const estimatedShippingCents = Math.round((Number.isFinite(estimatedShippingValue) ? estimatedShippingValue : 0) * 100);
+    const totalCents = subtotalCents + estimatedShippingCents;
+
+    const tableResult = doc.lastAutoTable;
+    let summaryY = (tableResult ? tableResult.finalY : currentY) + 8;
+
+    const summaryWidth = 60;
+    const summaryX = pageWidth - marginX - summaryWidth;
+    const summaryRows = [
+        { label: 'Subtotal', value: formatCurrency(subtotalCents) }
+    ];
+    if (estimatedShippingCents > 0) {
+        summaryRows.push({ label: 'Shipping', value: formatCurrency(estimatedShippingCents) });
+    }
+    summaryRows.push({ label: 'Total Due', value: formatCurrency(totalCents), emphasize: true });
+
+    doc.setFontSize(10);
+    summaryRows.forEach((row, index) => {
+        const y = summaryY + (index * 6);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(100, 116, 139);
+        doc.text(row.label.toUpperCase(), summaryX, y);
+        doc.setFont('helvetica', row.emphasize ? 'bold' : 'normal');
+        if (row.emphasize) {
             doc.setTextColor(accentRgb.r, accentRgb.g, accentRgb.b);
-            doc.setFontSize(26);
-            doc.setFont('helvetica', 'bold');
-            doc.text('INVOICE', marginX, 20);
-            doc.setDrawColor(accentRgb.r, accentRgb.g, accentRgb.b);
-            doc.setLineWidth(0.8);
-            doc.line(marginX, 24, pageWidth - marginX, 24);
-
-            let rightHeaderTop = 12;
-            if (logoDataUrl) {
-                try {
-                    doc.addImage(logoDataUrl, 'PNG', pageWidth - marginX - 40, 8, 40, 20);
-                    rightHeaderTop = 32;
-                } catch (error) {
-                    console.error('Unable to render invoice logo:', error);
-                }
-            }
-
+        } else {
             doc.setTextColor(15, 23, 42);
-            doc.setFont('helvetica', 'normal');
-            let brandY = rightHeaderTop;
-            if (brandLines.length) {
-                doc.setFontSize(10);
-                const wrappedBrand = doc.splitTextToSize(brandLines.join('\n'), 70);
-                doc.text(wrappedBrand, pageWidth - marginX, brandY, { align: 'right' });
-                brandY += wrappedBrand.length * 4 + 2;
-            }
+        }
+        doc.text(row.value, pageWidth - marginX, y, { align: 'right' });
+    });
 
-            let headerBottom = Math.max(28, brandY);
-            doc.setDrawColor(226, 232, 240);
-            doc.line(marginX, headerBottom, pageWidth - marginX, headerBottom);
-            headerBottom += 6;
+    summaryY += (summaryRows.length * 6) + 6;
 
-            const infoPairs = [
-                { label: 'Invoice #', value: invoiceNumber || '—' },
-                { label: 'Invoice Date', value: formattedDate || '—' },
-                referenceLine ? { label: 'Reference', value: referenceLine } : null,
-                safeOrder.customerReference ? { label: 'Customer Reference', value: safeOrder.customerReference } : null,
-                { label: 'Payment Terms', value: 'Due on receipt' }
-            ].filter(Boolean);
+    let detailsY = summaryY;
+    const detailLines = [];
+    if (safeOrder.estimatedShippingDate) {
+        detailLines.push(`Estimated Ship Date: ${formatInTimeZone(safeOrder.estimatedShippingDate, timeZone, dateOptions)}`);
+    }
+    if (safeOrder.priorityLevel) {
+        detailLines.push(`Priority: ${safeOrder.priorityLevel}`);
+    }
+    if (safeOrder.fulfillmentChannel) {
+        detailLines.push(`Fulfillment: ${safeOrder.fulfillmentChannel}`);
+    }
 
-            const infoColumnCount = 2;
-            const infoColumnWidth = usableWidth / infoColumnCount;
-            let infoRows = Math.ceil(infoPairs.length / infoColumnCount);
-            if (infoRows === 0) infoRows = 1;
-            doc.setFontSize(9);
-            let infoY = headerBottom;
-            infoPairs.forEach((pair, index) => {
-                const columnIndex = index % infoColumnCount;
-                const rowIndex = Math.floor(index / infoColumnCount);
-                const baseX = marginX + (columnIndex * infoColumnWidth);
-                const baseY = infoY + (rowIndex * 10);
-                doc.setTextColor(100, 116, 139);
-                doc.setFont('helvetica', 'bold');
-                doc.text(pair.label.toUpperCase(), baseX, baseY);
-                doc.setFont('helvetica', 'normal');
-                doc.setTextColor(15, 23, 42);
-                const wrappedValue = doc.splitTextToSize(pair.value || '—', infoColumnWidth - 2);
-                doc.text(wrappedValue, baseX, baseY + 4);
-            });
+    const trimmedNotes = (safeOrder.notes || '').trim();
+    if (trimmedNotes) {
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(15, 23, 42);
+        doc.text('Notes', marginX, detailsY);
+        doc.setFont('helvetica', 'normal');
+        const wrappedNotes = doc.splitTextToSize(trimmedNotes, usableWidth);
+        doc.text(wrappedNotes, marginX, detailsY + 5);
+        detailsY += (wrappedNotes.length * 4) + 8;
+    }
 
-            const infoBlockHeight = (infoRows * 10) + 6;
-            let currentY = headerBottom + infoBlockHeight;
+    if (detailLines.length) {
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(15, 23, 42);
+        doc.text('Order Details', marginX, detailsY);
+        doc.setFont('helvetica', 'normal');
+        const wrappedDetails = doc.splitTextToSize(detailLines.join('
+'), usableWidth);
+        doc.text(wrappedDetails, marginX, detailsY + 5);
+        detailsY += (wrappedDetails.length * 4) + 8;
+    }
 
-            const customerPhone = formatPhoneNumber(contactInfo.phone);
-            const billToLines = [
-                contactInfo.companyName,
-                contactInfo.contactName,
-                contactInfo.email,
-                customerPhone
-            ].filter(Boolean);
-            const billingAddressLines = buildAddressLines(contactInfo.billingAddress, contactInfo.billingCity, contactInfo.billingState, contactInfo.billingZipCode);
-            if (billingAddressLines.length) {
-                if (billToLines.length) billToLines.push('');
-                billToLines.push(...billingAddressLines);
-            }
+    let signatureY = Math.max(detailsY + 12, pageHeight - 40);
+    if (signatureY > pageHeight - 20) {
+        doc.addPage();
+        signatureY = 30;
+    }
 
-            const shippingLines = buildAddressLines(contactInfo.shippingAddress, contactInfo.shippingCity, contactInfo.shippingState, contactInfo.shippingZipCode);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(100, 116, 139);
+    doc.text('Authorized Signature', marginX, signatureY);
 
-            const cardData = [
-                { title: 'Bill To', lines: billToLines.length ? billToLines : ['—'] },
-                shippingLines.length ? { title: 'Ship To', lines: shippingLines } : null
-            ].filter(Boolean);
+    const signatureDataUrl = safeOrder.signatureDataUrl;
+    doc.setDrawColor(203, 213, 225);
+    const signatureBoxX = marginX + 42;
+    const signatureBoxWidth = 62;
+    const signatureBoxHeight = 18;
+    if (signatureDataUrl) {
+        try {
+            fitImageInBox(signatureDataUrl, signatureBoxX, signatureY - signatureBoxHeight + 2, signatureBoxWidth, signatureBoxHeight);
+        } catch (error) {
+            console.error('Error rendering signature image for PDF:', error);
+        }
+    }
+    doc.line(signatureBoxX, signatureY + 2, signatureBoxX + signatureBoxWidth, signatureY + 2);
 
-            const cardGap = cardData.length > 1 ? 6 : 0;
-            const cardWidth = cardData.length > 1 ? (usableWidth - cardGap) / 2 : usableWidth;
-
-            const drawCard = (title, lines, x, y, width) => {
-                const contentLines = lines.length ? lines : ['—'];
-                const wrappedLines = contentLines.flatMap(line => line ? doc.splitTextToSize(line, width - 6) : ['']);
-                const cardHeight = Math.max(24, (wrappedLines.length * 4) + 12);
-                doc.setDrawColor(226, 232, 240);
-                doc.setFillColor(248, 250, 252);
-                doc.roundedRect(x, y, width, cardHeight, 2, 2, 'FD');
-                doc.setTextColor(100, 116, 139);
-                doc.setFont('helvetica', 'bold');
-                doc.text(title.toUpperCase(), x + 4, y + 8);
-                doc.setFont('helvetica', 'normal');
-                doc.setTextColor(15, 23, 42);
-                let textY = y + 15;
-                wrappedLines.forEach(line => {
-                    const content = line === '' ? ' ' : line;
-                    doc.text(content, x + 4, textY);
-                    textY += 4;
-                });
-                return y + cardHeight;
-            };
-
-            let cardBottom = currentY;
-            cardData.forEach((card, index) => {
-                const x = marginX + (index * (cardWidth + cardGap));
-                const bottom = drawCard(card.title, card.lines, x, currentY, cardWidth);
-                if (bottom > cardBottom) {
-                    cardBottom = bottom;
-                }
-            });
-
-            currentY = cardBottom + 10;
-
-            const descriptionWidth = Math.max(usableWidth - 120, 60);
-            const tableHead = [['Item', 'Description', 'Qty', 'Rate', 'Amount']];
-            const tableBody = safeLineItems.map((item) => {
-                const catalogItem = item?.catalogItemId ? safeItems[item.catalogItemId] : null;
-                const displayName = (item?.name && item.name.trim()) || catalogItem?.name || 'Item';
-                const description = (item?.description && item.description.trim()) || catalogItem?.description || '';
-                const quantity = Number(item?.quantity) || 0;
-                const unitPriceCents = Number(item?.price) || 0;
-                const lineTotalCents = quantity * unitPriceCents;
-                return [
-                    displayName,
-                    description || '—',
-                    `${quantity}`,
-                    formatCurrency(unitPriceCents),
-                    formatCurrency(lineTotalCents)
-                ];
-            });
-
-            if (!tableBody.length) {
-                tableBody.push(['—', 'No line items recorded', '0', formatCurrency(0), formatCurrency(0)]);
-            }
-
-            doc.autoTable({
-                startY: currentY,
-                head: tableHead,
-                body: tableBody,
-                margin: { left: marginX, right: marginX },
-                styles: {
-                    fontSize: 10,
-                    lineColor: [226, 232, 240],
-                    lineWidth: 0.4,
-                    textColor: [15, 23, 42],
-                    valign: 'top'
-                },
-                headStyles: {
-                    fillColor: [accentRgb.r, accentRgb.g, accentRgb.b],
-                    textColor: [255, 255, 255],
-                    fontSize: 10,
-                    fontStyle: 'bold'
-                },
-                alternateRowStyles: {
-                    fillColor: [249, 250, 251]
-                },
-                columnStyles: {
-                    0: { cellWidth: 40 },
-                    1: { cellWidth: descriptionWidth },
-                    2: { cellWidth: 18, halign: 'center' },
-                    3: { cellWidth: 26, halign: 'right' },
-                    4: { cellWidth: 26, halign: 'right' }
-                }
-            });
-
-            const subtotalCents = safeLineItems.reduce((acc, item) => {
-                const quantity = Number(item?.quantity) || 0;
-                const unitPriceCents = Number(item?.price) || 0;
-                return acc + (quantity * unitPriceCents);
-            }, 0);
-
-            const estimatedShippingValue = typeof safeOrder.estimatedShipping === 'number'
-                ? safeOrder.estimatedShipping
-                : parseFloat(safeOrder.estimatedShipping || '0');
-            const estimatedShippingCents = Math.round((Number.isFinite(estimatedShippingValue) ? estimatedShippingValue : 0) * 100);
-            const totalCents = subtotalCents + estimatedShippingCents;
-
-            const tableResult = doc.lastAutoTable;
-            let summaryY = (tableResult ? tableResult.finalY : currentY) + 8;
-
-            const summaryWidth = 60;
-            const summaryX = pageWidth - marginX - summaryWidth;
-            const summaryRows = [
-                { label: 'Subtotal', value: formatCurrency(subtotalCents) }
-            ];
-            if (estimatedShippingCents > 0) {
-                summaryRows.push({ label: 'Shipping', value: formatCurrency(estimatedShippingCents) });
-            }
-            summaryRows.push({ label: 'Total Due', value: formatCurrency(totalCents), emphasize: true });
-
-            doc.setFontSize(10);
-            summaryRows.forEach((row, index) => {
-                const y = summaryY + (index * 6);
-                doc.setTextColor(100, 116, 139);
-                doc.setFont('helvetica', 'bold');
-                doc.text(row.label.toUpperCase(), summaryX, y);
-                doc.setFont('helvetica', row.emphasize ? 'bold' : 'normal');
-                if (row.emphasize) {
-                    doc.setTextColor(accentRgb.r, accentRgb.g, accentRgb.b);
-                } else {
-                    doc.setTextColor(15, 23, 42);
-                }
-                doc.text(row.value, pageWidth - marginX, y, { align: 'right' });
-            });
-
-            summaryY += (summaryRows.length * 6) + 6;
-
-            let detailsY = summaryY;
-            const detailLines = [];
-            if (safeOrder.estimatedShippingDate) {
-                detailLines.push(`Estimated Ship Date: ${formatInTimeZone(safeOrder.estimatedShippingDate, timeZone, dateOptions)}`);
-            }
-            if (safeOrder.priorityLevel) {
-                detailLines.push(`Priority: ${safeOrder.priorityLevel}`);
-            }
-            if (safeOrder.fulfillmentChannel) {
-                detailLines.push(`Fulfillment: ${safeOrder.fulfillmentChannel}`);
-            }
-
-            const trimmedNotes = (safeOrder.notes || '').trim();
-            if (trimmedNotes) {
-                doc.setFont('helvetica', 'bold');
-                doc.setTextColor(15, 23, 42);
-                doc.text('Notes', marginX, detailsY);
-                doc.setFont('helvetica', 'normal');
-                const wrappedNotes = doc.splitTextToSize(trimmedNotes, usableWidth);
-                doc.text(wrappedNotes, marginX, detailsY + 5);
-                detailsY += (wrappedNotes.length * 4) + 8;
-            }
-
-            if (detailLines.length) {
-                doc.setFont('helvetica', 'bold');
-                doc.setTextColor(15, 23, 42);
-                doc.text('Order Details', marginX, detailsY);
-                doc.setFont('helvetica', 'normal');
-                const wrappedDetails = doc.splitTextToSize(detailLines.join('\n'), usableWidth);
-                doc.text(wrappedDetails, marginX, detailsY + 5);
-                detailsY += (wrappedDetails.length * 4) + 8;
-            }
-
-            let signatureY = Math.max(detailsY + 10, pageHeight - 40);
-            if (signatureY > pageHeight - 20) {
-                doc.addPage();
-                signatureY = 30;
-            }
-
-            doc.setFont('helvetica', 'bold');
-            doc.setTextColor(100, 116, 139);
-            doc.text('Authorized Signature', marginX, signatureY);
-
-            const signatureDataUrl = safeOrder.signatureDataUrl;
-            doc.setDrawColor(203, 213, 225);
-            if (signatureDataUrl) {
-                try {
-                    if (signatureDataUrl.startsWith('data:image')) {
-                        const base64Data = signatureDataUrl.substring(signatureDataUrl.indexOf(',') + 1);
-                        if (base64Data.length > 150) {
-                            const signatureImgWidth = 60;
-                            const signatureImgHeight = 18;
-                            doc.addImage(signatureDataUrl, 'PNG', marginX + 40, signatureY - (signatureImgHeight / 2) + 1, signatureImgWidth, signatureImgHeight);
-                        } else {
-                            doc.line(marginX + 40, signatureY, marginX + 90, signatureY);
-                        }
-                    } else {
-                        doc.line(marginX + 40, signatureY, marginX + 90, signatureY);
-                    }
-                } catch (error) {
-                    console.error('Error rendering signature image for PDF:', error);
-                    doc.line(marginX + 40, signatureY, marginX + 90, signatureY);
-                }
-            } else {
-                doc.line(marginX + 40, signatureY, marginX + 90, signatureY);
-            }
-
-            doc.output('dataurlnewwindow');
-        };
+    doc.output('dataurlnewwindow');
+};
 
         const ViewOrderPage = ({ orderId }) => {
             const { useState, useEffect } = React;

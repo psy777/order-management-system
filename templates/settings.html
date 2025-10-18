@@ -154,22 +154,89 @@
                     <div class="flex items-center justify-between">
                         <div>
                             <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Preview</p>
-                            <p id="previewBusinessName" class="mt-2 text-xl font-semibold text-slate-800">FireCoast OMS</p>
+                            <p class="mt-1 text-xs text-slate-500">This mockup reflects your invoice header.</p>
                         </div>
-                        <div id="invoiceLogoPreview" class="w-16 h-16 bg-white border border-slate-200 rounded-md flex items-center justify-center overflow-hidden">
-                            <span class="text-xs text-slate-400">Logo</span>
-                        </div>
+                        <span class="text-xs font-medium text-slate-400">Live Update</span>
                     </div>
-                    <div>
-                        <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Accent</p>
-                        <div id="previewAccentSwatch" class="mt-2 h-2 rounded-full bg-orange-500"></div>
-                    </div>
-                    <div>
-                        <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Business Details</p>
-                        <p id="previewBusinessDetails" class="mt-2 text-sm text-slate-600 whitespace-pre-line">123 Harbor Way
+                    <div id="invoicePreviewCard" class="rounded-lg border border-slate-200 bg-white shadow-sm p-4 space-y-4">
+                        <div class="flex items-start justify-between gap-4">
+                            <div class="space-y-2">
+                                <p class="text-[0.6rem] uppercase tracking-[0.35em] text-slate-400">Invoice</p>
+                                <div class="space-y-1 text-xs text-slate-600">
+                                    <p>Invoice #: FC-1024</p>
+                                    <p>Invoice Date: Aug 24, 2024</p>
+                                    <p>Payment Terms: Due on receipt</p>
+                                </div>
+                            </div>
+                            <div class="flex flex-col items-end gap-2 text-right">
+                                <div id="invoiceLogoPreview" class="w-20 h-12 bg-white border border-slate-200 rounded-md flex items-center justify-center overflow-hidden">
+                                    <span class="text-[0.65rem] text-slate-400">Logo</span>
+                                </div>
+                                <div class="text-xs text-slate-600 whitespace-pre-line leading-4">
+                                    <p id="previewBusinessName" class="text-sm font-semibold text-slate-800">FireCoast OMS</p>
+                                    <p id="previewBusinessDetails">123 Harbor Way
 Portland, OR 97203
 hello@firecoast.com</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="previewAccentSwatch" class="h-1.5 rounded-full bg-orange-500"></div>
+                        <div class="grid grid-cols-2 gap-4 text-xs">
+                            <div class="space-y-2">
+                                <p class="text-[0.55rem] uppercase tracking-[0.25em] text-slate-400 font-semibold">Bill To</p>
+                                <p class="leading-4 text-slate-600">Acme Industries
+Jordan Smith
+jordan@acme.com</p>
+                            </div>
+                            <div class="space-y-2">
+                                <p class="text-[0.55rem] uppercase tracking-[0.25em] text-slate-400 font-semibold">Summary</p>
+                                <div class="space-y-1">
+                                    <div class="flex items-center justify-between text-slate-500">
+                                        <span>Subtotal</span>
+                                        <span class="font-medium text-slate-700">$1,250.00</span>
+                                    </div>
+                                    <div class="flex items-center justify-between text-slate-500">
+                                        <span>Shipping</span>
+                                        <span class="font-medium text-slate-700">$45.00</span>
+                                    </div>
+                                    <div class="flex items-center justify-between font-semibold">
+                                        <span class="text-slate-600">Total Due</span>
+                                        <span id="previewTotalDue" class="text-orange-600">$1,295.00</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="border border-slate-200 rounded-md overflow-hidden">
+                            <table class="w-full text-xs text-slate-600">
+                                <thead>
+                                    <tr id="previewTableHead" class="text-white">
+                                        <th class="px-3 py-2 text-left">Name</th>
+                                        <th class="px-3 py-2 text-left">Description</th>
+                                        <th class="px-3 py-2 text-right">Units</th>
+                                        <th class="px-3 py-2 text-right">Unit Price</th>
+                                        <th class="px-3 py-2 text-right">Total</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr class="border-t border-slate-200">
+                                        <td class="px-3 py-2">Sample Item</td>
+                                        <td class="px-3 py-2">Custom fabrication</td>
+                                        <td class="px-3 py-2 text-right">3</td>
+                                        <td class="px-3 py-2 text-right">$250.00</td>
+                                        <td class="px-3 py-2 text-right">$750.00</td>
+                                    </tr>
+                                    <tr class="border-t border-slate-200 bg-slate-50">
+                                        <td class="px-3 py-2">Rush Fee</td>
+                                        <td class="px-3 py-2">Expedited handling</td>
+                                        <td class="px-3 py-2 text-right">1</td>
+                                        <td class="px-3 py-2 text-right">$500.00</td>
+                                        <td class="px-3 py-2 text-right">$500.00</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
+                    <p class="text-xs text-slate-500">Logos scale proportionally to fill the header area. PNG or SVG with a transparent background will look best.</p>
                 </aside>
             </div>
         </section>
@@ -281,6 +348,8 @@ hello@firecoast.com</p>
             const previewName = document.getElementById('previewBusinessName');
             const previewDetails = document.getElementById('previewBusinessDetails');
             const previewSwatch = document.getElementById('previewAccentSwatch');
+            const previewTableHead = document.getElementById('previewTableHead');
+            const previewTotalDue = document.getElementById('previewTotalDue');
             const logoPreview = document.getElementById('invoiceLogoPreview');
             let currentLogoDataUrl = '';
 
@@ -297,6 +366,7 @@ hello@firecoast.com</p>
             };
 
             const updateInvoicePreview = () => {
+                const color = sanitizeColor(invoiceAccentInput.value);
                 if (previewName) {
                     previewName.textContent = invoiceBusinessNameInput.value || 'FireCoast OMS';
                 }
@@ -304,14 +374,19 @@ hello@firecoast.com</p>
                     previewDetails.textContent = invoiceBusinessDetailsInput.value || '123 Harbor Way\nPortland, OR 97203\nhello@firecoast.com';
                 }
                 if (previewSwatch) {
-                    const color = sanitizeColor(invoiceAccentInput.value);
                     previewSwatch.style.backgroundColor = color;
+                }
+                if (previewTableHead) {
+                    previewTableHead.style.backgroundColor = color;
+                }
+                if (previewTotalDue) {
+                    previewTotalDue.style.color = color;
                 }
                 if (logoPreview) {
                     if (currentLogoDataUrl) {
                         logoPreview.innerHTML = `<img src="${currentLogoDataUrl}" alt="Invoice logo" class="w-full h-full object-contain" />`;
                     } else {
-                        logoPreview.innerHTML = '<span class="text-xs text-slate-400">Logo</span>';
+                        logoPreview.innerHTML = '<span class="text-[0.65rem] text-slate-400">Logo</span>';
                     }
                 }
             };
