@@ -122,40 +122,6 @@ const formatPhoneNumber = (value = '') => {
     return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)} ${digits.slice(6)}`;
 };
 
-const LINE_ITEM_TYPES = {
-    product: { label: 'Product / Goods', quantityLabel: 'Units', priceLabel: 'Unit Price' },
-    service: { label: 'Service / Hours', quantityLabel: 'Hours', priceLabel: 'Hourly Rate' },
-    fee: { label: 'Fee / Surcharge', quantityLabel: 'Qty', priceLabel: 'Fee Amount' },
-    shipping: { label: 'Shipping', quantityLabel: 'Packages', priceLabel: 'Shipping Cost' },
-    discount: { label: 'Discount', quantityLabel: 'Qty', priceLabel: 'Discount Amount' },
-    package: { label: 'Package / Bundle', quantityLabel: 'Qty', priceLabel: 'Bundle Price' },
-    other: { label: 'Other', quantityLabel: 'Qty', priceLabel: 'Unit Price' },
-};
-
-const LEGACY_TYPE_MAP = {
-    cross: 'product',
-    display: 'product',
-};
-
-const normalizeLineItemType = (rawType) => {
-    const normalized = (rawType || '').toString().trim().toLowerCase();
-    if (LINE_ITEM_TYPES[normalized]) {
-        return normalized;
-    }
-    if (LEGACY_TYPE_MAP[normalized]) {
-        return LEGACY_TYPE_MAP[normalized];
-    }
-    if (!normalized) {
-        return 'product';
-    }
-    return 'other';
-};
-
-const getLineItemTypeMeta = (type) => {
-    const key = normalizeLineItemType(type);
-    return LINE_ITEM_TYPES[key] || LINE_ITEM_TYPES.other;
-};
-
 const sanitizePlaceholderValue = (value) => {
     if (!value) return '';
     const trimmed = value.toString().trim();
@@ -588,22 +554,19 @@ const formatContactAddress = (address, city, state, zip) => {
             let tableStartY = Math.max(leftColumnY, rightColumnY, headerY + 20) + 5;
 
             const safeLineItems = Array.isArray(safeOrder.lineItems) ? safeOrder.lineItems : [];
-            const tableHead = ["Item", "Type", "Style", "Units", "Rate", "Total"];
+            const tableHead = ["Name", "Description", "Units", "Unit Price", "Total"];
             const tableBody = safeLineItems.map((item) => {
-                const itemLookup = item?.item ? safeItems[item.item] : null;
-                const itemName = (itemLookup && itemLookup.name) || item?.item || 'Item';
+                const catalogItem = item?.catalogItemId ? safeItems[item.catalogItemId] : null;
+                const displayName = (item?.name && item.name.trim()) || catalogItem?.name || 'Item';
+                const description = (item?.description && item.description.trim()) || catalogItem?.description || '';
                 const quantity = Number(item?.quantity) || 0;
                 const unitPriceCents = Number(item?.price) || 0;
-                const meta = getLineItemTypeMeta(item?.type || itemLookup?.type);
-                const quantityLabel = meta.quantityLabel ? ` ${meta.quantityLabel}` : '';
-                const priceLabel = meta.priceLabel && meta.priceLabel !== 'Unit Price' ? ` (${meta.priceLabel})` : '';
                 const lineTotalCents = quantity * unitPriceCents;
                 return [
-                    itemName,
-                    meta.label,
-                    item?.style || '',
-                    `${quantity}${quantityLabel}`,
-                    `$${(unitPriceCents / 100).toFixed(2)}${priceLabel}`,
+                    displayName,
+                    description || '—',
+                    `${quantity}`,
+                    `$${(unitPriceCents / 100).toFixed(2)}`,
                     `$${(lineTotalCents / 100).toFixed(2)}`
                 ];
             });
@@ -720,13 +683,21 @@ const formatContactAddress = (address, city, state, zip) => {
                         throw new Error('Order not found');
                     }
                     const data = await response.json();
-                    const normalizedOrder = { ...data };
-                    if (Array.isArray(data?.lineItems)) {
-                        normalizedOrder.lineItems = data.lineItems.map(item => ({
-                            ...item,
-                            type: normalizeLineItemType(item?.type),
-                        }));
-                    }
+                    const normalizedOrder = {
+                        ...data,
+                        lineItems: Array.isArray(data?.lineItems)
+                            ? data.lineItems.map((item, index) => ({
+                                id: item?.id ?? item?.line_item_id ?? index + 1,
+                                catalogItemId: item?.catalogItemId ?? item?.catalog_item_id ?? null,
+                                name: item?.name || '',
+                                description: item?.description || '',
+                                quantity: Number(item?.quantity) || 0,
+                                price: Number(item?.price) || 0,
+                                packageId: item?.packageId ?? item?.package_id ?? null,
+                                weightOz: item?.weightOz ?? item?.weight_oz ?? null,
+                            }))
+                            : [],
+                    };
                     setOrder(normalizedOrder);
                 } catch (error) {
                     console.error("Failed to fetch order:", error);
@@ -755,10 +726,12 @@ const formatContactAddress = (address, city, state, zip) => {
                             const nextIndex = {};
                             if (Array.isArray(itemsData)) {
                                 itemsData.forEach(item => {
-                                    if (item && item.item_code) {
-                                        nextIndex[item.item_code] = {
+                                    if (item && item.id) {
+                                        nextIndex[item.id] = {
                                             ...item,
-                                            type: normalizeLineItemType(item.type),
+                                            name: item.name || '',
+                                            description: item.description || '',
+                                            price: typeof item.price === 'number' ? item.price : Number(item.price) || 0,
                                         };
                                     }
                                 });
@@ -800,11 +773,17 @@ const formatContactAddress = (address, city, state, zip) => {
                 fetchOrder();
             };
 
+            const subtotalCents = (order.lineItems || []).reduce((acc, item) => {
+                const quantity = Number(item.quantity) || 0;
+                const price = Number(item.price) || 0;
+                return acc + (quantity * price);
+            }, 0);
+            const estimatedShippingDollars = parseFloat(order.estimatedShipping) || 0;
             const orderTotals = {
-                subtotal: order.lineItems.reduce((acc, item) => acc + (item.quantity * item.price), 0),
-                estimatedShipping: parseFloat(order.estimatedShipping) || 0,
+                subtotal: subtotalCents,
+                estimatedShipping: estimatedShippingDollars,
             };
-            orderTotals.total = orderTotals.subtotal + Math.round(orderTotals.estimatedShipping * 100);
+            orderTotals.total = subtotalCents + Math.round(estimatedShippingDollars * 100);
 
             const orderTitle = order.title || order.display_id || order.id;
             const primaryContact = order.contactInfo || {};
@@ -933,38 +912,28 @@ const formatContactAddress = (address, city, state, zip) => {
                                 <table className="w-full text-sm text-left text-slate-500">
                                     <thead className="text-xs text-slate-700 uppercase bg-slate-100">
                                         <tr>
-                                            <th scope="col" className="px-4 py-3">Item</th>
-                                            <th scope="col" className="px-4 py-3">Type</th>
-                                            <th scope="col" className="px-4 py-3">Style</th>
+                                            <th scope="col" className="px-4 py-3">Name</th>
+                                            <th scope="col" className="px-4 py-3">Description</th>
                                             <th scope="col" className="px-4 py-3 text-center">Units</th>
-                                            <th scope="col" className="px-4 py-3 text-right">Rate</th>
+                                            <th scope="col" className="px-4 py-3 text-right">Unit Price</th>
                                             <th scope="col" className="px-4 py-3 text-right">Total</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {order.lineItems.map((item, index) => {
-                                            const lookup = itemsIndex[item.item] || {};
-                                            const meta = getLineItemTypeMeta(item.type || lookup.type);
-                                            const quantityLabel = meta.quantityLabel ? ` ${meta.quantityLabel}` : '';
-                                            const priceLabel = meta.priceLabel && meta.priceLabel !== 'Unit Price' ? meta.priceLabel : '';
+                                            const lookup = item.catalogItemId ? itemsIndex[item.catalogItemId] || {} : {};
+                                            const displayName = (item.name && item.name.trim()) || lookup.name || 'Line Item';
+                                            const description = (item.description && item.description.trim()) || lookup.description || '';
+                                            const quantity = Number(item.quantity) || 0;
+                                            const unitPriceCents = Number(item.price) || 0;
+                                            const lineTotalCents = quantity * unitPriceCents;
                                             return (
                                                 <tr key={index} className="border-b align-middle">
-                                                    <td className="px-4 py-2">{lookup.name || item.item}</td>
-                                                    <td className="px-4 py-2">{meta.label}</td>
-                                                    <td className="px-4 py-2">{item.style || '—'}</td>
-                                                    <td className="px-4 py-2 text-center">
-                                                        <div className="flex flex-col items-center gap-1">
-                                                            <span>{item.quantity}</span>
-                                                            {quantityLabel && <span className="text-xs text-slate-400">{quantityLabel.trim()}</span>}
-                                                        </div>
-                                                    </td>
-                                                    <td className="px-4 py-2 text-right">
-                                                        <div className="flex flex-col items-end gap-1">
-                                                            <span>${(item.price / 100).toFixed(2)}</span>
-                                                            {priceLabel && <span className="text-xs text-slate-400">{priceLabel}</span>}
-                                                        </div>
-                                                    </td>
-                                                    <td className="px-4 py-2 text-right font-medium text-slate-800">${((item.quantity * item.price) / 100).toFixed(2)}</td>
+                                                    <td className="px-4 py-2">{displayName}</td>
+                                                    <td className="px-4 py-2 text-slate-600">{description || <span className="text-slate-400">No description</span>}</td>
+                                                    <td className="px-4 py-2 text-center">{quantity}</td>
+                                                    <td className="px-4 py-2 text-right">${(unitPriceCents / 100).toFixed(2)}</td>
+                                                    <td className="px-4 py-2 text-right font-medium text-slate-800">${(lineTotalCents / 100).toFixed(2)}</td>
                                                 </tr>
                                             );
                                         })}

@@ -28,17 +28,7 @@ from flask import Flask, jsonify, render_template, request, send_from_directory,
 from shipcostestimate import calculate_shipping_cost_for_order
 from database import get_db_connection, init_db
 
-LINE_ITEM_TYPE_WEIGHT_DEFAULTS = {
-    'product': 5,
-    'package': 80,
-    'service': 0,
-    'fee': 0,
-    'shipping': 0,
-    'discount': 0,
-    'other': 5,
-    'cross': 5,
-    'display': 80,
-}
+DEFAULT_ITEM_WEIGHT_OZ = 16.0
 
 # Load environment variables from .env file
 load_dotenv()
@@ -224,17 +214,24 @@ def serialize_order(cursor, order_row, user_timezone, include_logs=False):
     order_id = order_dict['order_id']
 
     cursor.execute(
-        "SELECT item_code, package_code, quantity, price_per_unit_cents, style_chosen, item_type FROM order_line_items WHERE order_id = ?",
+        """
+        SELECT line_item_id, catalog_item_id, name, description, quantity, price_per_unit_cents, package_id, weight_oz
+        FROM order_line_items
+        WHERE order_id = ?
+        ORDER BY line_item_id ASC
+        """,
         (order_id,)
     )
     order_dict['lineItems'] = [
         {
-            'item': li['item_code'],
-            'packageCode': li['package_code'],
-            'price': li['price_per_unit_cents'],
+            'id': li['line_item_id'],
+            'catalogItemId': li['catalog_item_id'],
+            'name': li['name'],
+            'description': li['description'] or '',
             'quantity': li['quantity'],
-            'style': li['style_chosen'],
-            'type': li['item_type']
+            'price': li['price_per_unit_cents'],
+            'packageId': li['package_id'],
+            'weightOz': li['weight_oz'],
         }
         for li in cursor.fetchall()
     ]
@@ -770,7 +767,7 @@ def search_orders():
               'customer': {'join': "LEFT JOIN contacts v ON o.contact_id = v.id", 'condition': "(v.company_name LIKE ? OR v.contact_name LIKE ?)", 'params': [f'%{value}%', f'%{value}%']},
               'status': {'condition': "o.status LIKE ?", 'params': [f'%{value}%']},
               'title': {'condition': "o.title LIKE ?", 'params': [f'%{value}%']},
-              'item': {'join': "LEFT JOIN order_line_items oli ON o.order_id = oli.order_id LEFT JOIN items i ON oli.item_code = i.item_code", 'condition': "(i.name LIKE ? OR oli.style_chosen LIKE ?)", 'params': [f'%{value}%', f'%{value}%']},
+              'item': {'join': "LEFT JOIN order_line_items oli ON o.order_id = oli.order_id", 'condition': "(oli.name LIKE ? OR oli.description LIKE ?)", 'params': [f'%{value}%', f'%{value}%']},
               'note': {'condition': "o.notes LIKE ?", 'params': [f'%{value}%']},
               'log': {'join': "LEFT JOIN order_logs ol ON o.order_id = ol.order_id", 'condition': "(ol.details LIKE ? OR ol.note LIKE ?)", 'params': [f'%{value}%', f'%{value}%']},
           }
@@ -785,8 +782,7 @@ def search_orders():
     join_order = [
       "LEFT JOIN contacts v ON o.contact_id = v.id",
       "LEFT JOIN order_logs ol ON o.order_id = ol.order_id",
-      "LEFT JOIN order_line_items oli ON o.order_id = oli.order_id",
-      "LEFT JOIN items i ON oli.item_code = i.item_code"
+      "LEFT JOIN order_line_items oli ON o.order_id = oli.order_id"
     ]
     
     if text_search_parts:
@@ -798,7 +794,7 @@ def search_orders():
                 term_param = f'%{term}%'
                 text_conditions = [
                     "o.order_id LIKE ?", "o.display_id LIKE ?", "o.title LIKE ?", "o.status LIKE ?", "o.notes LIKE ?",
-                    "v.company_name LIKE ?", "v.contact_name LIKE ?", "i.name LIKE ?", "oli.style_chosen LIKE ?",
+                    "v.company_name LIKE ?", "v.contact_name LIKE ?", "oli.name LIKE ?", "oli.description LIKE ?",
                     "ol.details LIKE ?", "ol.note LIKE ?"
                 ]
                 conditions.append(f"({' OR '.join(text_conditions)})")
@@ -1026,11 +1022,52 @@ def save_order():
         processed_order_id = current_order_id_for_db_ops 
         app.logger.info(f"DB-OP: processed_order_id is now set to: '{processed_order_id}' before line item processing.")
 
-        for li in new_order_payload.get('lineItems',[]):
-            cursor.execute("SELECT item_code FROM items WHERE item_code = ?", (li.get('item'),))
-            if not cursor.fetchone(): continue
-            cursor.execute("INSERT INTO order_line_items (order_id, item_code, package_code, quantity, price_per_unit_cents, style_chosen, item_type) VALUES (?,?,?,?,?,?,?)",
-                           (processed_order_id, li.get('item'), li.get('packageCode'), li.get('quantity'), li.get('price'), li.get('style'), li.get('type')))
+        for li in new_order_payload.get('lineItems', []):
+            name = (li.get('name') or '').strip()
+            if not name:
+                continue
+
+            try:
+                quantity = int(float(li.get('quantity', 0)))
+            except (TypeError, ValueError):
+                quantity = 0
+            if quantity <= 0:
+                continue
+
+            price_raw = li.get('price', 0)
+            try:
+                price_cents = int(round(float(price_raw)))
+            except (TypeError, ValueError):
+                price_cents = 0
+
+            description = (li.get('description') or '').strip()
+            catalog_item_id = li.get('catalogItemId') or li.get('catalog_item_id')
+            package_id = li.get('packageId') or li.get('package_id')
+            weight_value = li.get('weightOz') or li.get('weight_oz')
+            weight_oz = None
+            if weight_value not in (None, ''):
+                try:
+                    weight_oz = float(weight_value)
+                except (TypeError, ValueError):
+                    weight_oz = None
+
+            cursor.execute(
+                """
+                INSERT INTO order_line_items
+                (order_id, catalog_item_id, name, description, quantity, price_per_unit_cents, package_id, weight_oz)
+                VALUES (?,?,?,?,?,?,?,?)
+                """,
+                (
+                    processed_order_id,
+                    catalog_item_id,
+                    name,
+                    description,
+                    quantity,
+                    price_cents,
+                    package_id,
+                    weight_oz,
+                )
+            )
         for hist in new_order_payload.get('statusHistory',[]):
             cursor.execute("INSERT INTO order_status_history (order_id, status, status_date) VALUES (?,?,?)", (processed_order_id, hist.get('status'), hist.get('date')))
         if not any(h['status'] == new_order_payload.get('status') for h in new_order_payload.get('statusHistory',[])):
@@ -1132,110 +1169,306 @@ def save_order():
 def get_items():
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT item_code, name, type, price_cents, weight_oz FROM items ORDER BY name COLLATE NOCASE ASC")
+    cursor.execute(
+        """
+        SELECT id, name, description, price_cents, weight_oz
+        FROM items
+        ORDER BY name COLLATE NOCASE ASC
+        """
+    )
     items_from_db = cursor.fetchall()
     items_list = []
     for item_row in items_from_db:
         item_dict = dict(item_row)
-        cursor.execute("SELECT s.style_name FROM styles s JOIN item_styles ist ON s.id = ist.style_id WHERE ist.item_code = ? ORDER BY s.style_name COLLATE NOCASE ASC", (item_dict['item_code'],))
-        item_dict['styles'] = [sr['style_name'] for sr in cursor.fetchall()]
-        item_dict['id'] = item_dict['item_code']
-        item_dict['price'] = item_dict['price_cents']
-        items_list.append(item_dict)
+        items_list.append({
+            'id': item_dict['id'],
+            'name': item_dict['name'],
+            'description': item_dict.get('description') or '',
+            'price': item_dict['price_cents'],
+            'weight_oz': item_dict.get('weight_oz'),
+        })
     conn.close()
     return jsonify(items_list)
 
+
+def _parse_price_to_cents(price_value):
+    if price_value is None:
+        raise ValueError('Price is required')
+    if isinstance(price_value, (int, float)):
+        return int(round(float(price_value) * 100))
+    value_str = str(price_value).strip().replace('$', '')
+    if not value_str:
+        raise ValueError('Price is required')
+    return int(round(float(value_str) * 100))
+
+
+def _parse_weight(weight_value):
+    if weight_value is None or weight_value == '':
+        return None
+    if isinstance(weight_value, (int, float)):
+        return float(weight_value)
+    return float(str(weight_value).strip())
+
+
 @app.route('/api/items', methods=['POST'])
 def add_item():
-    payload = request.json
-    if not payload: return jsonify({"message":"Request must be JSON"}),400
-    item_code, name = payload.get('item_code'), payload.get('name')
-    if not item_code or not name: return jsonify({"message":"Missing item_code or name"}),400
-    conn=get_db_connection(); cursor=conn.cursor()
-    cursor.execute("SELECT item_code FROM items WHERE item_code = ?",(item_code,))
-    if cursor.fetchone(): conn.close(); return jsonify({"message":f"Item {item_code} exists."}),409
-    try: price_cents = int(round(float(payload.get('price',0.0))*100))
-    except ValueError: conn.close(); return jsonify({"message":"Invalid price."}),400
-    item_type, weight_oz = payload.get("type","other"), payload.get("weight_oz")
-    try:
-        cursor.execute("INSERT INTO items (item_code,name,type,price_cents,weight_oz) VALUES (?,?,?,?,?)",(item_code,name,item_type,price_cents,weight_oz))
-        for style_name in payload.get("styles",[]):
-            if not style_name: continue
-            cursor.execute("INSERT OR IGNORE INTO styles (style_name) VALUES (?)",(style_name,))
-            cursor.execute("SELECT id FROM styles WHERE style_name=?",(style_name,))
-            style_row = cursor.fetchone()
-            if style_row: cursor.execute("INSERT OR IGNORE INTO item_styles (item_code,style_id) VALUES (?,?)",(item_code,style_row['id']))
-        conn.commit()
-        cursor.execute("SELECT item_code,name,type,price_cents,weight_oz FROM items WHERE item_code=?",(item_code,))
-        created_item=dict(cursor.fetchone())
-        cursor.execute("SELECT s.style_name FROM styles s JOIN item_styles ist ON s.id=ist.style_id WHERE ist.item_code=? ORDER BY s.style_name",(item_code,))
-        created_item['styles']=[sr['style_name'] for sr in cursor.fetchall()]; created_item['id']=created_item['item_code']; created_item['price']=created_item['price_cents']
-        return jsonify({"message":"Item added.","item":created_item}),201
-    except sqlite3.Error as e: conn.rollback(); app.logger.error(f"DB err add item {item_code}:{e}"); return jsonify({"message":"DB error."}),500
-    finally: conn.close()
+    payload = request.json or {}
+    name = (payload.get('name') or '').strip()
+    description = (payload.get('description') or '').strip()
+    if not name:
+        return jsonify({"message": "Item name is required."}), 400
 
-@app.route('/api/items/<string:item_code_url>', methods=['PUT'])
-def update_item(item_code_url):
-    payload=request.json
-    if not payload: return jsonify({"message":"Request must be JSON"}),400
-    conn=get_db_connection(); cursor=conn.cursor()
-    cursor.execute("SELECT item_code FROM items WHERE item_code=?",(item_code_url,))
-    if not cursor.fetchone(): conn.close(); return jsonify({"message":"Item not found."}),404
-    new_code=payload.get('item_code',item_code_url).strip(); name,item_type=payload.get("name"),payload.get("type")
-    price_str,weight_oz,styles_payload=payload.get('price'),payload.get("weight_oz"),payload.get("styles",[])
-    if new_code!=item_code_url:
-        cursor.execute("SELECT item_code FROM items WHERE item_code=?",(new_code,))
-        if cursor.fetchone(): conn.close(); return jsonify({"message":f"Item code {new_code} exists."}),409
-    price_cents=None
-    if price_str is not None:
-        try: price_cents=int(round(float(price_str)*100))
-        except ValueError: conn.close(); return jsonify({"message":"Invalid price."}),400
     try:
-        updates,vals=[],[]
-        if name is not None: updates.append("name=?"); vals.append(name)
-        if item_type is not None: updates.append("type=?"); vals.append(item_type)
-        if price_cents is not None: updates.append("price_cents=?"); vals.append(price_cents)
-        if 'weight_oz' in payload: updates.append("weight_oz=?"); vals.append(weight_oz if weight_oz!="" else None)
-        
-        current_code_for_styles = item_code_url
-        if new_code != item_code_url:
-            orig_item = dict(cursor.execute("SELECT * FROM items WHERE item_code=?",(item_code_url,)).fetchone())
-            cursor.execute("INSERT INTO items (item_code,name,type,price_cents,weight_oz) VALUES (?,?,?,?,?)",
-                           (new_code, name or orig_item['name'], item_type or orig_item['type'], price_cents if price_cents is not None else orig_item['price_cents'], weight_oz if 'weight_oz' in payload else orig_item['weight_oz']))
-            for sr in cursor.execute("SELECT style_id FROM item_styles WHERE item_code=?",(item_code_url,)).fetchall():
-                cursor.execute("INSERT OR IGNORE INTO item_styles (item_code,style_id) VALUES (?,?)",(new_code,sr['style_id']))
-            cursor.execute("DELETE FROM items WHERE item_code=?",(item_code_url,))
-            current_code_for_styles = new_code
-        elif updates:
-            cursor.execute(f"UPDATE items SET {','.join(updates)},updated_at=CURRENT_TIMESTAMP WHERE item_code=?",tuple(vals+[item_code_url]))
+        price_cents = _parse_price_to_cents(payload.get('price'))
+    except (ValueError, TypeError):
+        return jsonify({"message": "Invalid price."}), 400
 
-        cursor.execute("DELETE FROM item_styles WHERE item_code=?",(current_code_for_styles,))
-        if isinstance(styles_payload,list):
-            for sn in styles_payload:
-                if not sn: continue
-                cursor.execute("INSERT OR IGNORE INTO styles (style_name) VALUES (?)",(sn,))
-                sr=cursor.execute("SELECT id FROM styles WHERE style_name=?",(sn,)).fetchone()
-                if sr:
-                    cursor.execute("INSERT OR IGNORE INTO item_styles (item_code,style_id) VALUES (?,?)",(current_code_for_styles,sr['id']))
-        conn.commit()
-        cursor.execute("SELECT item_code,name,type,price_cents,weight_oz FROM items WHERE item_code=?",(current_code_for_styles,))
-        updated_item=dict(cursor.fetchone())
-        cursor.execute("SELECT s.style_name FROM styles s JOIN item_styles ist ON s.id=ist.style_id WHERE ist.item_code=? ORDER BY s.style_name",(current_code_for_styles,))
-        updated_item['styles']=[sr['style_name'] for sr in cursor.fetchall()]; updated_item['id']=updated_item['item_code']; updated_item['price']=updated_item['price_cents']
-        return jsonify({"message":"Item updated.","item":updated_item}),200
-    except sqlite3.Error as e: conn.rollback(); app.logger.error(f"DB err update item {item_code_url}:{e}"); return jsonify({"message":"DB error."}),500
-    finally: conn.close()
-
-@app.route('/api/items/<string:item_code_url>', methods=['DELETE'])
-def delete_item(item_code_url):
-    conn=get_db_connection(); cursor=conn.cursor()
     try:
-        cursor.execute("DELETE FROM items WHERE item_code=?",(item_code_url,))
+        weight_oz = _parse_weight(payload.get('weight_oz'))
+    except (ValueError, TypeError):
+        return jsonify({"message": "Invalid weight."}), 400
+
+    item_id = str(uuid.uuid4())
+
+    conn = get_db_connection(); cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "INSERT INTO items (id, name, description, price_cents, weight_oz) VALUES (?,?,?,?,?)",
+            (item_id, name, description, price_cents, weight_oz)
+        )
         conn.commit()
-        if cursor.rowcount>0: return jsonify({"message":"Item deleted."}),200
-        else: return jsonify({"message":"Item not found."}),404
-    except sqlite3.Error as e: conn.rollback(); app.logger.error(f"DB err delete item {item_code_url}:{e}"); return jsonify({"message":"DB error."}),500
-    finally: conn.close()
+        created_item = {
+            'id': item_id,
+            'name': name,
+            'description': description,
+            'price': price_cents,
+            'weight_oz': weight_oz,
+        }
+        return jsonify({"message": "Item added.", "item": created_item}), 201
+    except sqlite3.Error as e:
+        conn.rollback()
+        app.logger.error(f"DB err add item {item_id}:{e}")
+        return jsonify({"message": "DB error."}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/items/<string:item_id>', methods=['PUT'])
+def update_item(item_id):
+    payload = request.json or {}
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute("SELECT id FROM items WHERE id=?", (item_id,))
+    if not cursor.fetchone():
+        conn.close()
+        return jsonify({"message": "Item not found."}), 404
+
+    updates = []
+    values = []
+
+    if 'name' in payload:
+        name = (payload.get('name') or '').strip()
+        if not name:
+            conn.close()
+            return jsonify({"message": "Item name cannot be empty."}), 400
+        updates.append("name=?")
+        values.append(name)
+
+    if 'description' in payload:
+        description = (payload.get('description') or '').strip()
+        updates.append("description=?")
+        values.append(description)
+
+    if 'price' in payload:
+        try:
+            price_cents = _parse_price_to_cents(payload.get('price'))
+        except (ValueError, TypeError):
+            conn.close()
+            return jsonify({"message": "Invalid price."}), 400
+        updates.append("price_cents=?")
+        values.append(price_cents)
+
+    if 'weight_oz' in payload:
+        try:
+            weight_oz = _parse_weight(payload.get('weight_oz'))
+        except (ValueError, TypeError):
+            conn.close()
+            return jsonify({"message": "Invalid weight."}), 400
+        updates.append("weight_oz=?")
+        values.append(weight_oz)
+
+    try:
+        if updates:
+            set_clause = ",".join(updates)
+            cursor.execute(
+                f"UPDATE items SET {set_clause}, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                tuple(values + [item_id])
+            )
+            conn.commit()
+
+        cursor.execute("SELECT id, name, description, price_cents, weight_oz FROM items WHERE id=?", (item_id,))
+        row = cursor.fetchone()
+        if not row:
+            return jsonify({"message": "Item not found."}), 404
+        updated_item = {
+            'id': row['id'],
+            'name': row['name'],
+            'description': row['description'] or '',
+            'price': row['price_cents'],
+            'weight_oz': row['weight_oz'],
+        }
+        return jsonify({"message": "Item updated.", "item": updated_item}), 200
+    except sqlite3.Error as e:
+        conn.rollback()
+        app.logger.error(f"DB err update item {item_id}:{e}")
+        return jsonify({"message": "DB error."}), 500
+    finally:
+        conn.close()
+
+
+def resolve_item_identifier(cursor, identifier):
+    if identifier is None:
+        return None
+    trimmed = str(identifier).strip()
+    if not trimmed:
+        return None
+
+    cursor.execute("SELECT id FROM items WHERE id = ?", (trimmed,))
+    row = cursor.fetchone()
+    if row:
+        return row['id']
+
+    cursor.execute("SELECT id FROM items WHERE LOWER(name) = LOWER(?)", (trimmed,))
+    row = cursor.fetchone()
+    if row:
+        return row['id']
+
+    return None
+
+
+def parse_package_contents(cursor, payload):
+    """Normalize package contents from a payload.
+
+    Accepts either a list of objects under the ``contents`` key or a newline-delimited
+    string under ``contents_raw_text``/``contentsRawText``. Each entry is resolved
+    against the catalog to ensure we persist canonical item identifiers.
+    """
+
+    parsed_entries = []
+    contents_list = payload.get('contents')
+    if isinstance(contents_list, list):
+        for entry in contents_list:
+            if not isinstance(entry, dict):
+                raise ValueError('Each package content must be an object with item and quantity fields.')
+            identifier = (
+                entry.get('itemId')
+                or entry.get('item_id')
+                or entry.get('catalogItemId')
+                or entry.get('id')
+                or entry.get('item')
+                or entry.get('identifier')
+                or entry.get('name')
+            )
+            if not identifier:
+                raise ValueError('Package contents require an item identifier.')
+            try:
+                quantity = int(entry.get('quantity', 0))
+            except (TypeError, ValueError):
+                raise ValueError(f"Invalid quantity for item '{identifier}'.")
+            if quantity <= 0:
+                raise ValueError(f"Quantity for item '{identifier}' must be greater than zero.")
+            resolved_item_id = resolve_item_identifier(cursor, identifier)
+            if not resolved_item_id:
+                raise ValueError(f"Item '{identifier}' not found in catalog.")
+            parsed_entries.append({'itemId': resolved_item_id, 'quantity': quantity})
+        return parsed_entries
+
+    raw_text = (
+        payload.get('contents_raw_text')
+        if payload.get('contents_raw_text') is not None
+        else payload.get('contentsRawText')
+    )
+    if not raw_text:
+        return []
+
+    for line in str(raw_text).strip().split('\n'):
+        if not line.strip():
+            continue
+        parts = line.split(':')
+        if len(parts) != 2:
+            raise ValueError(f"Malformed line: {line}.")
+        identifier, qty_str = parts[0].strip(), parts[1].strip()
+        if not identifier:
+            raise ValueError("Package item identifier cannot be blank.")
+        try:
+            quantity = int(qty_str)
+        except ValueError:
+            raise ValueError(f"Invalid quantity for {identifier}.")
+        if quantity <= 0:
+            raise ValueError(f"Quantity for {identifier} must be greater than zero.")
+        resolved_item_id = resolve_item_identifier(cursor, identifier)
+        if not resolved_item_id:
+            raise ValueError(f"Item '{identifier}' not found in catalog.")
+        parsed_entries.append({'itemId': resolved_item_id, 'quantity': quantity})
+
+    return parsed_entries
+
+
+def serialize_package(cursor, package_id):
+    cursor.execute(
+        "SELECT package_id, name, created_at, updated_at FROM packages WHERE package_id=?",
+        (package_id,)
+    )
+    pkg_row = cursor.fetchone()
+    if not pkg_row:
+        return None
+
+    cursor.execute(
+        """
+        SELECT pi.item_id, pi.quantity, i.name, i.description, i.price_cents
+        FROM package_items pi
+        LEFT JOIN items i ON i.id = pi.item_id
+        WHERE pi.package_id = ?
+        ORDER BY COALESCE(i.name, pi.item_id) COLLATE NOCASE ASC
+        """,
+        (package_id,)
+    )
+    contents = [
+        {
+            'itemId': row['item_id'],
+            'quantity': row['quantity'],
+            'name': row['name'],
+            'description': row['description'],
+            'price': row['price_cents'],
+        }
+        for row in cursor.fetchall()
+    ]
+
+    return {
+        'name': pkg_row['name'],
+        'packageId': pkg_row['package_id'],
+        'id_val': pkg_row['package_id'],
+        'createdAt': pkg_row['created_at'],
+        'updatedAt': pkg_row['updated_at'],
+        'contents': contents,
+    }
+
+
+@app.route('/api/items/<string:item_id>', methods=['DELETE'])
+def delete_item(item_id):
+    conn = get_db_connection(); cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM items WHERE id=?", (item_id,))
+        conn.commit()
+        if cursor.rowcount > 0:
+            return jsonify({"message": "Item deleted."}), 200
+        else:
+            return jsonify({"message": "Item not found."}), 404
+    except sqlite3.Error as e:
+        conn.rollback()
+        app.logger.error(f"DB err delete item {item_id}:{e}")
+        return jsonify({"message": "DB error."}), 500
+    finally:
+        conn.close()
 
 @app.route('/api/contacts', methods=['GET'])
 def get_contacts():
@@ -1384,24 +1617,23 @@ def calculate_shipping_estimate_endpoint():
 
     conn = get_db_connection(); cursor = conn.cursor()
 
-    def resolve_item_weight(item_code, fallback_type):
-        weight = None
-        if item_code:
-            cursor.execute("SELECT weight_oz, type FROM items WHERE item_code=?", (item_code,))
+    def resolve_item_weight(catalog_item_id, manual_weight):
+        if manual_weight is not None:
+            try:
+                return max(float(manual_weight), 0.0)
+            except (TypeError, ValueError):
+                pass
+
+        if catalog_item_id:
+            cursor.execute("SELECT weight_oz FROM items WHERE id=?", (catalog_item_id,))
             row = cursor.fetchone()
-            if row:
-                db_weight = row['weight_oz']
-                if db_weight is not None:
-                    try:
-                        return max(float(db_weight), 0.0)
-                    except (TypeError, ValueError):
-                        pass
-                fallback_type = (row['type'] or fallback_type or '').lower()
-                weight = LINE_ITEM_TYPE_WEIGHT_DEFAULTS.get(fallback_type, LINE_ITEM_TYPE_WEIGHT_DEFAULTS['product'])
-        if weight is None:
-            normalized = (fallback_type or '').lower()
-            weight = LINE_ITEM_TYPE_WEIGHT_DEFAULTS.get(normalized, LINE_ITEM_TYPE_WEIGHT_DEFAULTS['product'])
-        return weight
+            if row and row['weight_oz'] is not None:
+                try:
+                    return max(float(row['weight_oz']), 0.0)
+                except (TypeError, ValueError):
+                    pass
+
+        return DEFAULT_ITEM_WEIGHT_OZ
 
     try:
         for item in line_items:
@@ -1413,11 +1645,11 @@ def calculate_shipping_estimate_endpoint():
             if qty <= 0:
                 continue
 
-            package_code = item.get('packageCode') or item.get('package_code')
+            package_code = item.get('packageId') or item.get('package_id')
             if package_code:
-                cursor.execute("SELECT item_code, quantity FROM package_items WHERE package_id=?", (package_code,))
+                cursor.execute("SELECT item_id, quantity FROM package_items WHERE package_id=?", (package_code,))
                 for pkg_row in cursor.fetchall():
-                    pkg_item_code = pkg_row['item_code']
+                    pkg_item_id = pkg_row['item_id']
                     pkg_qty_raw = pkg_row['quantity']
                     try:
                         pkg_qty = float(pkg_qty_raw)
@@ -1425,13 +1657,13 @@ def calculate_shipping_estimate_endpoint():
                         pkg_qty = 0
                     if pkg_qty <= 0:
                         continue
-                    weight_per_unit = resolve_item_weight(pkg_item_code, 'product')
+                    weight_per_unit = resolve_item_weight(pkg_item_id, None)
                     total_weight_oz += qty * pkg_qty * weight_per_unit
                 continue
 
-            item_code = item.get('item')
-            fallback_type = item.get('type')
-            weight_per_unit = resolve_item_weight(item_code, fallback_type)
+            catalog_item_id = item.get('catalogItemId') or item.get('catalog_item_id') or item.get('item')
+            weight_override = item.get('weightOz') or item.get('weight_oz')
+            weight_per_unit = resolve_item_weight(catalog_item_id, weight_override)
             total_weight_oz += qty * weight_per_unit
     finally:
         conn.close()
@@ -1443,118 +1675,210 @@ def calculate_shipping_estimate_endpoint():
 
 @app.route('/api/packages', methods=['GET'])
 def get_packages():
-    conn=get_db_connection(); cursor=conn.cursor()
-    cursor.execute("SELECT package_id,name,type FROM packages ORDER BY name COLLATE NOCASE ASC")
-    pkgs_db=cursor.fetchall(); transformed_pkgs={}
-    for pkg_row in pkgs_db:
-        pkg_dict=dict(pkg_row)
-        cursor.execute("SELECT item_code,quantity FROM package_items WHERE package_id=?",(pkg_dict['package_id'],))
-        contents_db=cursor.fetchall()
-        transformed_pkgs[str(pkg_dict['package_id'])]={'name':pkg_dict['name'],'id_val':pkg_dict['package_id'],'type':(pkg_dict['type'] or 'package').lower(),'contents':[{'itemCode':str(cr['item_code']),'quantity':cr['quantity']} for cr in contents_db]}
-    conn.close(); return jsonify(transformed_pkgs)
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute("SELECT package_id, name, created_at, updated_at FROM packages ORDER BY name COLLATE NOCASE ASC")
+    packages = {}
+    for pkg_row in cursor.fetchall():
+        pkg_dict = dict(pkg_row)
+        cursor.execute(
+            """
+            SELECT pi.item_id, pi.quantity, i.name, i.description, i.price_cents
+            FROM package_items pi
+            LEFT JOIN items i ON i.id = pi.item_id
+            WHERE pi.package_id = ?
+            ORDER BY COALESCE(i.name, pi.item_id) COLLATE NOCASE ASC
+            """,
+            (pkg_dict['package_id'],)
+        )
+        contents = []
+        for content_row in cursor.fetchall():
+            contents.append({
+                'itemId': content_row['item_id'],
+                'quantity': content_row['quantity'],
+                'name': content_row['name'],
+                'description': content_row['description'],
+                'price': content_row['price_cents'],
+            })
+        packages[str(pkg_dict['package_id'])] = {
+            'name': pkg_dict['name'],
+            'packageId': pkg_dict['package_id'],
+            'id_val': pkg_dict['package_id'],
+            'contents': contents,
+            'createdAt': pkg_dict.get('created_at'),
+            'updatedAt': pkg_dict.get('updated_at'),
+        }
+    conn.close()
+    return jsonify(packages)
 
 @app.route('/api/packages', methods=['POST'])
 def add_package():
-    payload=request.json
-    if not payload: return jsonify({"message":"Request must be JSON"}),400
-    pkg_name,pkg_id_val=payload.get('name'),payload.get('id_val')
-    pkg_type,contents_raw=payload.get('type','package'),payload.get('contents_raw_text',"")
-    if not pkg_name or pkg_id_val is None: return jsonify({"message":"Name and ID required."}),400
-    try: pkg_id=int(pkg_id_val)
-    except ValueError: return jsonify({"message":"ID must be number."}),400
-    conn=get_db_connection(); cursor=conn.cursor()
+    payload = request.json or {}
+    name = (payload.get('name') or '').strip()
+    if not name:
+        return jsonify({"message": "Package name is required."}), 400
+
+    raw_id = payload.get('packageId', payload.get('id_val', payload.get('id')))
+    if raw_id is None:
+        return jsonify({"message": "Package ID is required."}), 400
     try:
-        cursor.execute("SELECT package_id FROM packages WHERE name=? OR package_id=?",(pkg_name,pkg_id))
-        if cursor.fetchone(): conn.close(); return jsonify({"message":f"Package {pkg_name} or ID {pkg_id} exists."}),409
-        cursor.execute("INSERT INTO packages (package_id,name,type) VALUES (?,?,?)",(pkg_id,pkg_name,pkg_type))
-        parsed_contents_resp=[]
-        if contents_raw:
-            for line in contents_raw.strip().split('\n'):
-                parts=line.split(':')
-                if len(parts)==2:
-                    item_code,qty_str=parts[0].strip(),parts[1].strip()
-                    try:
-                        qty=int(qty_str)
-                        if qty>0:
-                            cursor.execute("SELECT item_code FROM items WHERE item_code=?",(item_code,))
-                            if cursor.fetchone():
-                                cursor.execute("INSERT INTO package_items (package_id,item_code,quantity) VALUES (?,?,?)",(pkg_id,item_code,qty))
-                                parsed_contents_resp.append({'itemCode':item_code,'quantity':qty})
-                            else: app.logger.warning(f"Item {item_code} not found for pkg {pkg_id}.")
-                    except ValueError: conn.rollback();conn.close();return jsonify({"message":f"Invalid qty for {item_code}."}),400
-                elif line.strip(): conn.rollback();conn.close();return jsonify({"message":f"Malformed line: {line}."}),400
+        pkg_id = int(raw_id)
+    except (TypeError, ValueError):
+        return jsonify({"message": "Package ID must be a number."}), 400
+
+    conn = get_db_connection(); cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT package_id FROM packages WHERE name=? OR package_id=?", (name, pkg_id))
+        existing = cursor.fetchone()
+        if existing:
+            return jsonify({"message": f"Package '{name}' or ID {pkg_id} already exists."}), 409
+
+        cursor.execute("INSERT INTO packages (package_id, name) VALUES (?,?)", (pkg_id, name))
+
+        try:
+            parsed_contents = parse_package_contents(cursor, payload)
+        except ValueError as exc:
+            conn.rollback()
+            return jsonify({"message": str(exc)}), 400
+
+        aggregated = {}
+        for entry in parsed_contents:
+            item_id = entry['itemId']
+            quantity = entry['quantity']
+            if item_id in aggregated:
+                aggregated[item_id]['quantity'] += quantity
+            else:
+                aggregated[item_id] = {'itemId': item_id, 'quantity': quantity}
+
+        for entry in aggregated.values():
+            cursor.execute(
+                "INSERT OR REPLACE INTO package_items (package_id, item_id, quantity) VALUES (?,?,?)",
+                (pkg_id, entry['itemId'], entry['quantity'])
+            )
+
         conn.commit()
-        return_data={str(pkg_id):{'name':pkg_name,'id_val':pkg_id,'type':pkg_type.lower(),'contents':parsed_contents_resp}}
-        return jsonify({"message":"Package added.","package":return_data}),201
-    except sqlite3.Error as e: conn.rollback();conn.close();app.logger.error(f"DB err add pkg:{e}"); return jsonify({"message":"DB error."}),500
-    finally: conn.close()
+        serialized = serialize_package(cursor, pkg_id) or {
+            'name': name,
+            'packageId': pkg_id,
+            'id_val': pkg_id,
+            'createdAt': None,
+            'updatedAt': None,
+            'contents': [],
+        }
+        return jsonify({"message": "Package added.", "package": {str(pkg_id): serialized}}), 201
+    except sqlite3.Error as e:
+        conn.rollback(); app.logger.error(f"DB err add pkg:{e}")
+        return jsonify({"message": "DB error."}), 500
+    finally:
+        conn.close()
 
 @app.route('/api/packages/<string:package_id_str>', methods=['PUT'])
 def update_package(package_id_str):
-    payload=request.json
-    if not payload: return jsonify({"message":"Request must be JSON"}),400
-    try: target_pkg_id=int(package_id_str)
-    except ValueError: return jsonify({"message":"Invalid pkg ID in URL."}),400
-    conn=get_db_connection(); cursor=conn.cursor()
+    payload = request.json or {}
     try:
-        cursor.execute("SELECT name,type FROM packages WHERE package_id=?",(target_pkg_id,))
-        curr_pkg=cursor.fetchone()
-        if not curr_pkg: conn.close(); return jsonify({"message":f"Pkg ID {target_pkg_id} not found."}),404
-        new_name,new_id_val_str=payload.get('name',curr_pkg['name']),payload.get('id_val')
-        new_type,contents_raw=payload.get('type',curr_pkg['type']),payload.get('contents_raw_text')
-        new_id=target_pkg_id
-        if new_id_val_str is not None:
-            try: new_id=int(new_id_val_str)
-            except ValueError: conn.close(); return jsonify({"message":"New Pkg ID must be number."}),400
-        if new_name!=curr_pkg['name']:
-            cursor.execute("SELECT package_id FROM packages WHERE name=? AND package_id!=?",(new_name,target_pkg_id))
-            if cursor.fetchone(): conn.close(); return jsonify({"message":f"Pkg name '{new_name}' exists."}),409
-        if new_id!=target_pkg_id:
-            cursor.execute("SELECT package_id FROM packages WHERE package_id=?",(new_id,))
-            if cursor.fetchone(): conn.close(); return jsonify({"message":f"Pkg ID '{new_id}' exists."}),409
-            cursor.execute("UPDATE packages SET package_id=?,name=?,type=?,updated_at=CURRENT_TIMESTAMP WHERE package_id=?",(new_id,new_name,new_type,target_pkg_id))
+        target_pkg_id = int(package_id_str)
+    except ValueError:
+        return jsonify({"message": "Invalid pkg ID in URL."}), 400
+
+    conn = get_db_connection(); cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT package_id, name FROM packages WHERE package_id=?", (target_pkg_id,))
+        curr_pkg = cursor.fetchone()
+        if not curr_pkg:
+            return jsonify({"message": f"Package ID {target_pkg_id} not found."}), 404
+
+        new_name = (payload.get('name', curr_pkg['name']) or '').strip()
+        if not new_name:
+            return jsonify({"message": "Package name cannot be empty."}), 400
+
+        new_id_raw = payload.get('packageId', payload.get('id_val', payload.get('id')))
+        new_id = target_pkg_id
+        if new_id_raw is not None:
+            try:
+                new_id = int(new_id_raw)
+            except (TypeError, ValueError):
+                return jsonify({"message": "New package ID must be a number."}), 400
+
+        if new_name != curr_pkg['name']:
+            cursor.execute("SELECT package_id FROM packages WHERE name=? AND package_id!=?", (new_name, target_pkg_id))
+            if cursor.fetchone():
+                return jsonify({"message": f"Package name '{new_name}' already exists."}), 409
+
+        if new_id != target_pkg_id:
+            cursor.execute("SELECT package_id FROM packages WHERE package_id=?", (new_id,))
+            if cursor.fetchone():
+                return jsonify({"message": f"Package ID '{new_id}' already exists."}), 409
+            cursor.execute(
+                "UPDATE packages SET package_id=?, name=?, updated_at=CURRENT_TIMESTAMP WHERE package_id=?",
+                (new_id, new_name, target_pkg_id)
+            )
+            cursor.execute("UPDATE package_items SET package_id=? WHERE package_id=?", (new_id, target_pkg_id))
+            cursor.execute("UPDATE order_line_items SET package_id=? WHERE package_id=?", (new_id, target_pkg_id))
         else:
-            cursor.execute("UPDATE packages SET name=?,type=?,updated_at=CURRENT_TIMESTAMP WHERE package_id=?",(new_name,new_type,target_pkg_id))
-        
-        final_id_for_contents=new_id; parsed_contents_resp=[]
-        if contents_raw is not None:
-            cursor.execute("DELETE FROM package_items WHERE package_id=?",(final_id_for_contents,))
-            if contents_raw:
-                for line in contents_raw.strip().split('\n'):
-                    parts=line.split(':')
-                    if len(parts)==2:
-                        item_code,qty_str=parts[0].strip(),parts[1].strip()
-                        try:
-                            qty=int(qty_str)
-                            if qty>0:
-                                cursor.execute("SELECT item_code FROM items WHERE item_code=?",(item_code,))
-                                if cursor.fetchone():
-                                    cursor.execute("INSERT INTO package_items (package_id,item_code,quantity) VALUES (?,?,?)",(final_id_for_contents,item_code,qty))
-                                    parsed_contents_resp.append({'itemCode':item_code,'quantity':qty})
-                                else: app.logger.warning(f"Item {item_code} not found for pkg {final_id_for_contents}.")
-                        except ValueError: conn.rollback();conn.close();return jsonify({"message":f"Invalid qty for {item_code}."}),400
-                    elif line.strip(): conn.rollback();conn.close();return jsonify({"message":f"Malformed line: {line}."}),400
-        else:
-            cursor.execute("SELECT item_code,quantity FROM package_items WHERE package_id=?",(final_id_for_contents,))
-            parsed_contents_resp=[{'itemCode':str(r['item_code']),'quantity':r['quantity']} for r in cursor.fetchall()]
+            cursor.execute(
+                "UPDATE packages SET name=?, updated_at=CURRENT_TIMESTAMP WHERE package_id=?",
+                (new_name, target_pkg_id)
+            )
+
+        final_id_for_contents = new_id
+
+        if any(key in payload for key in ('contents', 'contents_raw_text', 'contentsRawText')):
+            try:
+                parsed_contents = parse_package_contents(cursor, payload)
+            except ValueError as exc:
+                conn.rollback()
+                return jsonify({"message": str(exc)}), 400
+
+            cursor.execute("DELETE FROM package_items WHERE package_id=?", (final_id_for_contents,))
+            aggregated = {}
+            for entry in parsed_contents:
+                item_id = entry['itemId']
+                quantity = entry['quantity']
+                if item_id in aggregated:
+                    aggregated[item_id]['quantity'] += quantity
+                else:
+                    aggregated[item_id] = {'itemId': item_id, 'quantity': quantity}
+
+            for entry in aggregated.values():
+                cursor.execute(
+                    "INSERT OR REPLACE INTO package_items (package_id, item_id, quantity) VALUES (?,?,?)",
+                    (final_id_for_contents, entry['itemId'], entry['quantity'])
+                )
+
         conn.commit()
-        return_data={str(final_id_for_contents):{'name':new_name,'id_val':final_id_for_contents,'type':new_type.lower(),'contents':parsed_contents_resp}}
-        return jsonify({"message":"Package updated.","package":return_data}),200
-    except sqlite3.Error as e: conn.rollback();conn.close();app.logger.error(f"DB err update pkg {package_id_str}:{e}"); return jsonify({"message":"DB error."}),500
-    finally: conn.close()
+        serialized = serialize_package(cursor, final_id_for_contents) or {
+            'name': new_name,
+            'packageId': final_id_for_contents,
+            'id_val': final_id_for_contents,
+            'createdAt': None,
+            'updatedAt': None,
+            'contents': [],
+        }
+        return jsonify({"message": "Package updated.", "package": {str(final_id_for_contents): serialized}}), 200
+    except sqlite3.Error as e:
+        conn.rollback(); app.logger.error(f"DB err update pkg {package_id_str}:{e}")
+        return jsonify({"message": "DB error."}), 500
+    finally:
+        conn.close()
 
 @app.route('/api/packages/<string:package_id_str>', methods=['DELETE'])
 def delete_package(package_id_str):
-    try: target_pkg_id=int(package_id_str)
-    except ValueError: return jsonify({"message":"Invalid pkg ID."}),400
-    conn=get_db_connection(); cursor=conn.cursor()
     try:
-        cursor.execute("DELETE FROM packages WHERE package_id=?",(target_pkg_id,))
+        target_pkg_id = int(package_id_str)
+    except ValueError:
+        return jsonify({"message": "Invalid pkg ID."}), 400
+    conn = get_db_connection(); cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM packages WHERE package_id=?", (target_pkg_id,))
         conn.commit()
-        if cursor.rowcount>0: return jsonify({"message":"Package deleted."}),200
-        else: return jsonify({"message":"Package not found."}),404
-    except sqlite3.Error as e: conn.rollback();app.logger.error(f"DB err delete pkg {target_pkg_id}:{e}"); return jsonify({"message":"DB error."}),500
-    finally: conn.close()
+        if cursor.rowcount > 0:
+            return jsonify({"message": "Package deleted."}), 200
+        else:
+            return jsonify({"message": "Package not found."}), 404
+    except sqlite3.Error as e:
+        conn.rollback(); app.logger.error(f"DB err delete pkg {target_pkg_id}:{e}")
+        return jsonify({"message": "DB error."}), 500
+    finally:
+        conn.close()
 
 @app.route('/api/upload-attachment', methods=['POST'])
 def upload_attachment():
@@ -1695,66 +2019,81 @@ def import_items_csv():
             csv_file = file.stream.read().decode("utf-8")
             csv_reader = csv.reader(csv_file.splitlines())
             header = [h.lower().strip() for h in next(csv_reader)]
-            
-            header_map = {
-                'item code': 'item_code',
-                'name': 'name',
-                'type': 'type',
-                'price': 'price_cents',
-                'weight oz': 'weight_oz'
-            }
-            
-            column_indices = {db_col: header.index(csv_col) for csv_col, db_col in header_map.items() if csv_col in header}
 
-            if not column_indices or 'item_code' not in column_indices or 'name' not in column_indices:
-                flash("CSV must have at least 'Item Code' and 'Name' columns.", "danger")
+            column_indices = {}
+            for idx, col in enumerate(header):
+                if col in ('item id', 'item code', 'id') and 'id' not in column_indices:
+                    column_indices['id'] = idx
+                elif col == 'name':
+                    column_indices['name'] = idx
+                elif col == 'description':
+                    column_indices['description'] = idx
+                elif col in ('price', 'price dollars', 'price$'):
+                    column_indices['price'] = idx
+                elif col in ('weight oz', 'weight', 'weight_oz'):
+                    column_indices['weight_oz'] = idx
+
+            if 'name' not in column_indices:
+                flash("CSV must have at least a 'Name' column.", "danger")
                 return redirect('/manage/items')
 
             conn = get_db_connection()
             cursor = conn.cursor()
-            
+
             items_added = 0
             items_updated = 0
 
             for row in csv_reader:
                 try:
-                    item_code = row[column_indices['item_code']].strip()
                     name = row[column_indices['name']].strip()
-                    if not item_code or not name:
+                    if not name:
                         continue
 
-                    item_type = row[column_indices['type']].strip() if 'type' in column_indices and column_indices['type'] < len(row) else 'other'
-                    
+                    item_id = None
+                    if 'id' in column_indices and column_indices['id'] < len(row):
+                        item_id = row[column_indices['id']].strip() or None
+                    if not item_id:
+                        item_id = str(uuid.uuid4())
+
+                    description = ''
+                    if 'description' in column_indices and column_indices['description'] < len(row):
+                        description = row[column_indices['description']].strip()
+
                     price_cents = 0
-                    if 'price_cents' in column_indices and column_indices['price_cents'] < len(row):
+                    if 'price' in column_indices and column_indices['price'] < len(row):
                         try:
-                            price_dollars = float(row[column_indices['price_cents']])
-                            price_cents = int(price_dollars * 100)
+                            price_cents = _parse_price_to_cents(row[column_indices['price']])
                         except (ValueError, TypeError):
                             price_cents = 0
 
                     weight_oz = None
                     if 'weight_oz' in column_indices and column_indices['weight_oz'] < len(row):
                         try:
-                            weight_oz = float(row[column_indices['weight_oz']])
+                            weight_oz = _parse_weight(row[column_indices['weight_oz']])
                         except (ValueError, TypeError):
                             weight_oz = None
 
-                    cursor.execute("SELECT item_code FROM items WHERE item_code = ?", (item_code,))
+                    cursor.execute("SELECT id FROM items WHERE id = ?", (item_id,))
                     existing_item = cursor.fetchone()
-                    
+
                     if existing_item:
-                        cursor.execute("""
-                            UPDATE items 
-                            SET name = ?, type = ?, price_cents = ?, weight_oz = ?, updated_at = CURRENT_TIMESTAMP
-                            WHERE item_code = ?
-                        """, (name, item_type, price_cents, weight_oz, item_code))
+                        cursor.execute(
+                            """
+                            UPDATE items
+                            SET name = ?, description = ?, price_cents = ?, weight_oz = ?, updated_at = CURRENT_TIMESTAMP
+                            WHERE id = ?
+                            """,
+                            (name, description, price_cents, weight_oz, item_id)
+                        )
                         items_updated += 1
                     else:
-                        cursor.execute("""
-                            INSERT INTO items (item_code, name, type, price_cents, weight_oz)
+                        cursor.execute(
+                            """
+                            INSERT INTO items (id, name, description, price_cents, weight_oz)
                             VALUES (?, ?, ?, ?, ?)
-                        """, (item_code, name, item_type, price_cents, weight_oz))
+                            """,
+                            (item_id, name, description, price_cents, weight_oz)
+                        )
                         items_added += 1
                 except IndexError:
                     app.logger.warning(f"Skipping malformed row: {row}")
@@ -1762,7 +2101,7 @@ def import_items_csv():
 
             conn.commit()
             conn.close()
-            
+
             flash(f"Successfully added {items_added} and updated {items_updated} items.", "success")
             return redirect('/manage/items')
         except Exception as e:

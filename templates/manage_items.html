@@ -3,313 +3,340 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Manage Items - Order Manager</title>
-    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
-    <link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png">
-    <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32x32.png">
-    <link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon-16x16.png">
-    <link rel="manifest" href="/assets/site.webmanifest">
-    <style>
-        .back-to-settings-button {
-            display: inline-block;
-            padding: 0.5rem 1rem;
-            color: #dd6b20; /* text-orange-600 */
-            font-weight: 600; /* font-semibold */
-            text-decoration: none;
-            margin-bottom: 1rem;
-        }
-        .back-to-settings-button:hover {
-            color: #c05621; /* text-orange-800 */
-        }
-        .modal-lg { max-width: 800px; }
-        .action-buttons button { margin-left: 5px; }
-    </style>
+    <title>Manage Items - FireCoast OMS</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/assets/css/styles.css">
 </head>
-<body>
-    <div class="container mt-4">
-        <a href="/settings" target="_top" class="back-to-settings-button">&larr; Back to Settings</a>
-        <h1>Manage Items &amp; Services</h1>
-        <p class="text-muted">Define products, services, fees, discounts, and bundles that can appear as order line items.</p>
-        <hr>
-
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <div class="alert alert-{{ category }}">{{ message }}</div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
-
-        <button type="button" class="btn btn-primary mb-3" data-toggle="modal" data-target="#itemModal" onclick="prepareAddItemModal()">
-            Add New Item
-        </button>
-
-        <!-- CSV Upload Form -->
-        <form action="/api/import-items-csv" method="post" enctype="multipart/form-data" class="form-inline mb-3">
-            <div class="form-group">
-                <label for="csv_file" class="mr-2">Upload Items CSV:</label>
-                <input type="file" name="csv_file" id="csv_file" class="form-control-file" accept=".csv" required>
+<body class="bg-slate-50 min-h-screen font-sans">
+    <nav class="bg-slate-900 text-white shadow">
+        <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex h-16 items-center justify-between">
+                <div class="flex items-center space-x-10">
+                    <a href="/dashboard" class="text-lg font-semibold tracking-wide">FireCoast OMS</a>
+                    <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
+                        <a href="/orders" class="hover:text-orange-300 transition">Orders</a>
+                        <a href="/contacts" class="hover:text-orange-300 transition">Contacts</a>
+                        <a href="/passwords" class="hover:text-orange-300 transition">Password Manager</a>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-3 text-sm font-medium">
+                    <a href="/settings" class="text-orange-300">Settings</a>
+                    <a href="/logout" class="hover:text-orange-300 transition">Log Out</a>
+                </div>
             </div>
-            <button type="submit" class="btn btn-success ml-2">Import CSV</button>
-        </form>
+        </div>
+    </nav>
 
-        <table class="table table-striped">
-            <thead>
-                <tr>
-                    <th>Item Code</th>
-                    <th>Name</th>
-                    <th>Type</th>
-                    <th>Price ($)</th>
-                    <th>Styles</th>
-                    <th>Weight (oz)</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody id="itemsTableBody">
-                <!-- Items will be loaded here by JavaScript -->
-            </tbody>
-        </table>
-    </div>
+    <main class="py-10">
+        <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="mb-6 flex items-center justify-between">
+                <div>
+                    <p class="text-sm text-slate-500"><a href="/settings" class="text-orange-600 hover:text-orange-700">&larr; Back to Settings</a></p>
+                    <h1 class="text-2xl font-semibold text-slate-800 mt-1">Manage Items</h1>
+                    <p class="text-sm text-slate-500 mt-1">Create and maintain the catalog entries that appear in orders. Items only need a name, description, and price.</p>
+                </div>
+                <button id="addItemButton" class="inline-flex items-center rounded-md bg-orange-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-orange-700 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2">
+                    + New Item
+                </button>
+            </div>
 
-    <!-- Item Modal (Add/Edit) -->
-    <div class="modal fade" id="itemModal" tabindex="-1" role="dialog" aria-labelledby="itemModalLabel" aria-hidden="true">
-        <div class="modal-dialog modal-lg" role="document">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="itemModalLabel">Add Item</h5>
-                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                        <span aria-hidden="true">&times;</span>
-                    </button>
+            <div class="bg-white shadow-sm border border-slate-200 rounded-lg overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200">
+                        <thead class="bg-slate-100">
+                            <tr>
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Name</th>
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Description</th>
+                                <th scope="col" class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">Price</th>
+                                <th scope="col" class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="itemsTable" class="divide-y divide-slate-200 bg-white"></tbody>
+                    </table>
                 </div>
-                <div class="modal-body">
-                    <form id="itemForm">
-                        <input type="hidden" id="itemId">
-                        <div class="form-group">
-                            <label for="itemCode">Item Code</label>
-                            <input type="text" class="form-control" id="itemCode" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="itemName">Name</label>
-                            <input type="text" class="form-control" id="itemName" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="itemPrice">Price ($)</label>
-                            <input type="number" class="form-control" id="itemPrice" required min="0" step="0.01">
-                        </div>
-                        <div class="form-group">
-                            <label for="itemType">Type</label>
-                            <select class="form-control" id="itemType">
-                                <option value="product">Product / Goods</option>
-                                <option value="service">Service / Hours</option>
-                                <option value="fee">Fee or Surcharge</option>
-                                <option value="shipping">Shipping</option>
-                                <option value="discount">Discount</option>
-                                <option value="package">Package / Bundle</option>
-                                <option value="other">Other</option>
-                                <option value="cross">Legacy: Cross</option>
-                                <option value="display">Legacy: Display</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label for="itemWeightOz">Weight (oz)</label>
-                            <input type="number" class="form-control" id="itemWeightOz" min="0" step="0.1">
-                        </div>
-                        <div class="form-group">
-                            <label for="itemStyles">Styles (comma-separated)</label>
-                            <input type="text" class="form-control" id="itemStyles">
-                        </div>
-                        <!-- Add more fields as necessary, e.g., category, stock, image URL -->
-                    </form>
+            </div>
+        </div>
+    </main>
+
+    <div id="itemModal" class="fixed inset-0 z-40 hidden">
+        <div class="absolute inset-0 bg-black/40" aria-hidden="true"></div>
+        <div class="absolute inset-0 flex items-center justify-center px-4">
+            <div class="w-full max-w-lg rounded-lg bg-white shadow-xl">
+                <div class="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+                    <h2 id="itemModalTitle" class="text-lg font-semibold text-slate-800">New Item</h2>
+                    <button id="closeModalButton" class="text-slate-400 hover:text-slate-600 text-xl leading-none">&times;</button>
                 </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
-                    <button type="button" class="btn btn-primary" onclick="saveItem()">Save Item</button>
+                <form id="itemForm" class="px-6 py-5 space-y-4">
+                    <input type="hidden" id="itemId">
+                    <div>
+                        <label for="itemName" class="block text-sm font-medium text-slate-700">Name</label>
+                        <input type="text" id="itemName" class="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500" required>
+                    </div>
+                    <div>
+                        <label for="itemDescription" class="block text-sm font-medium text-slate-700">Description</label>
+                        <textarea id="itemDescription" rows="3" class="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500"></textarea>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label for="itemPrice" class="block text-sm font-medium text-slate-700">Price ($)</label>
+                            <input type="number" id="itemPrice" min="0" step="0.01" class="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500" required>
+                        </div>
+                        <div>
+                            <label for="itemWeight" class="block text-sm font-medium text-slate-700">Weight (oz)</label>
+                            <input type="number" id="itemWeight" min="0" step="0.01" class="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500" placeholder="Optional">
+                        </div>
+                    </div>
+                </form>
+                <div class="flex items-center justify-between border-t border-slate-200 px-6 py-4">
+                    <div id="itemMeta" class="text-xs text-slate-400"></div>
+                    <div class="space-x-2">
+                        <button id="cancelItemButton" class="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100">Cancel</button>
+                        <button id="saveItemButton" class="rounded-md bg-orange-600 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-700 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2">Save Item</button>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.5.4/dist/umd/popper.min.js"></script>
-    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
     <script>
-        const ITEM_TYPE_LABELS = {
-            product: 'Product / Goods',
-            service: 'Service / Hours',
-            fee: 'Fee or Surcharge',
-            shipping: 'Shipping',
-            discount: 'Discount',
-            package: 'Package / Bundle',
-            other: 'Other',
-            cross: 'Legacy: Cross',
-            display: 'Legacy: Display'
+        const itemsTable = document.getElementById('itemsTable');
+        const itemModal = document.getElementById('itemModal');
+        const itemForm = document.getElementById('itemForm');
+        const itemModalTitle = document.getElementById('itemModalTitle');
+        const itemMeta = document.getElementById('itemMeta');
+
+        const itemIdInput = document.getElementById('itemId');
+        const itemNameInput = document.getElementById('itemName');
+        const itemDescriptionInput = document.getElementById('itemDescription');
+        const itemPriceInput = document.getElementById('itemPrice');
+        const itemWeightInput = document.getElementById('itemWeight');
+
+        const openModalButton = document.getElementById('addItemButton');
+        const closeModalButton = document.getElementById('closeModalButton');
+        const cancelItemButton = document.getElementById('cancelItemButton');
+        const saveItemButton = document.getElementById('saveItemButton');
+
+        const hideModal = () => {
+            itemModal.classList.add('hidden');
         };
 
-        const getDisplayTypeLabel = (type) => {
-            const normalized = (type || '').toString().toLowerCase();
-            if (normalized === 'cross' || normalized === 'display') {
-                return ITEM_TYPE_LABELS[normalized];
-            }
-            return ITEM_TYPE_LABELS[normalized] || ITEM_TYPE_LABELS.other;
+        const showModal = () => {
+            itemModal.classList.remove('hidden');
         };
 
-        const normalizeTypeForForm = (type) => {
-            const normalized = (type || '').toString().toLowerCase();
-            if (normalized === 'cross' || normalized === 'display') {
-                return 'product';
-            }
-            if (!normalized) {
-                return 'product';
-            }
-            return ITEM_TYPE_LABELS[normalized] ? normalized : 'other';
+        const resetForm = () => {
+            itemForm.reset();
+            itemIdInput.value = '';
+            itemMeta.textContent = '';
         };
 
-        $(document).ready(function() {
-            loadItems();
-        });
+        const formatPrice = (priceInCents) => {
+            if (typeof priceInCents !== 'number') return '$0.00';
+            return `$${(priceInCents / 100).toFixed(2)}`;
+        };
 
-        function loadItems() {
-            fetch('/api/items')
-                .then(response => response.json())
-                .then(data => {
-                    const tableBody = $('#itemsTableBody');
-                    tableBody.empty(); // Clear existing rows
-                    data.forEach(item => {
-                        // item.price from API is in cents, convert to dollars for display
-                        const priceFormatted = typeof item.price === 'number' ? (item.price / 100).toFixed(2) : 'N/A';
-                        const stylesFormatted = Array.isArray(item.styles) ? item.styles.join(', ') : 'N/A';
-                        const weightFormatted = typeof item.weight_oz === 'number' ? item.weight_oz : 'N/A';
-                        const typeLabel = getDisplayTypeLabel(item.type);
-                        const row = `
-                            <tr>
-                                <td>${item.item_code || 'N/A'}</td>
-                                <td>${item.name || 'N/A'}</td>
-                                <td>${typeLabel || 'N/A'}</td>
-                                <td>$${priceFormatted}</td>
-                                <td>${stylesFormatted}</td>
-                                <td>${weightFormatted}</td>
-                                <td class="action-buttons">
-                                    <button class="btn btn-sm btn-info" onclick="prepareEditItemModal('${item.id}')">Edit</button>
-                                    <button class="btn btn-sm btn-danger" onclick="deleteItem('${item.id}')">Delete</button>
-                                </td>
-                            </tr>
-                        `;
-                        tableBody.append(row);
-                    });
-                })
-                .catch(error => console.error('Error loading items:', error));
-        }
+        const formatWeight = (weight) => {
+            if (weight === null || weight === undefined || weight === '') return '';
+            const numeric = Number(weight);
+            if (Number.isNaN(numeric)) return '';
+            return `${numeric.toFixed(2)} oz`;
+        };
 
-        function prepareAddItemModal() {
-            $('#itemModalLabel').text('Add New Item');
-            $('#itemForm')[0].reset();
-            $('#itemId').val('');
-            $('#itemCode').prop('readonly', false); // Allow editing item code for new items
-            $('#itemType').val('product');
-        }
+        const populateTable = (items) => {
+            itemsTable.innerHTML = '';
+            if (!Array.isArray(items) || items.length === 0) {
+                const emptyRow = document.createElement('tr');
+                emptyRow.innerHTML = `<td colspan="4" class="px-6 py-6 text-center text-sm text-slate-500">No catalog items yet. Create your first item to get started.</td>`;
+                itemsTable.appendChild(emptyRow);
+                return;
+            }
 
-        function prepareEditItemModal(itemIdOrCode) {
-            fetch(`/api/items`) // Fetch all items to find the one to edit
-                .then(response => response.json())
-                .then(items => {
-                    const item = items.find(i => i.id === itemIdOrCode || i.item_code === itemIdOrCode);
-                    if (item) {
-                        $('#itemModalLabel').text('Edit Item');
-                        $('#itemId').val(item.id);
-                        $('#itemCode').val(item.item_code || '');
-                        // $('#itemCode').prop('readonly', true); // Item code is the ID, should not be editable directly here
-                                                              // Or, if allowed, backend must handle key change in dict
-                        $('#itemName').val(item.name || '');
-                        // item.price from API is in cents, convert to dollars for form input
-                        $('#itemPrice').val(typeof item.price === 'number' ? (item.price / 100).toFixed(2) : '');
-                        $('#itemType').val(normalizeTypeForForm(item.type));
-                        $('#itemWeightOz').val(item.weight_oz || '');
-                        $('#itemStyles').val(Array.isArray(item.styles) ? item.styles.join(', ') : '');
-                        $('#itemModal').modal('show');
-                    } else {
-                        alert('Item not found for editing.');
-                    }
-                })
-                .catch(error => console.error('Error fetching item for edit:', error));
-        }
+            items.forEach(item => {
+                const row = document.createElement('tr');
+                const weightBadge = formatWeight(item.weight_oz);
+                row.innerHTML = `
+                    <td class="px-6 py-4 align-top">
+                        <div class="text-sm font-medium text-slate-800">${item.name || 'Untitled Item'}</div>
+                        ${weightBadge ? `<div class="mt-1 inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">${weightBadge}</div>` : ''}
+                    </td>
+                    <td class="px-6 py-4 align-top">
+                        <div class="text-sm text-slate-600 whitespace-pre-line">${item.description ? item.description : '<span class="text-slate-400">No description</span>'}</div>
+                    </td>
+                    <td class="px-6 py-4 text-right align-top">
+                        <div class="text-sm font-semibold text-slate-800">${formatPrice(item.price)}</div>
+                    </td>
+                    <td class="px-4 py-4 text-right align-top">
+                        <div class="inline-flex items-center gap-2">
+                            <button class="text-sm font-semibold text-orange-600 hover:text-orange-700" data-action="edit" data-id="${item.id}">Edit</button>
+                            <button class="text-sm text-slate-400 hover:text-red-600" data-action="delete" data-id="${item.id}">Delete</button>
+                        </div>
+                    </td>
+                `;
+                itemsTable.appendChild(row);
+            });
+        };
 
-        function saveItem() {
-            const itemId = $('#itemId').val();
-            const itemData = {
-                item_code: $('#itemCode').val().trim(),
-                name: $('#itemName').val().trim(),
-                // Price is now float (dollars)
-                price: parseFloat($('#itemPrice').val()), 
-                type: $('#itemType').val(),
-                weight_oz: parseFloat($('#itemWeightOz').val()) || null,
-                styles: $('#itemStyles').val().split(',').map(s => s.trim()).filter(s => s) // Split comma-sep string into array
+        const loadItems = async () => {
+            try {
+                const response = await fetch('/api/items');
+                if (!response.ok) throw new Error('Failed to load items');
+                const items = await response.json();
+                populateTable(items);
+            } catch (error) {
+                console.error('Error loading items:', error);
+                itemsTable.innerHTML = `<tr><td colspan="4" class="px-6 py-6 text-center text-sm text-red-500">Unable to load items. Please try again later.</td></tr>`;
+            }
+        };
+
+        const prepareModalForNew = () => {
+            resetForm();
+            itemModalTitle.textContent = 'New Item';
+        };
+
+        const prepareModalForEdit = (item) => {
+            resetForm();
+            itemModalTitle.textContent = 'Edit Item';
+            itemIdInput.value = item.id || '';
+            itemNameInput.value = item.name || '';
+            itemDescriptionInput.value = item.description || '';
+            itemPriceInput.value = item.price ? (item.price / 100).toFixed(2) : '';
+            itemWeightInput.value = (item.weight_oz ?? '') === '' ? '' : item.weight_oz;
+            itemMeta.textContent = item.id ? `Item ID: ${item.id}` : '';
+        };
+
+        const openNewItemModal = () => {
+            prepareModalForNew();
+            showModal();
+            itemNameInput.focus();
+        };
+
+        const openEditItemModal = async (itemId) => {
+            try {
+                const response = await fetch('/api/items');
+                const items = await response.json();
+                const item = items.find(i => i.id === itemId);
+                if (!item) {
+                    alert('Unable to find that item.');
+                    return;
+                }
+                prepareModalForEdit(item);
+                showModal();
+                itemNameInput.focus();
+            } catch (error) {
+                console.error('Error preparing edit modal:', error);
+                alert('Unable to load item details for editing.');
+            }
+        };
+
+        const saveItem = async () => {
+            const id = itemIdInput.value.trim();
+            const name = itemNameInput.value.trim();
+            const description = itemDescriptionInput.value.trim();
+            const priceValue = itemPriceInput.value.trim();
+            const weightValue = itemWeightInput.value.trim();
+
+            if (!name) {
+                alert('Name is required.');
+                return;
+            }
+
+            if (!priceValue || Number(priceValue) < 0) {
+                alert('Please provide a valid price.');
+                return;
+            }
+
+            const payload = {
+                name,
+                description,
+                price: priceValue,
             };
 
-            if (!itemData.item_code || !itemData.name || isNaN(itemData.price)) {
-                alert('Item Code, Name, and a valid Price (dollars) are required.');
-                return;
-            }
-            
-            // If itemData.weight_oz was empty, parseFloat might result in NaN. Convert to null.
-            if (isNaN(itemData.weight_oz)) {
-                itemData.weight_oz = null;
+            if (weightValue !== '') {
+                payload.weight_oz = weightValue;
+            } else {
+                payload.weight_oz = null;
             }
 
+            const requestConfig = {
+                method: id ? 'PUT' : 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            };
 
-            let url = '/api/items';
-            let method = 'POST';
+            const url = id ? `/api/items/${id}` : '/api/items';
 
-            if (itemId) { // If itemId exists, it's an update (PUT)
-                url = `/api/items/${itemId}`;
-                method = 'PUT';
-                itemData.id = itemId; // Ensure ID is part of the payload for PUT if needed by backend
-            }
-
-            fetch(url, {
-                method: method,
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(itemData),
-            })
-            .then(response => response.json().then(data => ({ status: response.status, body: data })))
-            .then(result => {
-                if (result.status === 200 || result.status === 201) {
-                    $('#itemModal').modal('hide');
-                    loadItems(); // Refresh the table
-                    alert(result.body.message || 'Item saved successfully!');
-                } else {
-                    alert('Error saving item: ' + (result.body.message || 'Unknown error'));
+            try {
+                const response = await fetch(url, requestConfig);
+                const result = await response.json();
+                if (!response.ok) {
+                    throw new Error(result.message || 'Failed to save item');
                 }
-            })
-            .catch(error => {
+                hideModal();
+                await loadItems();
+                alert(result.message || 'Item saved successfully.');
+            } catch (error) {
                 console.error('Error saving item:', error);
-                alert('Error saving item. See console for details.');
-            });
-        }
+                alert(error.message || 'Unable to save item.');
+            }
+        };
 
-        function deleteItem(itemIdOrCode) {
-            if (!confirm('Are you sure you want to delete this item?')) {
+        const deleteItem = async (itemId) => {
+            if (!confirm('Delete this item? This cannot be undone.')) {
                 return;
             }
 
-            fetch(`/api/items/${itemIdOrCode}`, {
-                method: 'DELETE',
-            })
-            .then(response => response.json().then(data => ({ status: response.status, body: data })))
-            .then(result => {
-                if (result.status === 200) {
-                    loadItems(); // Refresh the table
-                    alert(result.body.message || 'Item deleted successfully!');
-                } else {
-                    alert('Error deleting item: ' + (result.body.message || 'Unknown error'));
+            try {
+                const response = await fetch(`/api/items/${itemId}`, { method: 'DELETE' });
+                const result = await response.json();
+                if (!response.ok) {
+                    throw new Error(result.message || 'Failed to delete item');
                 }
-            })
-            .catch(error => {
+                await loadItems();
+                alert(result.message || 'Item deleted.');
+            } catch (error) {
                 console.error('Error deleting item:', error);
-                alert('Error deleting item. See console for details.');
-            });
-        }
+                alert(error.message || 'Unable to delete item.');
+            }
+        };
+
+        openModalButton.addEventListener('click', (event) => {
+            event.preventDefault();
+            openNewItemModal();
+        });
+
+        closeModalButton.addEventListener('click', (event) => {
+            event.preventDefault();
+            hideModal();
+        });
+
+        cancelItemButton.addEventListener('click', (event) => {
+            event.preventDefault();
+            hideModal();
+        });
+
+        saveItemButton.addEventListener('click', (event) => {
+            event.preventDefault();
+            saveItem();
+        });
+
+        itemModal.addEventListener('click', (event) => {
+            if (event.target === itemModal) {
+                hideModal();
+            }
+        });
+
+        itemsTable.addEventListener('click', (event) => {
+            const { action, id } = event.target.dataset;
+            if (!action || !id) return;
+            if (action === 'edit') {
+                openEditItemModal(id);
+            }
+            if (action === 'delete') {
+                deleteItem(id);
+            }
+        });
+
+        loadItems();
     </script>
 </body>
 </html>
