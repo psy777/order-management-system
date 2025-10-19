@@ -26,6 +26,7 @@ MENTION_PATTERN = re.compile(r'(?<!\S)@([A-Za-z0-9_.-]+)')
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request, send_from_directory, redirect, flash, url_for
 from database import get_db_connection, init_db
+from data_paths import DATA_ROOT, ensure_data_root
 
 # Load environment variables from .env file
 load_dotenv()
@@ -50,14 +51,15 @@ def _ensure_database_initialized():
     except Exception as exc:  # pragma: no cover - defensive logging
         app.logger.exception("Failed to initialize database before request: %s", exc)
 
-DATA_DIR = 'data'
-SETTINGS_FILE = os.path.join(DATA_DIR, 'settings.json')
-PASSWORDS_FILE = os.path.join(DATA_DIR, 'passwords.json')
+ensure_data_root()
 
-UPLOAD_FOLDER = os.path.join(os.path.dirname(app.root_path), 'data')
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+DATA_DIR = DATA_ROOT
+SETTINGS_FILE = DATA_DIR / 'settings.json'
+PASSWORDS_FILE = DATA_DIR / 'passwords.json'
+
+UPLOAD_FOLDER = DATA_DIR
+UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
+app.config['UPLOAD_FOLDER'] = str(UPLOAD_FOLDER)
 
 def read_json_file(file_path):
     if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
@@ -631,9 +633,8 @@ def refresh_order_contact_links(cursor, order_id, primary_contact_id=None):
             (order_id, contact_id)
         )
 
-if not os.path.exists(DATA_DIR):
-    os.makedirs(DATA_DIR)
-if not os.path.exists(SETTINGS_FILE):
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+if not SETTINGS_FILE.exists():
     write_json_file(SETTINGS_FILE, {"company_name": "Your Company Name", "default_shipping_zip_code": "00000"})
 
 @app.route('/api/orders', methods=['GET'])
@@ -2493,39 +2494,40 @@ def passwords_page():
 
 @app.route('/api/export-data', methods=['GET'])
 def export_data():
-    """Creates a zip archive of the entire /data directory."""
+    """Create a zip archive of the application's data directory."""
     try:
         # It's good practice to ensure the app is not writing to the DB during backup.
         # For this app's scale, a direct copy is likely fine, but for larger systems,
         # you might implement a read-only mode or a brief service pause.
-        
-        data_dir = os.path.join(os.path.dirname(app.root_path), 'data')
-        if not os.path.isdir(data_dir):
+
+        data_dir = DATA_DIR
+        if not data_dir.is_dir():
             return jsonify({"status": "error", "message": "Data directory not found."}), 404
 
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         # Create the archive in a temporary location to avoid including the archive in itself
-        temp_dir = os.path.join(os.path.dirname(app.root_path), 'temp_backups')
-        os.makedirs(temp_dir, exist_ok=True)
-        
-        archive_name = f'backup_{timestamp}'
-        archive_path_base = os.path.join(temp_dir, archive_name)
-        
-        # Create the zip file from the 'data' directory
-        shutil.make_archive(archive_path_base, 'zip', data_dir)
+        temp_dir = DATA_DIR.parent / 'temp_backups'
+        temp_dir.mkdir(parents=True, exist_ok=True)
 
-        archive_path_zip = f"{archive_path_base}.zip"
+        archive_name = f'backup_{timestamp}'
+        archive_path_base = temp_dir / archive_name
+
+        # Create the zip file from the 'data' directory
+        shutil.make_archive(str(archive_path_base), 'zip', str(data_dir))
+
+        archive_path_zip = archive_path_base.with_suffix('.zip')
 
         # Send the file and clean up afterwards
-        response = send_from_directory(temp_dir, f"{archive_name}.zip", as_attachment=True)
+        response = send_from_directory(str(temp_dir), f"{archive_name}.zip", as_attachment=True)
 
         @response.call_on_close
         def cleanup():
             try:
-                os.remove(archive_path_zip)
+                if archive_path_zip.exists():
+                    archive_path_zip.unlink()
                 # If the temp dir is empty, remove it too
-                if not os.listdir(temp_dir):
-                    os.rmdir(temp_dir)
+                if not any(temp_dir.iterdir()):
+                    temp_dir.rmdir()
             except Exception as e:
                 app.logger.error(f"Error cleaning up backup file: {e}")
 
@@ -2538,7 +2540,7 @@ def export_data():
 
 @app.route('/api/import-data', methods=['POST'])
 def import_data():
-    """Restores the /data directory from a zip archive."""
+    """Restore the data directory from a zip archive."""
     if 'file' not in request.files:
         return jsonify({"status": "error", "message": "No file part"}), 400
     
@@ -2546,27 +2548,27 @@ def import_data():
     if file.filename == '' or not file.filename.endswith('.zip'):
         return jsonify({"status": "error", "message": "Invalid file. Please upload a .zip backup file."}), 400
 
-    data_dir = os.path.join(os.path.dirname(app.root_path), 'data')
-    
+    data_dir = DATA_DIR
+
     try:
         # Before replacing, create a temporary backup of the current data directory
-        temp_backup_dir = os.path.join(os.path.dirname(app.root_path), 'data_temp_backup')
-        if os.path.exists(temp_backup_dir):
+        temp_backup_dir = DATA_DIR.parent / 'data_temp_backup'
+        if temp_backup_dir.exists():
             shutil.rmtree(temp_backup_dir) # remove old temp backup if it exists
-        if os.path.exists(data_dir):
+        if data_dir.exists():
             shutil.copytree(data_dir, temp_backup_dir)
 
         # Clear the existing data directory
-        if os.path.exists(data_dir):
+        if data_dir.exists():
             shutil.rmtree(data_dir)
-        os.makedirs(data_dir)
+        data_dir.mkdir(parents=True, exist_ok=True)
 
         # Extract the new data from the uploaded zip file
         with zipfile.ZipFile(file.stream, 'r') as zip_ref:
-            zip_ref.extractall(data_dir)
-        
+            zip_ref.extractall(str(data_dir))
+
         # Restore completed, can now remove the temporary backup
-        if os.path.exists(temp_backup_dir):
+        if temp_backup_dir.exists():
             shutil.rmtree(temp_backup_dir)
 
         # Re-initialize DB connection to ensure schema and pragmas are set if db was replaced
@@ -2584,10 +2586,10 @@ def import_data():
         
         # Attempt to restore from the temporary backup
         try:
-            if os.path.exists(temp_backup_dir):
-                if os.path.exists(data_dir):
+            if temp_backup_dir.exists():
+                if data_dir.exists():
                     shutil.rmtree(data_dir)
-                shutil.move(temp_backup_dir, data_dir)
+                shutil.move(str(temp_backup_dir), str(data_dir))
                 app.logger.info("Successfully restored data from temporary backup after import failure.")
         except Exception as e_restore:
             app.logger.error(f"CRITICAL: Failed to restore data from temporary backup: {e_restore}")
