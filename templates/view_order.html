@@ -237,6 +237,7 @@ const normalizeDiscountsForTotals = (discounts, lineItems) => {
 };
 
 const mentionComponents = window.RecordMentionComponents || {};
+const MentionText = mentionComponents.RecordMentionText;
 const ContactMentionTextarea = (props) => {
     const Component = mentionComponents.RecordMentionTextarea;
     if (!Component) {
@@ -933,7 +934,17 @@ const formatContactAddress = (address, city, state, zip) => {
                                                 <tr key={log.log_id} className="bg-white border-b hover:bg-slate-50">
                                                     <td className="px-4 py-3 font-medium text-slate-800">{log.timestamp ? new Date(log.timestamp).toLocaleString() : '—'}</td>
                                                     <td className="px-4 py-3">{log.action || '—'}</td>
-                                                    <td className="px-4 py-3 whitespace-pre-wrap">{log.details || log.note || ''}</td>
+                                                    <td className="px-4 py-3">
+                                                        {MentionText ? (
+                                                            <MentionText
+                                                                text={log.details || log.note || ''}
+                                                                entityTypes={['contact', 'order', 'note']}
+                                                                className="block whitespace-pre-wrap"
+                                                            />
+                                                        ) : (
+                                                            <span className="whitespace-pre-wrap">{log.details || log.note || ''}</span>
+                                                        )}
+                                                    </td>
                                                     <td className="px-4 py-3">
                                                         {log.attachment_path ?
                                                             <a href={`/data/${log.attachment_path}`} target="_blank" className="text-orange-600 hover:underline">View File</a> : ''}
@@ -997,7 +1008,20 @@ const formatContactAddress = (address, city, state, zip) => {
                                 </div>
                                 <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
                                     <h2 className="text-xl font-semibold text-slate-700 mb-3">Notes</h2>
-                                    <p className="text-slate-600 whitespace-pre-wrap">{order.notes || 'No notes for this order.'}</p>
+                                    {MentionText ? (
+                                        order.notes ? (
+                                            <MentionText
+                                                text={order.notes}
+                                                entityTypes={['contact', 'order', 'note']}
+                                                as="p"
+                                                className="text-slate-600"
+                                            />
+                                        ) : (
+                                            <p className="text-slate-600">No notes for this order.</p>
+                                        )
+                                    ) : (
+                                        <p className="text-slate-600 whitespace-pre-wrap">{order.notes || 'No notes for this order.'}</p>
+                                    )}
                                 </div>
                             </div>
                             <div className="space-y-6">

@@ -126,6 +126,7 @@ const formatPhoneNumber = (value = '') => {
 };
 
 const mentionComponents = window.RecordMentionComponents || {};
+const MentionText = mentionComponents.RecordMentionText;
 const ContactMentionTextarea = (props) => {
     const Component = mentionComponents.RecordMentionTextarea;
     if (!Component) {
@@ -193,7 +194,16 @@ const ContactMentions = ({ mentions }) => {
                             <span className="text-xs text-slate-400">{formatDateTime(mention.createdAt)}</span>
                         </div>
                     </div>
-                    <p className="text-sm text-slate-600 mt-3 whitespace-pre-line">{mention.snippet}</p>
+                    {MentionText ? (
+                        <MentionText
+                            text={mention.snippet}
+                            entityTypes={['contact', 'order', 'note']}
+                            as="p"
+                            className="text-sm text-slate-600 mt-3"
+                        />
+                    ) : (
+                        <p className="text-sm text-slate-600 mt-3 whitespace-pre-line">{mention.snippet}</p>
+                    )}
                     {(mention.orderId || mention.orderDisplayId) && (
                         <div className="mt-3 flex items-center justify-between text-sm">
                             <div>
@@ -368,8 +378,20 @@ const ContactDetail = ({ contact, onSave, isSaving, onCancelCreate }) => {
                         <h3 className="text-lg font-semibold text-slate-800">Internal Notes</h3>
                         <span className="text-xs text-slate-500">Last updated {formatDateTime(contact.updatedAt)}</span>
                     </div>
-                    <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 min-h-[96px] whitespace-pre-wrap">
-                        {formState.notes && formState.notes.trim() ? formState.notes : 'No internal notes yet.'}
+                    <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 min-h-[96px]">
+                        {formState.notes && formState.notes.trim() ? (
+                            MentionText ? (
+                                <MentionText
+                                    text={formState.notes}
+                                    entityTypes={['contact', 'order', 'note']}
+                                    className="block"
+                                />
+                            ) : (
+                                <span className="whitespace-pre-wrap">{formState.notes}</span>
+                            )
+                        ) : (
+                            'No internal notes yet.'
+                        )}
                     </div>
                 </section>
             ) : (

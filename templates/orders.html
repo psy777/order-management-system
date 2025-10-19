@@ -288,6 +288,7 @@ const Textarea = ({ label, placeholder, value, onChange, disabled = false, rows 
 );
 
 const mentionComponents = window.RecordMentionComponents || {};
+const MentionText = mentionComponents.RecordMentionText;
 const ContactMentionTextarea = (props) => {
     const Component = mentionComponents.RecordMentionTextarea;
     if (!Component) {
@@ -477,7 +478,17 @@ const OrderLogsSection = ({ orderId, canEdit, allContacts = [], onContactsChange
                                     <tr key={log.log_id} className="bg-white border-b last:border-b-0 hover:bg-slate-50">
                                         <td className="px-4 py-3 font-medium text-slate-800">{log.timestamp ? new Date(log.timestamp).toLocaleString() : '—'}</td>
                                         <td className="px-4 py-3">{log.action || '—'}</td>
-                                        <td className="px-4 py-3 whitespace-pre-wrap">{log.details || log.note || ''}</td>
+                                        <td className="px-4 py-3">
+                                            {MentionText ? (
+                                                <MentionText
+                                                    text={log.details || log.note || ''}
+                                                    entityTypes={['contact', 'order', 'note']}
+                                                    className="block whitespace-pre-wrap"
+                                                />
+                                            ) : (
+                                                <span className="whitespace-pre-wrap">{log.details || log.note || ''}</span>
+                                            )}
+                                        </td>
                                         <td className="px-4 py-3">
                                             {log.attachment_path ? (
                                                 <a href={`/data/${log.attachment_path}`} target="_blank" className="text-orange-600 hover:underline">View File</a>
