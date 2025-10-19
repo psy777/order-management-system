@@ -425,7 +425,7 @@ const OrderLogsSection = ({ orderId, canEdit, allContacts = [], onContactsChange
                                 placeholder="Share updates and mention teammates or clients with @handle"
                                 value={details}
                                 onChange={setDetails}
-                                entityTypes={['contact', 'note']}
+                                entityTypes={['contact', 'order', 'note']}
                                 rows={4}
                             />
                             <div>
@@ -2866,7 +2866,7 @@ const unpackPackage = (id, pkgCode) => {
                             onChange={value => setFormData(p => ({...p, notes: value}))}
                             rows={4}
                             disabled={!canEdit}
-                            entityTypes={['contact', 'note']}
+                            entityTypes={['contact', 'order', 'note']}
                             placeholder="Capture order notes and use @handle to mention key contacts"
                             label=""
                         />

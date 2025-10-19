@@ -182,6 +182,31 @@ class RecordServiceIntegrationTests(unittest.TestCase):
         self.assertEqual(handles, ['noteone', 'primary'])
         self.assertTrue(all(row['context_entity_type'] == 'order_log' for row in rows))
 
+    def test_order_handles_are_available_for_mentions(self):
+        self.service.register_handle(
+            self.conn,
+            'order',
+            'order-1001',
+            'order-1001',
+            display_name='PO-1001',
+            search_blob='po 1001',
+        )
+        sync_record_mentions(
+            self.conn,
+            ['order-1001'],
+            'note',
+            'note-xyz',
+            'Following up on @order-1001 for delivery updates.',
+        )
+        rows = list(
+            self.conn.execute(
+                "SELECT mentioned_entity_type, mentioned_handle FROM record_mentions"
+            )
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['mentioned_entity_type'], 'order')
+        self.assertEqual(rows[0]['mentioned_handle'], 'order-1001')
+
     def test_validation_errors_are_raised_for_missing_fields(self):
         with self.assertRaises(RecordValidationError):
             self.service.create_record(self.conn, 'note', {'body': 'Missing handle'}, actor='tester')

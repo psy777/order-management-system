@@ -440,7 +440,7 @@ const ContactDetail = ({ contact, onSave, isSaving, onCancelCreate }) => {
                         placeholder="Keep shared notes and mention teammates with @handle"
                         value={formState.notes}
                         onChange={value => handleChange('notes', value)}
-                        entityTypes={['contact', 'note']}
+                        entityTypes={['contact', 'order', 'note']}
                         rows={4}
                     />
                 </form>

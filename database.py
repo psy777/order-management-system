@@ -4,6 +4,8 @@ import logging
 import re
 from typing import Optional
 
+from services.records import get_record_service
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -17,6 +19,7 @@ DATABASE_FILE = DATA_DIR / 'orders_manager.db'
 
 
 HANDLE_SANITIZE_PATTERN = re.compile(r'[^a-z0-9]+')
+ORDER_HANDLE_SANITIZE_PATTERN = re.compile(r'[^a-z0-9.-]+')
 
 
 def _slugify_handle(source_text: str) -> str:
@@ -57,6 +60,82 @@ def ensure_contact_handle(cursor: sqlite3.Cursor, contact_id: str, fallback_text
 def generate_unique_contact_handle(cursor: sqlite3.Cursor, preferred_text: str) -> str:
     """Public helper to generate a unique contact handle."""
     return _generate_unique_handle(cursor, preferred_text)
+
+
+def ensure_order_record_handle(
+    cursor: sqlite3.Cursor,
+    order_id: str,
+    display_id: Optional[str] = None,
+    title: Optional[str] = None,
+) -> Optional[str]:
+    """Ensure an order has an entry in the unified record handle directory."""
+
+    if not order_id:
+        return None
+
+    cursor.execute(
+        "SELECT display_id, title FROM orders WHERE order_id = ?",
+        (order_id,),
+    )
+    row = cursor.fetchone()
+    if row:
+        if isinstance(row, sqlite3.Row):
+            display_value = row['display_id']
+            title_value = row['title']
+        else:
+            display_value = row[0]
+            title_value = row[1]
+    else:
+        display_value = None
+        title_value = None
+
+    display_value = display_id or display_value or ""
+    title_value = title or title_value or ""
+
+    preferred_source = (display_value or title_value or str(order_id)).strip()
+    normalised_source = ORDER_HANDLE_SANITIZE_PATTERN.sub("-", preferred_source.lower()).strip("-")
+    if not normalised_source:
+        normalised_source = ORDER_HANDLE_SANITIZE_PATTERN.sub("-", str(order_id).lower()).strip("-")
+    base_handle = f"order-{normalised_source}" if not normalised_source.startswith("order-") else normalised_source
+    base_handle = base_handle.strip("-") or f"order-{str(order_id).lower()}"
+
+    candidate = base_handle[:48]
+    suffix = 1
+    while True:
+        cursor.execute(
+            "SELECT entity_type, entity_id FROM record_handles WHERE handle = ?",
+            (candidate,),
+        )
+        existing = cursor.fetchone()
+        if not existing or (
+            existing[0] == 'order' and str(existing[1]) == str(order_id)
+        ):
+            break
+        suffix += 1
+        candidate = f"{base_handle[:40]}-{suffix}"
+
+    display_label = (title_value or display_value or f"Order {str(order_id)[:8]}").strip()
+    search_terms = " ".join(
+        filter(
+            None,
+            [
+                display_value.strip() if isinstance(display_value, str) else display_value,
+                title_value.strip() if isinstance(title_value, str) else title_value,
+                str(order_id),
+            ],
+        )
+    ).lower()
+
+    service = get_record_service()
+    service.register_handle(
+        cursor.connection,
+        'order',
+        order_id,
+        candidate,
+        display_name=display_label,
+        search_blob=search_terms,
+    )
+    return candidate
 
 def get_db_connection():
     """Establishes a connection to the SQLite database."""
@@ -502,6 +581,13 @@ def init_db():
             """,
             (handle.lower(), contact_id, display_name, search_blob),
         )
+
+    cursor.execute("SELECT order_id, display_id, title FROM orders")
+    for row in cursor.fetchall():
+        order_id = row['order_id'] if isinstance(row, sqlite3.Row) else row[0]
+        display_id = row['display_id'] if isinstance(row, sqlite3.Row) else row[1]
+        title = row['title'] if isinstance(row, sqlite3.Row) else row[2]
+        ensure_order_record_handle(cursor, str(order_id), display_id, title)
 
     if 'contact_mentions' in existing_tables:
         cursor.execute(

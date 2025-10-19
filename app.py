@@ -23,7 +23,13 @@ import pytz
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request, send_from_directory, redirect, flash, url_for
-from database import get_db_connection, init_db, ensure_contact_handle, generate_unique_contact_handle
+from database import (
+    get_db_connection,
+    init_db,
+    ensure_contact_handle,
+    ensure_order_record_handle,
+    generate_unique_contact_handle,
+)
 from data_paths import DATA_ROOT, ensure_data_root
 from services.records import (
     RecordValidationError,
@@ -1252,6 +1258,13 @@ def save_order():
         cleaned_display_id = display_id or (existing_display_id.strip() if isinstance(existing_display_id, str) else None)
         cleaned_title = title_value or (existing_title.strip() if isinstance(existing_title, str) else '')
         order_label = cleaned_title or cleaned_display_id or processed_order_id
+
+        ensure_order_record_handle(
+            cursor,
+            str(processed_order_id),
+            cleaned_display_id,
+            cleaned_title,
+        )
 
         if existing_order_row:
             cursor.execute(
