@@ -171,19 +171,11 @@ const buildOrderDocumentTitle = (order) => {
         return 'Order';
     }
     const fallbackId = order?.display_id ?? order?.id ?? '';
-    const rawTitle = (order?.title ?? fallbackId ?? '').toString().trim();
-    if (!rawTitle) {
-        return fallbackId ? `Order ${fallbackId}` : 'Order';
+    const rawTitle = (order?.title ?? '').toString().trim();
+    if (rawTitle) {
+        return rawTitle;
     }
-    const firstWord = rawTitle.split(/\s+/)[0] || rawTitle;
-    const baseSnippet = firstWord || rawTitle;
-    const truncated = baseSnippet.length > 11 ? baseSnippet.slice(0, 11) : baseSnippet;
-    const needsEllipsis = rawTitle.length > 14;
-    const snippet = truncated || fallbackId;
-    if (!snippet) {
-        return 'Order';
-    }
-    return needsEllipsis ? `Order ${snippet}...` : `Order ${snippet}`;
+    return fallbackId ? `Order ${fallbackId}` : 'Order';
 };
 
 const normalizeDiscountsForTotals = (discounts, lineItems) => {
