@@ -123,12 +123,18 @@ const computeMenuPosition = rect => {
 
 const getDisplayLabel = (metadata, handle) => {
     if (metadata && metadata.displayName) {
-        return metadata.displayName;
+        const trimmed = metadata.displayName.trim();
+        if (trimmed) {
+            return trimmed;
+        }
     }
     if (metadata && metadata.label) {
-        return metadata.label;
+        const trimmed = metadata.label.trim();
+        if (trimmed) {
+            return trimmed;
+        }
     }
-    return `@${handle}`;
+    return handle;
 };
 
 const renderMentionContent = (text, handlesMap, { renderMention, renderText, placeholder }) => {
@@ -553,7 +559,7 @@ function RecordMentionTextarea({
         renderText: (segment, start, end) => (
             <span
                 key={`text-${start}-${end}`}
-                className="text-transparent"
+                className="text-sm text-slate-700"
                 style={{ pointerEvents: 'none' }}
             >
                 {segment || ZERO_WIDTH_SPACE}
@@ -568,7 +574,7 @@ function RecordMentionTextarea({
                     data-mention-handle={handle}
                     tabIndex={-1}
                     style={{ pointerEvents: 'auto' }}
-                    className="mention-pill inline-flex items-center gap-1 rounded-full border border-orange-200 bg-orange-50 px-2 py-0.5 text-xs font-semibold text-orange-700 shadow-sm transition-colors hover:bg-orange-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500"
+                    className="mention-pill pointer-events-auto inline-flex max-w-full items-center gap-1 rounded-full border border-orange-200 bg-orange-50 px-2 py-0.5 text-xs font-semibold text-orange-700 shadow-sm transition-colors hover:bg-orange-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500"
                     onMouseDown={event => {
                         openContextMenuFromEvent(event, handle, metadata, {
                             onAfterOpen: () => {
@@ -576,9 +582,10 @@ function RecordMentionTextarea({
                             },
                         });
                     }}
+                    aria-label={metadata?.displayName ? `Mention: ${metadata.displayName}` : `Mention handle ${handle}`}
                     title={metadata?.displayName ? `${metadata.displayName} (@${handle})` : `@${handle}`}
                 >
-                    <span>{displayLabel}</span>
+                    <span className="truncate">{displayLabel}</span>
                     {badgeLabel && (
                         <span className="rounded-full bg-orange-100 px-1 text-[10px] font-semibold uppercase tracking-wide text-orange-600">
                             {badgeLabel}
@@ -594,7 +601,7 @@ function RecordMentionTextarea({
                 </span>
             )
             : (
-                <span className="text-transparent" style={{ pointerEvents: 'none' }}>
+                <span className="text-sm text-slate-700" style={{ pointerEvents: 'none' }}>
                     {ZERO_WIDTH_SPACE}
                 </span>
             ),
@@ -612,8 +619,8 @@ function RecordMentionTextarea({
             <div className="relative">
                 <div
                     ref={overlayRef}
-                    className={`absolute inset-0 whitespace-pre-wrap break-words rounded-md px-3 py-2 text-sm text-transparent transition duration-150 ${overlayStateClasses} ${overlayFocusClasses} selection:bg-orange-200 selection:text-inherit`}
-                    style={{ pointerEvents: 'auto' }}
+                    className={`pointer-events-none absolute inset-0 z-20 whitespace-pre-wrap break-words rounded-md px-3 py-2 text-sm transition duration-150 ${overlayStateClasses} ${overlayFocusClasses} selection:bg-orange-200 selection:text-inherit`}
+                    aria-hidden="true"
                 >
                     {highlightNodes}
                 </div>
@@ -627,7 +634,7 @@ function RecordMentionTextarea({
                     placeholder={placeholder}
                     disabled={disabled}
                     rows={rows}
-                    className="relative z-10 block w-full resize-none rounded-md border border-transparent bg-transparent px-3 py-2 text-sm text-slate-700 focus:border-transparent focus:outline-none focus:ring-0 disabled:cursor-not-allowed disabled:text-slate-500"
+                    className="relative z-10 block w-full resize-none rounded-md border border-transparent bg-transparent px-3 py-2 text-sm text-transparent caret-orange-600 selection:bg-orange-200 selection:text-orange-900 focus:border-transparent focus:outline-none focus:ring-0 disabled:cursor-not-allowed disabled:text-transparent disabled:caret-transparent"
                 />
                 {isOpen && (
                     <div className="absolute bottom-full left-0 right-0 z-30 mb-2">
@@ -724,11 +731,13 @@ function RecordMentionText({
                     key={`mention-${start}-${handle}`}
                     type="button"
                     data-mention-handle={handle}
-                    className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-sm font-medium text-slate-700 transition-colors hover:bg-orange-50 hover:text-orange-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500"
+                    className="pointer-events-auto inline-flex max-w-full items-center gap-1 rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-sm font-medium text-slate-700 transition-colors hover:bg-orange-50 hover:text-orange-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500"
                     style={{ pointerEvents: 'auto' }}
                     onClick={event => openContextMenuFromEvent(event, handle, metadata)}
+                    aria-label={metadata?.displayName ? `Mention: ${metadata.displayName}` : `Mention handle ${handle}`}
+                    title={metadata?.displayName ? `${metadata.displayName} (@${handle})` : `@${handle}`}
                 >
-                    <span>{displayLabel}</span>
+                    <span className="truncate">{displayLabel}</span>
                     {badgeLabel && (
                         <span className="rounded-full bg-slate-200 px-1 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
                             {badgeLabel}
