@@ -870,16 +870,6 @@ const formatContactAddress = (address, city, state, zip) => {
             const [itemsIndex, setItemsIndex] = useState({});
             const [branding, setBranding] = useState({});
 
-            const accentHex = useMemo(() => {
-                const rawColor = typeof branding?.invoice_brand_color === 'string' ? branding.invoice_brand_color.trim() : '';
-                return /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(rawColor) ? rawColor : null;
-            }, [branding?.invoice_brand_color]);
-            const accentRgbValue = useMemo(() => (accentHex ? hexToRgb(accentHex) : null), [accentHex]);
-            const isAccentDark = useMemo(() => isRgbColorDark(accentRgbValue), [accentRgbValue]);
-            const lineItemsHeaderTextClass = accentHex ? (isAccentDark ? 'text-white' : 'text-slate-900') : 'text-slate-700';
-            const lineItemsHeaderBgClass = accentHex ? '' : 'bg-slate-100';
-            const lineItemsHeaderStyle = accentHex ? { backgroundColor: accentHex } : undefined;
-
             const fetchOrder = async () => {
                 try {
                     const response = await fetch(`/api/orders/${orderId}`);
@@ -1124,7 +1114,7 @@ const formatContactAddress = (address, city, state, zip) => {
                             <div className="p-6 border-b"><h2 className="text-xl font-semibold text-slate-700">Line Items</h2></div>
                             <div className="overflow-x-auto">
                                 <table className="w-full text-sm text-left text-slate-500">
-                                    <thead className={`text-xs uppercase ${lineItemsHeaderTextClass} ${lineItemsHeaderBgClass}`} style={lineItemsHeaderStyle}>
+                                    <thead className="text-xs uppercase text-slate-700 bg-slate-100">
                                         <tr>
                                             <th scope="col" className="px-4 py-3">Name</th>
                                             <th scope="col" className="px-4 py-3">Description</th>
