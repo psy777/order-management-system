@@ -182,6 +182,7 @@ def init_db():
             shipping_city TEXT,
             shipping_state TEXT,
             shipping_zip_code TEXT,
+            details_json TEXT,
             handle TEXT UNIQUE,
             notes TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -196,6 +197,8 @@ def init_db():
         cursor.execute("ALTER TABLE contacts ADD COLUMN handle TEXT")
     if 'notes' not in contact_columns:
         cursor.execute("ALTER TABLE contacts ADD COLUMN notes TEXT")
+    if 'details_json' not in contact_columns:
+        cursor.execute("ALTER TABLE contacts ADD COLUMN details_json TEXT")
 
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_handle ON contacts(handle)")
     cursor.execute("CREATE TRIGGER IF NOT EXISTS update_contacts_updated_at AFTER UPDATE ON contacts FOR EACH ROW BEGIN UPDATE contacts SET updated_at = CURRENT_TIMESTAMP WHERE id = OLD.id; END;")
@@ -404,7 +407,18 @@ def init_db():
     if 'discount_total' not in order_columns and 'orders' in existing_tables:
         cursor.execute("ALTER TABLE orders ADD COLUMN discount_total REAL DEFAULT 0")
 
-    cursor.execute("CREATE TABLE IF NOT EXISTS orders (order_id TEXT PRIMARY KEY NOT NULL, display_id TEXT UNIQUE, contact_id TEXT, order_date TEXT, status TEXT, notes TEXT, estimated_shipping_date TEXT, shipping_address TEXT, shipping_city TEXT, shipping_state TEXT, shipping_zip_code TEXT, estimated_shipping_cost REAL, tax_amount REAL, discounts_json TEXT, discount_total REAL, signature_data_url TEXT, total_amount REAL, title TEXT, priority_level TEXT, fulfillment_channel TEXT, customer_reference TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (contact_id) REFERENCES contacts (id) ON DELETE SET NULL);")
+    cursor.execute("CREATE TABLE IF NOT EXISTS orders (order_id TEXT PRIMARY KEY NOT NULL, display_id TEXT UNIQUE, contact_id TEXT, order_date TEXT, status TEXT, notes TEXT, estimated_shipping_date TEXT, shipping_address TEXT, shipping_city TEXT, shipping_state TEXT, shipping_zip_code TEXT, billing_address TEXT, billing_city TEXT, billing_state TEXT, billing_zip_code TEXT, estimated_shipping_cost REAL, tax_amount REAL, discounts_json TEXT, discount_total REAL, signature_data_url TEXT, total_amount REAL, title TEXT, priority_level TEXT, fulfillment_channel TEXT, customer_reference TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (contact_id) REFERENCES contacts (id) ON DELETE SET NULL);")
+
+    cursor.execute("PRAGMA table_info(orders)")
+    order_columns = {row[1] for row in cursor.fetchall()}
+    if 'billing_address' not in order_columns:
+        cursor.execute("ALTER TABLE orders ADD COLUMN billing_address TEXT")
+    if 'billing_city' not in order_columns:
+        cursor.execute("ALTER TABLE orders ADD COLUMN billing_city TEXT")
+    if 'billing_state' not in order_columns:
+        cursor.execute("ALTER TABLE orders ADD COLUMN billing_state TEXT")
+    if 'billing_zip_code' not in order_columns:
+        cursor.execute("ALTER TABLE orders ADD COLUMN billing_zip_code TEXT")
     cursor.execute("CREATE TRIGGER IF NOT EXISTS update_orders_updated_at AFTER UPDATE ON orders FOR EACH ROW BEGIN UPDATE orders SET updated_at = CURRENT_TIMESTAMP WHERE order_id = OLD.order_id; END;")
     cursor.execute("PRAGMA table_info(order_line_items)")
     order_line_item_columns = [row[1] for row in cursor.fetchall()]

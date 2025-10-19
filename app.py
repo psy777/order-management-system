@@ -103,6 +103,289 @@ def read_password_entries():
 
 def write_password_entries(entries):
     write_json_file(PASSWORDS_FILE, {"entries": entries})
+PHONE_CLEAN_RE = re.compile(r"\D+")
+
+
+def _normalize_phone_digits(value):
+    if value in (None, ""):
+        return ""
+    if isinstance(value, (int, float)):
+        value = str(int(value))
+    digits = PHONE_CLEAN_RE.sub("", str(value))
+    return digits[:20]
+
+
+def _ensure_primary(entries):
+    for entry in entries:
+        if entry.get("isPrimary"):
+            return entries
+    if entries:
+        entries[0]["isPrimary"] = True
+    return entries
+
+
+def _infer_address_kind(kind_value, label_value):
+    text = (kind_value or "").strip().lower()
+    label_text = (label_value or "").strip().lower()
+    if "ship" in text or "ship" in label_text:
+        return "shipping"
+    if "bill" in text or "bill" in label_text:
+        return "billing"
+    return "other"
+
+
+def _sanitize_email_entries(entries):
+    sanitized = []
+    seen = set()
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        raw_value = entry.get("value") or entry.get("email")
+        if raw_value in (None, ""):
+            continue
+        value = str(raw_value).strip()
+        if not value:
+            continue
+        lower = value.lower()
+        if lower in seen:
+            continue
+        seen.add(lower)
+        sanitized.append({
+            "id": str(entry.get("id") or uuid.uuid4()),
+            "label": (entry.get("label") or "Email").strip() or "Email",
+            "value": value,
+            "isPrimary": bool(entry.get("isPrimary")),
+        })
+    return _ensure_primary(sanitized)
+
+
+def _sanitize_phone_entries(entries):
+    sanitized = []
+    seen = set()
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        raw_value = entry.get("value") or entry.get("phone") or entry.get("number")
+        digits = _normalize_phone_digits(raw_value)
+        if not digits or digits in seen:
+            continue
+        seen.add(digits)
+        sanitized.append({
+            "id": str(entry.get("id") or uuid.uuid4()),
+            "label": (entry.get("label") or "Phone").strip() or "Phone",
+            "value": digits,
+            "isPrimary": bool(entry.get("isPrimary")),
+        })
+    return _ensure_primary(sanitized)
+
+
+def _sanitize_address_entries(entries):
+    sanitized = []
+    seen = set()
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        street = (entry.get("street") or entry.get("address") or entry.get("addressLine1") or "").strip()
+        city = (entry.get("city") or "").strip()
+        state = (entry.get("state") or "").strip()
+        postal = (entry.get("postalCode") or entry.get("zip") or entry.get("zipCode") or "").strip()
+        if not any([street, city, state, postal]):
+            continue
+        label = (entry.get("label") or "").strip()
+        kind = _infer_address_kind(entry.get("kind"), label)
+        if not label:
+            label = "Shipping Address" if kind == "shipping" else "Billing Address" if kind == "billing" else "Address"
+        key = (kind, street.lower(), city.lower(), state.lower(), postal.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        sanitized.append({
+            "id": str(entry.get("id") or uuid.uuid4()),
+            "label": label,
+            "kind": kind,
+            "street": street,
+            "city": city,
+            "state": state,
+            "postalCode": postal,
+            "isPrimary": bool(entry.get("isPrimary")),
+        })
+    if sanitized:
+        # Ensure at least one address is marked primary, preferring shipping and billing entries
+        kind_order = ["shipping", "billing"]
+        if not any(addr.get("isPrimary") for addr in sanitized):
+            for preferred_kind in kind_order:
+                for addr in sanitized:
+                    if addr["kind"] == preferred_kind:
+                        addr["isPrimary"] = True
+                        return sanitized
+            sanitized[0]["isPrimary"] = True
+    return sanitized
+
+
+def _prepare_contact_details_for_storage(payload, *, force=False):
+    details_source = payload.get("contactDetails") or {}
+    raw_addresses = []
+    raw_emails = []
+    raw_phones = []
+
+    if isinstance(details_source, dict):
+        raw_addresses.extend(details_source.get("addresses") or [])
+        raw_emails.extend(details_source.get("emails") or [])
+        raw_phones.extend(details_source.get("phones") or [])
+
+    if isinstance(payload.get("addresses"), list):
+        raw_addresses.extend(payload.get("addresses") or [])
+    if isinstance(payload.get("emails"), list):
+        raw_emails.extend(payload.get("emails") or [])
+    if isinstance(payload.get("phones"), list):
+        raw_phones.extend(payload.get("phones") or [])
+
+    if any(key in payload for key in ("shippingAddress", "shippingCity", "shippingState", "shippingZipCode")):
+        raw_addresses.append({
+            "id": payload.get("shippingAddressId"),
+            "label": "Shipping Address",
+            "kind": "shipping",
+            "street": payload.get("shippingAddress", ""),
+            "city": payload.get("shippingCity", ""),
+            "state": payload.get("shippingState", ""),
+            "postalCode": payload.get("shippingZipCode", ""),
+            "isPrimary": True,
+        })
+    if any(key in payload for key in ("billingAddress", "billingCity", "billingState", "billingZipCode")):
+        raw_addresses.append({
+            "id": payload.get("billingAddressId"),
+            "label": "Billing Address",
+            "kind": "billing",
+            "street": payload.get("billingAddress", ""),
+            "city": payload.get("billingCity", ""),
+            "state": payload.get("billingState", ""),
+            "postalCode": payload.get("billingZipCode", ""),
+            "isPrimary": True,
+        })
+
+    if "email" in payload:
+        raw_emails.append({"value": payload.get("email"), "label": "Email", "isPrimary": True})
+    if "phone" in payload:
+        raw_phones.append({"value": payload.get("phone"), "label": "Phone", "isPrimary": True})
+
+    addresses = _sanitize_address_entries(raw_addresses)
+    emails = _sanitize_email_entries(raw_emails)
+    phones = _sanitize_phone_entries(raw_phones)
+
+    shipping_entry = next((addr for addr in addresses if addr["kind"] == "shipping"), None)
+    billing_entry = next((addr for addr in addresses if addr["kind"] == "billing"), None)
+    primary_email = emails[0]["value"] if emails else ""
+    primary_phone = phones[0]["value"] if phones else ""
+
+    if force or addresses or emails or phones:
+        details = {
+            "addresses": addresses,
+            "emails": emails,
+            "phones": phones,
+        }
+    else:
+        details = {"addresses": [], "emails": [], "phones": []}
+
+    return {
+        "details": details,
+        "primary_email": primary_email,
+        "primary_phone": primary_phone,
+        "shipping": shipping_entry,
+        "billing": billing_entry,
+        "had_addresses": bool(raw_addresses),
+        "had_emails": bool(raw_emails),
+        "had_phones": bool(raw_phones),
+    }
+
+
+def _deserialize_contact_details(contact_dict, raw_details):
+    parsed = {}
+    if isinstance(raw_details, str) and raw_details.strip():
+        try:
+            parsed = json.loads(raw_details)
+        except json.JSONDecodeError:
+            parsed = {}
+    elif isinstance(raw_details, dict):
+        parsed = raw_details
+
+    addresses = _sanitize_address_entries(parsed.get("addresses", []))
+    emails = _sanitize_email_entries(parsed.get("emails", []))
+    phones = _sanitize_phone_entries(parsed.get("phones", []))
+
+    def _has_address_kind(kind):
+        return any(addr["kind"] == kind for addr in addresses)
+
+    shipping_fields = (
+        contact_dict.get("shippingAddress"),
+        contact_dict.get("shippingCity"),
+        contact_dict.get("shippingState"),
+        contact_dict.get("shippingZipCode"),
+    )
+    if any(field for field in shipping_fields) and not _has_address_kind("shipping"):
+        addresses.append({
+            "id": str(uuid.uuid4()),
+            "label": "Shipping Address",
+            "kind": "shipping",
+            "street": contact_dict.get("shippingAddress", "") or "",
+            "city": contact_dict.get("shippingCity", "") or "",
+            "state": contact_dict.get("shippingState", "") or "",
+            "postalCode": contact_dict.get("shippingZipCode", "") or "",
+            "isPrimary": not _has_address_kind("shipping"),
+        })
+
+    billing_fields = (
+        contact_dict.get("billingAddress"),
+        contact_dict.get("billingCity"),
+        contact_dict.get("billingState"),
+        contact_dict.get("billingZipCode"),
+    )
+    if any(field for field in billing_fields) and not _has_address_kind("billing"):
+        addresses.append({
+            "id": str(uuid.uuid4()),
+            "label": "Billing Address",
+            "kind": "billing",
+            "street": contact_dict.get("billingAddress", "") or "",
+            "city": contact_dict.get("billingCity", "") or "",
+            "state": contact_dict.get("billingState", "") or "",
+            "postalCode": contact_dict.get("billingZipCode", "") or "",
+            "isPrimary": not _has_address_kind("billing"),
+        })
+
+    fallback_email = (contact_dict.get("email") or "").strip()
+    if fallback_email and not any((entry.get("value") or "").lower() == fallback_email.lower() for entry in emails):
+        emails.append({
+            "id": str(uuid.uuid4()),
+            "label": "Email",
+            "value": fallback_email,
+            "isPrimary": not emails,
+        })
+
+    fallback_phone = _normalize_phone_digits(contact_dict.get("phone"))
+    if fallback_phone and not any(entry.get("value") == fallback_phone for entry in phones):
+        phones.append({
+            "id": str(uuid.uuid4()),
+            "label": "Phone",
+            "value": fallback_phone,
+            "isPrimary": not phones,
+        })
+
+    _ensure_primary(emails)
+    _ensure_primary(phones)
+    if addresses:
+        for preferred_kind in ("shipping", "billing"):
+            candidates = [addr for addr in addresses if addr["kind"] == preferred_kind]
+            if candidates and not any(addr.get("isPrimary") for addr in candidates):
+                candidates[0]["isPrimary"] = True
+        if not any(addr.get("isPrimary") for addr in addresses):
+            addresses[0]["isPrimary"] = True
+
+    return {
+        "addresses": addresses,
+        "emails": emails,
+        "phones": phones,
+    }
+
+
 def serialize_contact_row(row):
     if row is None:
         return None
@@ -128,6 +411,31 @@ def serialize_contact_row(row):
         contact["createdAt"] = row["created_at"]
     if "updated_at" in keys:
         contact["updatedAt"] = row["updated_at"]
+
+    raw_details = row["details_json"] if "details_json" in keys else None
+    contact_details = _deserialize_contact_details(contact, raw_details)
+    contact["contactDetails"] = contact_details
+
+    primary_email = contact_details["emails"][0]["value"] if contact_details["emails"] else contact.get("email") or ""
+    primary_phone = contact_details["phones"][0]["value"] if contact_details["phones"] else contact.get("phone") or ""
+
+    contact["email"] = primary_email
+    contact["phone"] = primary_phone
+
+    shipping_entry = next((addr for addr in contact_details["addresses"] if addr["kind"] == "shipping"), None)
+    billing_entry = next((addr for addr in contact_details["addresses"] if addr["kind"] == "billing"), None)
+
+    if shipping_entry:
+        contact["shippingAddress"] = shipping_entry["street"]
+        contact["shippingCity"] = shipping_entry["city"]
+        contact["shippingState"] = shipping_entry["state"]
+        contact["shippingZipCode"] = shipping_entry["postalCode"]
+    if billing_entry:
+        contact["billingAddress"] = billing_entry["street"]
+        contact["billingCity"] = billing_entry["city"]
+        contact["billingState"] = billing_entry["state"]
+        contact["billingZipCode"] = billing_entry["postalCode"]
+
     return contact
 
 
@@ -277,6 +585,27 @@ def serialize_order(cursor, order_row, user_timezone, include_logs=False):
         "handle": order_dict.pop('contact_handle', None),
         "notes": order_dict.pop('contact_notes', None),
     }
+    contact_details_raw = order_dict.pop('contact_details_json', None)
+    contact_details = _deserialize_contact_details(contact_snapshot, contact_details_raw)
+    contact_snapshot['contactDetails'] = contact_details
+
+    if contact_details['emails']:
+        contact_snapshot['email'] = contact_details['emails'][0]['value']
+    if contact_details['phones']:
+        contact_snapshot['phone'] = contact_details['phones'][0]['value']
+
+    shipping_entry = next((addr for addr in contact_details['addresses'] if addr['kind'] == 'shipping'), None)
+    if shipping_entry:
+        contact_snapshot['shippingAddress'] = shipping_entry['street']
+        contact_snapshot['shippingCity'] = shipping_entry['city']
+        contact_snapshot['shippingState'] = shipping_entry['state']
+        contact_snapshot['shippingZipCode'] = shipping_entry['postalCode']
+    billing_entry = next((addr for addr in contact_details['addresses'] if addr['kind'] == 'billing'), None)
+    if billing_entry:
+        contact_snapshot['billingAddress'] = billing_entry['street']
+        contact_snapshot['billingCity'] = billing_entry['city']
+        contact_snapshot['billingState'] = billing_entry['state']
+        contact_snapshot['billingZipCode'] = billing_entry['postalCode']
 
     if not contact_snapshot['id']:
         contact_snapshot = {
@@ -295,6 +624,7 @@ def serialize_order(cursor, order_row, user_timezone, include_logs=False):
             "shippingZipCode": "",
             "handle": None,
             "notes": "",
+            "contactDetails": {"addresses": [], "emails": [], "phones": []},
         }
 
     order_id = order_dict['order_id']
@@ -412,6 +742,10 @@ def serialize_order(cursor, order_row, user_timezone, include_logs=False):
     order_dict['shippingCity'] = order_dict.pop('shipping_city', '')
     order_dict['shippingState'] = order_dict.pop('shipping_state', '')
     order_dict['shippingZipCode'] = order_dict.pop('shipping_zip_code', '')
+    order_dict['billingAddress'] = order_dict.pop('billing_address', '')
+    order_dict['billingCity'] = order_dict.pop('billing_city', '')
+    order_dict['billingState'] = order_dict.pop('billing_state', '')
+    order_dict['billingZipCode'] = order_dict.pop('billing_zip_code', '')
     order_dict['signatureDataUrl'] = order_dict.pop('signature_data_url')
 
     if include_logs:
@@ -453,16 +787,24 @@ def update_or_create_contact(cursor, contact_info_payload):
     if not company_name and not contact_name:
         return provided_id
 
-    email = contact_info_payload.get("email", "")
-    phone = contact_info_payload.get("phone", "")
-    billing_address = contact_info_payload.get("billingAddress", "")
-    billing_city = contact_info_payload.get("billingCity", "")
-    billing_state = contact_info_payload.get("billingState", "")
-    billing_zip_code = contact_info_payload.get("billingZipCode", "")
-    shipping_address = contact_info_payload.get("shippingAddress", "")
-    shipping_city = contact_info_payload.get("shippingCity", "")
-    shipping_state = contact_info_payload.get("shippingState", "")
-    shipping_zip_code = contact_info_payload.get("shippingZipCode", "")
+    details_info = _prepare_contact_details_for_storage(contact_info_payload, force=True)
+    details_json_str = json.dumps(details_info['details'])
+
+    email = details_info['primary_email'] or contact_info_payload.get("email", "")
+    phone = details_info['primary_phone'] or _normalize_phone_digits(contact_info_payload.get("phone", ""))
+
+    shipping_entry = details_info['shipping']
+    billing_entry = details_info['billing']
+
+    shipping_address = (shipping_entry['street'] if shipping_entry else contact_info_payload.get("shippingAddress", ""))
+    shipping_city = (shipping_entry['city'] if shipping_entry else contact_info_payload.get("shippingCity", ""))
+    shipping_state = (shipping_entry['state'] if shipping_entry else contact_info_payload.get("shippingState", ""))
+    shipping_zip_code = (shipping_entry['postalCode'] if shipping_entry else contact_info_payload.get("shippingZipCode", ""))
+
+    billing_address = (billing_entry['street'] if billing_entry else contact_info_payload.get("billingAddress", ""))
+    billing_city = (billing_entry['city'] if billing_entry else contact_info_payload.get("billingCity", ""))
+    billing_state = (billing_entry['state'] if billing_entry else contact_info_payload.get("billingState", ""))
+    billing_zip_code = (billing_entry['postalCode'] if billing_entry else contact_info_payload.get("billingZipCode", ""))
     notes = contact_info_payload.get("notes")
     provided_handle = contact_info_payload.get("handle")
     if provided_handle:
@@ -471,19 +813,19 @@ def update_or_create_contact(cursor, contact_info_payload):
     final_contact_id = provided_id
     if provided_id:
         field_values = [company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code,
-                        shipping_address, shipping_city, shipping_state, shipping_zip_code, provided_id]
+                        shipping_address, shipping_city, shipping_state, shipping_zip_code, details_json_str, provided_id]
         cursor.execute(
             "UPDATE contacts SET company_name = ?, contact_name = ?, email = ?, phone = ?, billing_address = ?, billing_city = ?, "
-            "billing_state = ?, billing_zip_code = ?, shipping_address = ?, shipping_city = ?, shipping_state = ?, shipping_zip_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            "billing_state = ?, billing_zip_code = ?, shipping_address = ?, shipping_city = ?, shipping_state = ?, shipping_zip_code = ?, details_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             tuple(field_values)
         )
         if cursor.rowcount == 0:
             final_contact_id = str(uuid.uuid4())
             cursor.execute(
                 "INSERT INTO contacts (id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, "
-                "billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, details_json, handle, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (final_contact_id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state,
-                 billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code,
+                 billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, details_json_str,
                  provided_handle or generate_unique_contact_handle(cursor, contact_name or company_name), notes)
             )
         else:
@@ -496,10 +838,10 @@ def update_or_create_contact(cursor, contact_info_payload):
         final_contact_id = str(uuid.uuid4())
         handle_to_use = provided_handle or generate_unique_contact_handle(cursor, contact_name or company_name)
         cursor.execute(
-            "INSERT INTO contacts (id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO contacts (id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, details_json, handle, notes) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (final_contact_id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state,
-             billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle_to_use, notes)
+             billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, details_json_str, handle_to_use, notes)
         )
     ensured_handle = ensure_contact_handle(cursor, final_contact_id, contact_name or company_name)
     if ensured_handle:
@@ -526,11 +868,62 @@ def update_or_create_contact(cursor, contact_info_payload):
 
 
 def update_contact_by_id(cursor, contact_id, contact_data_payload):
-    field_mappings = {
+    if not contact_data_payload:
+        cursor.execute(
+            "SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, details_json, handle, notes, created_at, updated_at FROM contacts WHERE id = ?",
+            (contact_id,),
+        )
+        cv = cursor.fetchone()
+        return serialize_contact_row(cv) if cv else None
+
+    column_updates = {}
+
+    basic_mappings = {
         "companyName": "company_name",
         "contactName": "contact_name",
-        "email": "email",
-        "phone": "phone",
+        "notes": "notes",
+        "handle": "handle",
+    }
+    for payload_key, column_name in basic_mappings.items():
+        if payload_key in contact_data_payload:
+            value = contact_data_payload[payload_key]
+            if payload_key == "handle" and value:
+                value = value.lower().lstrip('@')
+            column_updates[column_name] = value
+
+    detail_related_keys = {
+        "contactDetails", "addresses", "emails", "phones",
+        "email", "phone",
+        "billingAddress", "billingCity", "billingState", "billingZipCode",
+        "shippingAddress", "shippingCity", "shippingState", "shippingZipCode",
+    }
+
+    should_update_details = any(key in contact_data_payload for key in detail_related_keys)
+    details_info = None
+    if should_update_details:
+        details_info = _prepare_contact_details_for_storage(contact_data_payload, force=True)
+        column_updates["details_json"] = json.dumps(details_info['details'])
+
+        if any(key in contact_data_payload for key in ("email", "contactDetails", "emails")):
+            column_updates["email"] = details_info['primary_email']
+        if any(key in contact_data_payload for key in ("phone", "contactDetails", "phones")):
+            column_updates["phone"] = details_info['primary_phone']
+
+        if any(key in contact_data_payload for key in ("shippingAddress", "shippingCity", "shippingState", "shippingZipCode", "contactDetails", "addresses")):
+            shipping_entry = details_info['shipping']
+            column_updates["shipping_address"] = shipping_entry['street'] if shipping_entry else ''
+            column_updates["shipping_city"] = shipping_entry['city'] if shipping_entry else ''
+            column_updates["shipping_state"] = shipping_entry['state'] if shipping_entry else ''
+            column_updates["shipping_zip_code"] = shipping_entry['postalCode'] if shipping_entry else ''
+
+        if any(key in contact_data_payload for key in ("billingAddress", "billingCity", "billingState", "billingZipCode", "contactDetails", "addresses")):
+            billing_entry = details_info['billing']
+            column_updates["billing_address"] = billing_entry['street'] if billing_entry else ''
+            column_updates["billing_city"] = billing_entry['city'] if billing_entry else ''
+            column_updates["billing_state"] = billing_entry['state'] if billing_entry else ''
+            column_updates["billing_zip_code"] = billing_entry['postalCode'] if billing_entry else ''
+
+    direct_mappings = {
         "billingAddress": "billing_address",
         "billingCity": "billing_city",
         "billingState": "billing_state",
@@ -539,27 +932,36 @@ def update_contact_by_id(cursor, contact_id, contact_data_payload):
         "shippingCity": "shipping_city",
         "shippingState": "shipping_state",
         "shippingZipCode": "shipping_zip_code",
-        "notes": "notes",
-        "handle": "handle",
+        "email": "email",
+        "phone": "phone",
     }
-    fields_to_update, values_to_update = [], []
-    for pk, dn in field_mappings.items():
-        if pk in contact_data_payload:
-            value = contact_data_payload[pk]
-            if pk == 'handle' and value:
-                value = value.lower().lstrip('@')
-            fields_to_update.append(f"{dn} = ?")
-            values_to_update.append(value)
-    if not fields_to_update:
-        cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes, created_at, updated_at FROM contacts WHERE id = ?", (contact_id,))
+    for payload_key, column_name in direct_mappings.items():
+        if payload_key in contact_data_payload and column_name not in column_updates:
+            value = contact_data_payload[payload_key]
+            if payload_key == "phone":
+                value = _normalize_phone_digits(value)
+            column_updates[column_name] = value
+
+    if not column_updates:
+        cursor.execute(
+            "SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, details_json, handle, notes, created_at, updated_at FROM contacts WHERE id = ?",
+            (contact_id,),
+        )
         cv = cursor.fetchone()
         return serialize_contact_row(cv) if cv else None
-    sql_query = f"UPDATE contacts SET {', '.join(fields_to_update)}, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-    values_to_update.append(contact_id)
+
+    set_clause = ", ".join(f"{column} = ?" for column in column_updates)
+    values = list(column_updates.values())
+    values.append(contact_id)
+
     try:
-        cursor.execute(sql_query, tuple(values_to_update))
+        cursor.execute(
+            f"UPDATE contacts SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            tuple(values)
+        )
         if cursor.rowcount == 0:
             return None
+
         ensured_handle = ensure_contact_handle(cursor, contact_id)
         if ensured_handle:
             service = get_record_service()
@@ -568,13 +970,9 @@ def update_contact_by_id(cursor, contact_id, contact_data_payload):
                 (contact_id,),
             )
             display_row = cursor.fetchone()
-            contact_name_val = None
-            company_name_val = None
-            email_val = None
-            if display_row:
-                contact_name_val = display_row['contact_name'] if isinstance(display_row, sqlite3.Row) else display_row[0]
-                company_name_val = display_row['company_name'] if isinstance(display_row, sqlite3.Row) else display_row[1]
-                email_val = display_row['email'] if isinstance(display_row, sqlite3.Row) else display_row[2]
+            contact_name_val = display_row['contact_name'] if display_row else None
+            company_name_val = display_row['company_name'] if display_row else None
+            email_val = display_row['email'] if display_row else None
             display_value = (contact_name_val or company_name_val or ensured_handle)
             search_blob = ' '.join(filter(None, [contact_name_val, company_name_val, email_val, ensured_handle])).lower()
             service.register_handle(
@@ -585,11 +983,15 @@ def update_contact_by_id(cursor, contact_id, contact_data_payload):
                 display_name=display_value,
                 search_blob=search_blob,
             )
-        cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes, created_at, updated_at FROM contacts WHERE id = ?", (contact_id,))
-        uvd = cursor.fetchone()
-        if not uvd:
+
+        cursor.execute(
+            "SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, details_json, handle, notes, created_at, updated_at FROM contacts WHERE id = ?",
+            (contact_id,),
+        )
+        updated_row = cursor.fetchone()
+        if not updated_row:
             return None
-        updated_contact = serialize_contact_row(uvd)
+        updated_contact = serialize_contact_row(updated_row)
         if 'notes' in contact_data_payload:
             sync_record_mentions(cursor.connection, extract_mentions(updated_contact.get('notes')), 'contact_profile_note', f'note:{contact_id}', updated_contact.get('notes'))
         return updated_contact
@@ -636,7 +1038,7 @@ def get_orders():
     user_timezone_str = settings.get('timezone', 'UTC')
     user_timezone = pytz.timezone(user_timezone_str)
 
-    cursor.execute("SELECT o.*, v.company_name as contact_company_name, v.contact_name as contact_contact_name, v.email as contact_email, v.phone as contact_phone, v.billing_address as contact_billing_address, v.billing_city as contact_billing_city, v.billing_state as contact_billing_state, v.billing_zip_code as contact_billing_zip_code, v.shipping_address as contact_shipping_address, v.shipping_city as contact_shipping_city, v.shipping_state as contact_shipping_state, v.shipping_zip_code as contact_shipping_zip_code, v.handle as contact_handle, v.notes as contact_notes FROM orders o LEFT JOIN contacts v ON o.contact_id = v.id WHERE o.status != 'Deleted' ORDER BY o.order_date DESC, o.order_id DESC")
+    cursor.execute("SELECT o.*, v.company_name as contact_company_name, v.contact_name as contact_contact_name, v.email as contact_email, v.phone as contact_phone, v.billing_address as contact_billing_address, v.billing_city as contact_billing_city, v.billing_state as contact_billing_state, v.billing_zip_code as contact_billing_zip_code, v.shipping_address as contact_shipping_address, v.shipping_city as contact_shipping_city, v.shipping_state as contact_shipping_state, v.shipping_zip_code as contact_shipping_zip_code, v.details_json as contact_details_json, v.handle as contact_handle, v.notes as contact_notes FROM orders o LEFT JOIN contacts v ON o.contact_id = v.id WHERE o.status != 'Deleted' ORDER BY o.order_date DESC, o.order_id DESC")
     orders_from_db = cursor.fetchall()
     orders_payload = [serialize_order(cursor, row, user_timezone, include_logs=False) for row in orders_from_db]
     conn.close()
@@ -650,7 +1052,7 @@ def get_order(order_id):
     user_timezone_str = settings.get('timezone', 'UTC')
     user_timezone = pytz.timezone(user_timezone_str)
 
-    cursor.execute("SELECT o.*, v.company_name as contact_company_name, v.contact_name as contact_contact_name, v.email as contact_email, v.phone as contact_phone, v.billing_address as contact_billing_address, v.billing_city as contact_billing_city, v.billing_state as contact_billing_state, v.billing_zip_code as contact_billing_zip_code, v.shipping_address as contact_shipping_address, v.shipping_city as contact_shipping_city, v.shipping_state as contact_shipping_state, v.shipping_zip_code as contact_shipping_zip_code, v.handle as contact_handle, v.notes as contact_notes FROM orders o LEFT JOIN contacts v ON o.contact_id = v.id WHERE o.order_id = ?", (order_id,))
+    cursor.execute("SELECT o.*, v.company_name as contact_company_name, v.contact_name as contact_contact_name, v.email as contact_email, v.phone as contact_phone, v.billing_address as contact_billing_address, v.billing_city as contact_billing_city, v.billing_state as contact_billing_state, v.billing_zip_code as contact_billing_zip_code, v.shipping_address as contact_shipping_address, v.shipping_city as contact_shipping_city, v.shipping_state as contact_shipping_state, v.shipping_zip_code as contact_shipping_zip_code, v.details_json as contact_details_json, v.handle as contact_handle, v.notes as contact_notes FROM orders o LEFT JOIN contacts v ON o.contact_id = v.id WHERE o.order_id = ?", (order_id,))
     order_row = cursor.fetchone()
     if not order_row:
         conn.close()
@@ -1133,7 +1535,7 @@ def save_order():
 
         if current_order_id_for_db_ops:
             cursor.execute(
-                "UPDATE orders SET display_id=?, contact_id=?, order_date=?, status=?, notes=?, estimated_shipping_date=?, shipping_address=?, shipping_city=?, shipping_state=?, shipping_zip_code=?, estimated_shipping_cost=?, tax_amount=?, discounts_json=?, discount_total=?, signature_data_url=?, total_amount=?, title=?, priority_level=?, fulfillment_channel=?, customer_reference=?, updated_at=CURRENT_TIMESTAMP WHERE order_id=?",
+                "UPDATE orders SET display_id=?, contact_id=?, order_date=?, status=?, notes=?, estimated_shipping_date=?, shipping_address=?, shipping_city=?, shipping_state=?, shipping_zip_code=?, billing_address=?, billing_city=?, billing_state=?, billing_zip_code=?, estimated_shipping_cost=?, tax_amount=?, discounts_json=?, discount_total=?, signature_data_url=?, total_amount=?, title=?, priority_level=?, fulfillment_channel=?, customer_reference=?, updated_at=CURRENT_TIMESTAMP WHERE order_id=?",
                 (
                     display_id,
                     db_processed_contact_id,
@@ -1145,6 +1547,10 @@ def save_order():
                     new_order_payload.get('shippingCity'),
                     new_order_payload.get('shippingState'),
                     new_order_payload.get('shippingZipCode'),
+                    new_order_payload.get('billingAddress'),
+                    new_order_payload.get('billingCity'),
+                    new_order_payload.get('billingState'),
+                    new_order_payload.get('billingZipCode'),
                     estimated_shipping_cost_dollars,
                     tax_amount_dollars,
                     discounts_json_str,
@@ -1164,7 +1570,7 @@ def save_order():
             current_order_id_for_db_ops = f"ORD-{uuid.uuid4()}"
             new_order_payload['id'] = current_order_id_for_db_ops
             cursor.execute(
-                "INSERT INTO orders (order_id, display_id, contact_id, order_date, status, notes, estimated_shipping_date, shipping_address, shipping_city, shipping_state, shipping_zip_code, estimated_shipping_cost, tax_amount, discounts_json, discount_total, signature_data_url, total_amount, title, priority_level, fulfillment_channel, customer_reference) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO orders (order_id, display_id, contact_id, order_date, status, notes, estimated_shipping_date, shipping_address, shipping_city, shipping_state, shipping_zip_code, billing_address, billing_city, billing_state, billing_zip_code, estimated_shipping_cost, tax_amount, discounts_json, discount_total, signature_data_url, total_amount, title, priority_level, fulfillment_channel, customer_reference) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     current_order_id_for_db_ops,
                     display_id,
@@ -1177,6 +1583,10 @@ def save_order():
                     new_order_payload.get('shippingCity'),
                     new_order_payload.get('shippingState'),
                     new_order_payload.get('shippingZipCode'),
+                    new_order_payload.get('billingAddress'),
+                    new_order_payload.get('billingCity'),
+                    new_order_payload.get('billingState'),
+                    new_order_payload.get('billingZipCode'),
                     estimated_shipping_cost_dollars,
                     tax_amount_dollars,
                     discounts_json_str,
@@ -1287,7 +1697,7 @@ def save_order():
                        v.billing_state as contact_billing_state, v.billing_zip_code as contact_billing_zip_code,
                        v.shipping_address as contact_shipping_address, v.shipping_city as contact_shipping_city,
                        v.shipping_state as contact_shipping_state, v.shipping_zip_code as contact_shipping_zip_code,
-                       v.handle as contact_handle, v.notes as contact_notes
+                       v.details_json as contact_details_json, v.handle as contact_handle, v.notes as contact_notes
                 FROM orders o
                 LEFT JOIN contacts v ON o.contact_id = v.id
                 WHERE o.order_id = ?
@@ -1623,7 +2033,7 @@ def get_contacts():
     cursor.execute(
         """
         SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code,
-               shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes
+               shipping_address, shipping_city, shipping_state, shipping_zip_code, details_json, handle, notes
         FROM contacts
         ORDER BY
             CASE
@@ -1639,13 +2049,13 @@ def get_contacts():
 def api_get_contact(contact_id):
     conn = get_db_connection(); cursor = conn.cursor()
     try:
-        cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes, created_at, updated_at FROM contacts WHERE id=?", (contact_id,))
+        cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, details_json, handle, notes, created_at, updated_at FROM contacts WHERE id=?", (contact_id,))
         contact_row = cursor.fetchone()
         if not contact_row:
             conn.close();
             return jsonify({"message": "Contact not found."}), 404
         ensure_contact_handle(cursor, contact_id, contact_row['contact_name'] or contact_row['company_name'])
-        cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes, created_at, updated_at FROM contacts WHERE id=?", (contact_id,))
+        cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, details_json, handle, notes, created_at, updated_at FROM contacts WHERE id=?", (contact_id,))
         refreshed_row = cursor.fetchone()
         base_contact = serialize_contact_row(refreshed_row)
 
