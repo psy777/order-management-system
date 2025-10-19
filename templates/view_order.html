@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>View Order</title>
+    <title>Order</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -11,6 +11,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.23/jspdf.plugin.autotable.min.js"></script>
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
     <link rel="stylesheet" href="/assets/css/styles.css">
 </head>
 <body class="bg-slate-50 min-h-screen font-sans">
@@ -163,6 +164,18 @@ const parseCurrencyToNumber = (value) => {
 
 const centsToCurrency = (cents) => {
     return (Math.round(cents) / 100).toFixed(2);
+};
+
+const buildOrderDocumentTitle = (order) => {
+    if (!order || typeof order !== 'object') {
+        return 'Order';
+    }
+    const fallbackId = order?.display_id ?? order?.id ?? '';
+    const rawTitle = (order?.title ?? '').toString().trim();
+    if (rawTitle) {
+        return `Order ${rawTitle}`;
+    }
+    return fallbackId ? `Order ${fallbackId}` : 'Order';
 };
 
 const normalizeDiscountsForTotals = (discounts, lineItems) => {
@@ -741,6 +754,13 @@ const formatContactAddress = (address, city, state, zip) => {
             useEffect(() => {
                 fetchOrder();
             }, [orderId]);
+
+            useEffect(() => {
+                if (typeof document === 'undefined') {
+                    return;
+                }
+                document.title = buildOrderDocumentTitle(order);
+            }, [order]);
 
             useEffect(() => {
                 const fetchContactsAndItems = async () => {
