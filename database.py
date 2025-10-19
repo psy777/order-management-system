@@ -1,5 +1,4 @@
 import sqlite3
-import os
 import json
 import logging
 
@@ -7,14 +6,17 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-DATA_DIR = 'data'
-DATABASE_FILE = os.path.join(DATA_DIR, 'orders_manager.db')
+from data_paths import DATA_ROOT, ensure_data_root
+
+ensure_data_root()
+
+DATA_DIR = DATA_ROOT
+DATABASE_FILE = DATA_DIR / 'orders_manager.db'
 
 def get_db_connection():
     """Establishes a connection to the SQLite database."""
-    if not os.path.exists(DATA_DIR):
-        os.makedirs(DATA_DIR)
-    conn = sqlite3.connect(DATABASE_FILE, timeout=30.0, isolation_level='DEFERRED')
+    ensure_data_root()
+    conn = sqlite3.connect(str(DATABASE_FILE), timeout=30.0, isolation_level='DEFERRED')
     try:
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
