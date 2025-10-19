@@ -234,16 +234,21 @@ const ContactMentions = ({ mentions }) => {
 const ContactDetail = ({ contact, onSave, isSaving, onCancelCreate }) => {
     const createBlankEmail = () => ({ id: generateLocalId('email'), label: 'Email', value: '', isPrimary: false });
     const createBlankPhone = () => ({ id: generateLocalId('phone'), label: 'Phone', value: '', isPrimary: false });
-    const createBlankAddress = (kind = 'shipping') => ({
-        id: generateLocalId('addr'),
-        label: kind === 'billing' ? 'Billing Address' : kind === 'shipping' ? 'Shipping Address' : 'Address',
-        kind,
-        street: '',
-        city: '',
-        state: '',
-        postalCode: '',
-        isPrimary: kind !== 'other',
-    });
+    const createBlankAddress = (kind = 'other', options = {}) => {
+        const normalizedKind = ['shipping', 'billing', 'other'].includes(kind) ? kind : 'other';
+        const fallbackLabel = normalizedKind === 'shipping' ? 'Shipping Address' : normalizedKind === 'billing' ? 'Billing Address' : 'Address';
+        const { label, isPrimary = false } = options;
+        return {
+            id: generateLocalId('addr'),
+            label: label || fallbackLabel,
+            kind: normalizedKind,
+            street: '',
+            city: '',
+            state: '',
+            postalCode: '',
+            isPrimary,
+        };
+    };
 
     const normalizeEmails = (list = []) => {
         const normalized = (list || []).map(email => ({
@@ -293,26 +298,9 @@ const ContactDetail = ({ contact, onSave, isSaving, onCancelCreate }) => {
                 isPrimary: Boolean(address?.isPrimary),
             };
         });
-        const hasShipping = normalized.some(addr => addr.kind === 'shipping');
-        const hasBilling = normalized.some(addr => addr.kind === 'billing');
-        if (!hasShipping) {
-            normalized.unshift(createBlankAddress('shipping'));
-        }
-        if (!hasBilling) {
-            normalized.push(createBlankAddress('billing'));
-        }
         if (normalized.length === 0) {
-            normalized.push(createBlankAddress('shipping'));
-            normalized.push(createBlankAddress('billing'));
+            normalized.push(createBlankAddress('other', { isPrimary: true }));
         }
-        const ensureKindPrimary = (kind) => {
-            const matches = normalized.filter(addr => addr.kind === kind);
-            if (matches.length > 0 && !matches.some(addr => addr.isPrimary)) {
-                matches[0].isPrimary = true;
-            }
-        };
-        ensureKindPrimary('shipping');
-        ensureKindPrimary('billing');
         if (!normalized.some(addr => addr.isPrimary)) {
             normalized[0].isPrimary = true;
         }
@@ -402,19 +390,16 @@ const ContactDetail = ({ contact, onSave, isSaving, onCancelCreate }) => {
     const handleAddAddress = () => updateDetails('addresses', addresses => [...addresses, createBlankAddress('other')]);
     const handleRemoveAddress = (id) => {
         updateDetails('addresses', addresses => {
-            if (addresses.length <= 2) return addresses;
-            const target = addresses.find(address => address.id === id);
-            if (!target) return addresses;
+            if (addresses.length <= 1) return addresses;
             const remaining = addresses.filter(address => address.id !== id);
-            const ensureKind = (kind) => {
-                if (!remaining.some(address => address.kind === kind)) {
-                    remaining.push(createBlankAddress(kind));
-                }
-            };
-            if (target.kind === 'shipping' || target.kind === 'billing') {
-                ensureKind(target.kind);
+            if (remaining.length === addresses.length || remaining.length === 0) {
+                return addresses;
             }
-            return remaining.length ? remaining : addresses;
+            if (remaining.some(address => address.isPrimary)) {
+                return remaining;
+            }
+            const [first, ...rest] = remaining;
+            return [{ ...first, isPrimary: true }, ...rest];
         });
     };
     const handleSetPrimaryAddress = (id) => updateDetails('addresses', addresses => addresses.map(address => ({ ...address, isPrimary: address.id === id })));
@@ -818,7 +803,7 @@ const ContactDetail = ({ contact, onSave, isSaving, onCancelCreate }) => {
                                             type="button"
                                             onClick={() => handleRemoveAddress(address.id)}
                                             className="text-xs font-semibold text-red-500 hover:text-red-600"
-                                            disabled={formState.contactDetails.addresses.length <= 2}
+                                            disabled={formState.contactDetails.addresses.length <= 1}
                                         >
                                             Remove
                                         </button>

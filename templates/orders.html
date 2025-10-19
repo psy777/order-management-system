@@ -219,6 +219,27 @@ const contactHasSavedAddresses = (contact) => {
     return legacyFields.some(field => safeText(contact[field]));
 };
 
+const orderAddressesMatchContact = (contact, state) => {
+    if (!contactHasSavedAddresses(contact)) {
+        return false;
+    }
+
+    const shippingFromContact = pickContactAddress(contact, 'shipping');
+    const billingFromContact = pickContactAddress(contact, 'billing');
+    const orderShipping = extractAddressFields(state, 'shipping');
+    const orderBilling = extractAddressFields(state, 'billing');
+
+    const shippingMatches = hasAddressFields(shippingFromContact)
+        ? addressesAreEqual(orderShipping, shippingFromContact)
+        : !hasAddressFields(orderShipping);
+
+    const billingMatches = hasAddressFields(billingFromContact)
+        ? addressesAreEqual(orderBilling, billingFromContact)
+        : addressesAreEqual(orderBilling, orderShipping);
+
+    return shippingMatches && billingMatches;
+};
+
 const extractAddressFields = (state, prefix) => ({
     street: safeText(state[`${prefix}Address`]),
     city: safeText(state[`${prefix}City`]),
@@ -1968,7 +1989,7 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
             extractAddressFields(formData, 'billing')
         )
     );
-    const [useContactAddresses, setUseContactAddresses] = useState(() => contactHasSavedAddresses(primaryContactSummary));
+    const [useContactAddresses, setUseContactAddresses] = useState(() => orderAddressesMatchContact(primaryContactSummary, formData));
     const [lastSelectedContactId, setLastSelectedContactId] = useState(primaryContactId || '');
 
     useEffect(() => {
@@ -2068,7 +2089,7 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
                 extractAddressFields(nextForm, 'billing')
             )
         );
-        setUseContactAddresses(contactHasSavedAddresses(nextPrimaryContact));
+        setUseContactAddresses(orderAddressesMatchContact(nextPrimaryContact, nextForm));
         setLastSelectedContactId(nextPrimaryId || '');
     }, [order, startInEditMode]);
 
@@ -2586,6 +2607,7 @@ const unpackPackage = (id, pkgCode) => {
     const isDraft = formData.status === 'Draft';
     const canEdit = isEditing || isDraft;
     const contactHasAddresses = contactHasSavedAddresses(primaryContactSummary);
+    const addressesLocked = useContactAddresses && contactHasAddresses;
     const resolvedOrderLabel = formData.title || formData.display_id || formData.id || order?.id || 'New Order';
     const pageHeading = !order ? 'New Order' : (isEditing ? `Edit Order: ${resolvedOrderLabel}` : `Order Details: ${resolvedOrderLabel}`);
     
@@ -2607,8 +2629,7 @@ const unpackPackage = (id, pkgCode) => {
                         extractAddressFields(nextForm, 'billing')
                     )
                 );
-                const hasAddresses = contactHasSavedAddresses(nextPrimaryContact);
-                setUseContactAddresses(prev => (hasAddresses ? prev : false));
+                setUseContactAddresses(orderAddressesMatchContact(nextPrimaryContact, nextForm));
                 setLastSelectedContactId(nextPrimaryId || '');
             }
         } catch (error) {
@@ -2705,8 +2726,7 @@ const unpackPackage = (id, pkgCode) => {
                         extractAddressFields(nextForm, 'billing')
                     )
                 );
-                const hasAddresses = contactHasSavedAddresses(nextPrimaryContact);
-                setUseContactAddresses(prev => (hasAddresses ? prev : false));
+                setUseContactAddresses(orderAddressesMatchContact(nextPrimaryContact, nextForm));
                 setLastSelectedContactId(nextPrimaryId || '');
                 navigateTo('dashboard');
             }
@@ -2737,8 +2757,7 @@ const unpackPackage = (id, pkgCode) => {
                         extractAddressFields(nextForm, 'billing')
                     )
                 );
-                const hasAddresses = contactHasSavedAddresses(nextPrimaryContact);
-                setUseContactAddresses(prev => (hasAddresses ? prev : false));
+                setUseContactAddresses(orderAddressesMatchContact(nextPrimaryContact, nextForm));
                 setLastSelectedContactId(nextPrimaryId || '');
                 // Instead of direct mailto and navigate, trigger the EmailModal
                 // The EmailModal's onEmailClientOpened callback (passed from App component) will handle navigation.
@@ -2917,7 +2936,7 @@ const unpackPackage = (id, pkgCode) => {
                                             return next;
                                         });
                                     }}
-                                    disabled={!canEdit}
+                                    disabled={!canEdit || addressesLocked}
                                 />
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                     <Input
@@ -2933,7 +2952,7 @@ const unpackPackage = (id, pkgCode) => {
                                                 return next;
                                             });
                                         }}
-                                        disabled={!canEdit}
+                                        disabled={!canEdit || addressesLocked}
                                     />
                                     <Input
                                         label="State"
@@ -2948,7 +2967,7 @@ const unpackPackage = (id, pkgCode) => {
                                                 return next;
                                             });
                                         }}
-                                        disabled={!canEdit}
+                                        disabled={!canEdit || addressesLocked}
                                     />
                                     <Input
                                         label="Zip Code"
@@ -2963,7 +2982,7 @@ const unpackPackage = (id, pkgCode) => {
                                                 return next;
                                             });
                                         }}
-                                        disabled={!canEdit}
+                                        disabled={!canEdit || addressesLocked}
                                     />
                                 </div>
                                 {canEdit && (
@@ -2973,7 +2992,7 @@ const unpackPackage = (id, pkgCode) => {
                                                 type="checkbox"
                                                 className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500"
                                                 checked={billingSameAsShipping}
-                                                disabled={!canEdit}
+                                                disabled={!canEdit || addressesLocked}
                                                 onChange={e => handleBillingSameToggle(e.target.checked)}
                                             />
                                             Billing address is the same as shipping address
@@ -2998,12 +3017,12 @@ const unpackPackage = (id, pkgCode) => {
                                             rows={2}
                                             value={formData.billingAddress}
                                             onChange={e => setFormData(prev => ({ ...prev, billingAddress: e.target.value }))}
-                                            disabled={!canEdit}
+                                            disabled={!canEdit || addressesLocked}
                                         />
                                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                            <Input label="City" value={formData.billingCity} onChange={e => setFormData(prev => ({ ...prev, billingCity: e.target.value }))} disabled={!canEdit} />
-                                            <Input label="State" value={formData.billingState} onChange={e => setFormData(prev => ({ ...prev, billingState: e.target.value }))} disabled={!canEdit} />
-                                            <Input label="Zip Code" value={formData.billingZipCode} onChange={e => setFormData(prev => ({ ...prev, billingZipCode: e.target.value }))} disabled={!canEdit} />
+                                            <Input label="City" value={formData.billingCity} onChange={e => setFormData(prev => ({ ...prev, billingCity: e.target.value }))} disabled={!canEdit || addressesLocked} />
+                                            <Input label="State" value={formData.billingState} onChange={e => setFormData(prev => ({ ...prev, billingState: e.target.value }))} disabled={!canEdit || addressesLocked} />
+                                            <Input label="Zip Code" value={formData.billingZipCode} onChange={e => setFormData(prev => ({ ...prev, billingZipCode: e.target.value }))} disabled={!canEdit || addressesLocked} />
                                         </div>
                                     </div>
                                 )}
@@ -3457,8 +3476,7 @@ const unpackPackage = (id, pkgCode) => {
                                                     extractAddressFields(nextForm, 'billing')
                                                 )
                                             );
-                                            const hasAddresses = contactHasSavedAddresses(nextPrimaryContact);
-                                            setUseContactAddresses(prev => (hasAddresses ? prev : false));
+                                            setUseContactAddresses(orderAddressesMatchContact(nextPrimaryContact, nextForm));
                                             setLastSelectedContactId(nextPrimaryId || '');
                                             setIsEditing(false);
                                         }
