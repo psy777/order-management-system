@@ -107,6 +107,21 @@
             };
         };
 
+        const getRgbLuminance = (rgb) => {
+            if (!rgb || typeof rgb.r !== 'number' || typeof rgb.g !== 'number' || typeof rgb.b !== 'number') {
+                return null;
+            }
+            return (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255;
+        };
+
+        const isRgbColorDark = (rgb) => {
+            const luminance = getRgbLuminance(rgb);
+            if (luminance === null) {
+                return false;
+            }
+            return luminance < 0.6;
+        };
+
 const normalizePhoneDigits = (value = '') => (value || '').replace(/\D/g, '').slice(0, 10);
 
 const formatPhoneNumber = (value = '') => {
@@ -515,10 +530,12 @@ const formatContactAddress = (address, city, state, zip) => {
             const doc = new jsPDF();
             const safeItems = itemsIndex || {};
             const safeOrder = order || {};
-            const displayId = typeof safeOrder.display_id === 'string' ? safeOrder.display_id : null;
-            const orderId = safeOrder.id || '';
+            const rawDisplayId = typeof safeOrder.display_id === 'string' ? safeOrder.display_id : '';
+            const displayId = rawDisplayId.trim();
             const orderTitle = (safeOrder.title || '').trim();
-            const orderNumber = (displayId && displayId.trim()) || orderId;
+            const orderIdentifier = displayId || orderTitle || '';
+            const baseFileLabel = orderIdentifier || 'Order';
+            const sanitizedFileLabel = baseFileLabel.replace(/[^a-z0-9-_]+/gi, '_') || 'Order';
             const timeZone = "America/Chicago";
             const dateOptions = { year: 'numeric', month: 'long', day: 'numeric' };
             const formattedDate = safeOrder.date ? formatInTimeZone(safeOrder.date, timeZone, dateOptions) : '—';
@@ -527,7 +544,12 @@ const formatContactAddress = (address, city, state, zip) => {
                 ...(window.fireCoastBranding || {}),
                 ...(brandingOverride || {}),
             };
-            const accentRgb = hexToRgb(mergedBranding.invoice_brand_color) || { r: 249, g: 115, b: 22 };
+            const accentHex = (mergedBranding.invoice_brand_color || '').trim();
+            const accentRgb = hexToRgb(accentHex) || { r: 249, g: 115, b: 22 };
+            const accentFillColor = [accentRgb.r, accentRgb.g, accentRgb.b];
+            const headerTextColor = isRgbColorDark(accentRgb) ? [255, 255, 255] : [17, 24, 39];
+            const tableBorderColor = [226, 232, 240];
+            const zebraFillColor = [248, 250, 252];
             const businessName = (mergedBranding.invoice_business_name || '').trim();
             const businessDetails = (mergedBranding.invoice_business_details || '').trim();
             const invoiceFooter = (mergedBranding.invoice_footer || '').trim();
@@ -538,8 +560,8 @@ const formatContactAddress = (address, city, state, zip) => {
                 ? doc.splitTextToSize(businessDetails, 90)
                 : [];
             const invoiceInfoLines = [
-                `Order #: ${orderNumber || '—'}`,
-                orderTitle ? `Title: ${orderTitle}` : null,
+                `Order #: ${orderIdentifier || '—'}`,
+                displayId && orderTitle ? `Title: ${orderTitle}` : null,
                 `Date: ${formattedDate}`,
             ].filter(Boolean);
             const logoHeight = logoDataUrl ? 24 : 0;
@@ -582,7 +604,7 @@ const formatContactAddress = (address, city, state, zip) => {
 
             doc.setFont('helvetica', 'bold');
             doc.setFontSize(18);
-            doc.setTextColor(accentRgb.r, accentRgb.g, accentRgb.b);
+            doc.setTextColor(15, 23, 42);
             doc.text('Invoice', 196, contentTop, { align: 'right' });
             doc.setFont('helvetica', 'normal');
             doc.setFontSize(10);
@@ -686,7 +708,28 @@ const formatContactAddress = (address, city, state, zip) => {
                 ];
             });
 
-            doc.autoTable({ head: [tableHead], body: tableBody, startY: tableStartY });
+            doc.autoTable({
+                head: [tableHead],
+                body: tableBody,
+                startY: tableStartY,
+                styles: { cellPadding: 3, fontSize: 10, textColor: [71, 85, 105] },
+                headStyles: {
+                    fillColor: accentFillColor,
+                    textColor: headerTextColor,
+                    fontStyle: 'bold',
+                    lineWidth: 0.2,
+                    lineColor: tableBorderColor,
+                },
+                bodyStyles: {
+                    lineWidth: 0.2,
+                    lineColor: tableBorderColor,
+                },
+                alternateRowStyles: {
+                    fillColor: zebraFillColor,
+                },
+                tableLineColor: tableBorderColor,
+                tableLineWidth: 0.2,
+            });
 
             const subtotalCents = safeLineItems.reduce((acc, item) => {
                 const quantity = Number(item?.quantity) || 0;
@@ -810,7 +853,7 @@ const formatContactAddress = (address, city, state, zip) => {
             }
 
             if (action === 'save') {
-                doc.save(`Invoice_${orderId || 'Order'}.pdf`);
+                doc.save(`Invoice_${sanitizedFileLabel}.pdf`);
             } else if (action === 'datauristring') {
                 return doc.output('datauristring');
             } else {
@@ -819,13 +862,23 @@ const formatContactAddress = (address, city, state, zip) => {
         };
 
         const ViewOrderPage = ({ orderId }) => {
-            const { useState, useEffect } = React;
+            const { useState, useEffect, useMemo } = React;
             const [order, setOrder] = useState(null);
             const [isLoading, setIsLoading] = useState(true);
             const [isLogModalOpen, setIsLogModalOpen] = useState(false);
             const [contacts, setContacts] = useState([]);
             const [itemsIndex, setItemsIndex] = useState({});
             const [branding, setBranding] = useState({});
+
+            const accentHex = useMemo(() => {
+                const rawColor = typeof branding?.invoice_brand_color === 'string' ? branding.invoice_brand_color.trim() : '';
+                return /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(rawColor) ? rawColor : null;
+            }, [branding?.invoice_brand_color]);
+            const accentRgbValue = useMemo(() => (accentHex ? hexToRgb(accentHex) : null), [accentHex]);
+            const isAccentDark = useMemo(() => isRgbColorDark(accentRgbValue), [accentRgbValue]);
+            const lineItemsHeaderTextClass = accentHex ? (isAccentDark ? 'text-white' : 'text-slate-900') : 'text-slate-700';
+            const lineItemsHeaderBgClass = accentHex ? '' : 'bg-slate-100';
+            const lineItemsHeaderStyle = accentHex ? { backgroundColor: accentHex } : undefined;
 
             const fetchOrder = async () => {
                 try {
@@ -1071,7 +1124,7 @@ const formatContactAddress = (address, city, state, zip) => {
                             <div className="p-6 border-b"><h2 className="text-xl font-semibold text-slate-700">Line Items</h2></div>
                             <div className="overflow-x-auto">
                                 <table className="w-full text-sm text-left text-slate-500">
-                                    <thead className="text-xs text-slate-700 uppercase bg-slate-100">
+                                    <thead className={`text-xs uppercase ${lineItemsHeaderTextClass} ${lineItemsHeaderBgClass}`} style={lineItemsHeaderStyle}>
                                         <tr>
                                             <th scope="col" className="px-4 py-3">Name</th>
                                             <th scope="col" className="px-4 py-3">Description</th>
