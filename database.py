@@ -1,6 +1,10 @@
 import sqlite3
 import json
 import logging
+import re
+from typing import Optional
+
+from services.records import get_record_service
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -12,6 +16,126 @@ ensure_data_root()
 
 DATA_DIR = DATA_ROOT
 DATABASE_FILE = DATA_DIR / 'orders_manager.db'
+
+
+HANDLE_SANITIZE_PATTERN = re.compile(r'[^a-z0-9]+')
+ORDER_HANDLE_SANITIZE_PATTERN = re.compile(r'[^a-z0-9.-]+')
+
+
+def _slugify_handle(source_text: str) -> str:
+    base = HANDLE_SANITIZE_PATTERN.sub('-', (source_text or '').lower()).strip('-')
+    if not base:
+        return 'contact'
+    return base.replace('-', '')[:32]
+
+
+def _generate_unique_handle(cursor: sqlite3.Cursor, preferred_text: str) -> str:
+    base = _slugify_handle(preferred_text)
+    candidate = base
+    suffix = 1
+    while True:
+        cursor.execute("SELECT 1 FROM contacts WHERE handle = ?", (candidate,))
+        if not cursor.fetchone():
+            return candidate
+        candidate = f"{base}{suffix}"
+        suffix += 1
+
+
+def ensure_contact_handle(cursor: sqlite3.Cursor, contact_id: str, fallback_text: str = "") -> Optional[str]:
+    cursor.execute(
+        "SELECT handle, company_name, contact_name FROM contacts WHERE id = ?",
+        (contact_id,),
+    )
+    existing = cursor.fetchone()
+    if not existing:
+        return None
+    handle, company_name, contact_name = existing
+    if handle:
+        return handle
+    new_handle = _generate_unique_handle(cursor, contact_name or company_name or fallback_text or 'contact')
+    cursor.execute("UPDATE contacts SET handle = ? WHERE id = ?", (new_handle, contact_id))
+    return new_handle
+
+
+def generate_unique_contact_handle(cursor: sqlite3.Cursor, preferred_text: str) -> str:
+    """Public helper to generate a unique contact handle."""
+    return _generate_unique_handle(cursor, preferred_text)
+
+
+def ensure_order_record_handle(
+    cursor: sqlite3.Cursor,
+    order_id: str,
+    display_id: Optional[str] = None,
+    title: Optional[str] = None,
+) -> Optional[str]:
+    """Ensure an order has an entry in the unified record handle directory."""
+
+    if not order_id:
+        return None
+
+    cursor.execute(
+        "SELECT display_id, title FROM orders WHERE order_id = ?",
+        (order_id,),
+    )
+    row = cursor.fetchone()
+    if row:
+        if isinstance(row, sqlite3.Row):
+            display_value = row['display_id']
+            title_value = row['title']
+        else:
+            display_value = row[0]
+            title_value = row[1]
+    else:
+        display_value = None
+        title_value = None
+
+    display_value = display_id or display_value or ""
+    title_value = title or title_value or ""
+
+    preferred_source = (display_value or title_value or str(order_id)).strip()
+    normalised_source = ORDER_HANDLE_SANITIZE_PATTERN.sub("-", preferred_source.lower()).strip("-")
+    if not normalised_source:
+        normalised_source = ORDER_HANDLE_SANITIZE_PATTERN.sub("-", str(order_id).lower()).strip("-")
+    base_handle = f"order-{normalised_source}" if not normalised_source.startswith("order-") else normalised_source
+    base_handle = base_handle.strip("-") or f"order-{str(order_id).lower()}"
+
+    candidate = base_handle[:48]
+    suffix = 1
+    while True:
+        cursor.execute(
+            "SELECT entity_type, entity_id FROM record_handles WHERE handle = ?",
+            (candidate,),
+        )
+        existing = cursor.fetchone()
+        if not existing or (
+            existing[0] == 'order' and str(existing[1]) == str(order_id)
+        ):
+            break
+        suffix += 1
+        candidate = f"{base_handle[:40]}-{suffix}"
+
+    display_label = (title_value or display_value or f"Order {str(order_id)[:8]}").strip()
+    search_terms = " ".join(
+        filter(
+            None,
+            [
+                display_value.strip() if isinstance(display_value, str) else display_value,
+                title_value.strip() if isinstance(title_value, str) else title_value,
+                str(order_id),
+            ],
+        )
+    ).lower()
+
+    service = get_record_service()
+    service.register_handle(
+        cursor.connection,
+        'order',
+        order_id,
+        candidate,
+        display_name=display_label,
+        search_blob=search_terms,
+    )
+    return candidate
 
 def get_db_connection():
     """Establishes a connection to the SQLite database."""
@@ -374,17 +498,126 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_order_contact_links_contact ON order_contact_links(contact_id)")
 
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS contact_mentions (
-            mention_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            contact_id TEXT NOT NULL,
-            context_type TEXT NOT NULL,
-            context_id TEXT NOT NULL,
-            snippet TEXT NOT NULL,
+        CREATE TABLE IF NOT EXISTS record_schemas (
+            entity_type TEXT PRIMARY KEY,
+            schema_json TEXT NOT NULL,
+            description TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
     """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_contact_mentions_contact ON contact_mentions(contact_id)")
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS records (
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            data TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (entity_type, entity_id)
+        );
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS record_handles (
+            handle TEXT PRIMARY KEY,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            display_name TEXT,
+            search_blob TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_record_handles_entity ON record_handles(entity_type, entity_id)")
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS record_mentions (
+            mention_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mentioned_handle TEXT NOT NULL,
+            mentioned_entity_type TEXT NOT NULL,
+            mentioned_entity_id TEXT NOT NULL,
+            context_entity_type TEXT NOT NULL,
+            context_entity_id TEXT NOT NULL,
+            snippet TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_record_mentions_target ON record_mentions(mentioned_entity_type, mentioned_entity_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_record_mentions_context ON record_mentions(context_entity_type, context_entity_id)")
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS record_activity_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            actor TEXT,
+            payload TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_record_activity_target ON record_activity_logs(entity_type, entity_id)")
+
+    cursor.execute("SELECT id, handle, contact_name, company_name, email FROM contacts")
+    for row in cursor.fetchall():
+        contact_id = row['id'] if isinstance(row, sqlite3.Row) else row[0]
+        handle = row['handle'] if isinstance(row, sqlite3.Row) else row[1]
+        contact_name = row['contact_name'] if isinstance(row, sqlite3.Row) else row[2]
+        company_name = row['company_name'] if isinstance(row, sqlite3.Row) else row[3]
+        email = row['email'] if isinstance(row, sqlite3.Row) else row[4]
+        fallback = contact_name or company_name or email or contact_id
+        if not handle:
+            handle = ensure_contact_handle(cursor, contact_id, fallback)
+        if not handle:
+            continue
+        display_name = (contact_name or company_name or email or handle).strip()
+        search_values = [contact_name, company_name, email, handle]
+        search_blob = ' '.join([value.strip() for value in search_values if value]).lower()
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO record_handles (handle, entity_type, entity_id, display_name, search_blob, updated_at)
+            VALUES (?, 'contact', ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (handle.lower(), contact_id, display_name, search_blob),
+        )
+
+    cursor.execute("SELECT order_id, display_id, title FROM orders")
+    for row in cursor.fetchall():
+        order_id = row['order_id'] if isinstance(row, sqlite3.Row) else row[0]
+        display_id = row['display_id'] if isinstance(row, sqlite3.Row) else row[1]
+        title = row['title'] if isinstance(row, sqlite3.Row) else row[2]
+        ensure_order_record_handle(cursor, str(order_id), display_id, title)
+
+    if 'contact_mentions' in existing_tables:
+        cursor.execute(
+            "SELECT mention_id, contact_id, context_type, context_id, snippet, created_at FROM contact_mentions"
+        )
+        legacy_mentions = cursor.fetchall()
+        for mention in legacy_mentions:
+            contact_id = mention['contact_id'] if isinstance(mention, sqlite3.Row) else mention[1]
+            handle = ensure_contact_handle(cursor, contact_id)
+            if not handle:
+                continue
+            snippet = mention['snippet'] if isinstance(mention, sqlite3.Row) else mention[4]
+            context_type = mention['context_type'] if isinstance(mention, sqlite3.Row) else mention[2]
+            context_id = mention['context_id'] if isinstance(mention, sqlite3.Row) else mention[3]
+            created_at = mention['created_at'] if isinstance(mention, sqlite3.Row) else mention[5]
+            cursor.execute(
+                """
+                INSERT INTO record_mentions (
+                    mentioned_handle,
+                    mentioned_entity_type,
+                    mentioned_entity_id,
+                    context_entity_type,
+                    context_entity_id,
+                    snippet,
+                    created_at
+                ) VALUES (?, 'contact', ?, ?, ?, ?, ?)
+                """,
+                (handle.lower(), contact_id, context_type, str(context_id), snippet, created_at),
+            )
+        cursor.execute("DROP TABLE contact_mentions")
     conn.commit()
     conn.close()
     logger.info("Database initialized.")

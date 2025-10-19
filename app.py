@@ -21,12 +21,23 @@ import shutil
 import zipfile
 import pytz
 
-MENTION_PATTERN = re.compile(r'(?<!\S)@([A-Za-z0-9_.-]+)')
-
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request, send_from_directory, redirect, flash, url_for
-from database import get_db_connection, init_db
+from database import (
+    get_db_connection,
+    init_db,
+    ensure_contact_handle,
+    ensure_order_record_handle,
+    generate_unique_contact_handle,
+)
 from data_paths import DATA_ROOT, ensure_data_root
+from services.records import (
+    RecordValidationError,
+    bootstrap_record_service,
+    extract_mentions,
+    get_record_service,
+    sync_record_mentions,
+)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -47,6 +58,11 @@ def _ensure_database_initialized():
         return
     try:
         init_db()
+        bootstrap_conn = get_db_connection()
+        try:
+            bootstrap_record_service(bootstrap_conn)
+        finally:
+            bootstrap_conn.close()
         _db_bootstrapped = True
     except Exception as exc:  # pragma: no cover - defensive logging
         app.logger.exception("Failed to initialize database before request: %s", exc)
@@ -87,40 +103,6 @@ def read_password_entries():
 
 def write_password_entries(entries):
     write_json_file(PASSWORDS_FILE, {"entries": entries})
-
-
-def _slugify_handle(source_text: str) -> str:
-    base = re.sub(r'[^a-z0-9]+', '-', (source_text or '').lower()).strip('-')
-    if not base:
-        return 'contact'
-    return base.replace('-', '')[:32]
-
-
-def _generate_unique_handle(cursor, preferred_text: str) -> str:
-    base = _slugify_handle(preferred_text)
-    candidate = base
-    suffix = 1
-    while True:
-        cursor.execute("SELECT 1 FROM contacts WHERE handle = ?", (candidate,))
-        if not cursor.fetchone():
-            return candidate
-        candidate = f"{base}{suffix}"
-        suffix += 1
-
-
-def ensure_contact_handle(cursor, contact_id, fallback_text=""):
-    cursor.execute("SELECT handle, company_name, contact_name FROM contacts WHERE id = ?", (contact_id,))
-    existing = cursor.fetchone()
-    if not existing:
-        return None
-    handle, company_name, contact_name = existing
-    if handle:
-        return handle
-    new_handle = _generate_unique_handle(cursor, contact_name or company_name or fallback_text or 'contact')
-    cursor.execute("UPDATE contacts SET handle = ? WHERE id = ?", (new_handle, contact_id))
-    return new_handle
-
-
 def serialize_contact_row(row):
     if row is None:
         return None
@@ -502,7 +484,7 @@ def update_or_create_contact(cursor, contact_info_payload):
                 "billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (final_contact_id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state,
                  billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code,
-                 provided_handle or _generate_unique_handle(cursor, contact_name or company_name), notes)
+                 provided_handle or generate_unique_contact_handle(cursor, contact_name or company_name), notes)
             )
         else:
             if provided_handle:
@@ -512,20 +494,34 @@ def update_or_create_contact(cursor, contact_info_payload):
             ensure_contact_handle(cursor, provided_id, contact_name or company_name)
     else:
         final_contact_id = str(uuid.uuid4())
-        handle_to_use = provided_handle or _generate_unique_handle(cursor, contact_name or company_name)
+        handle_to_use = provided_handle or generate_unique_contact_handle(cursor, contact_name or company_name)
         cursor.execute(
             "INSERT INTO contacts (id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (final_contact_id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state,
              billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle_to_use, notes)
         )
+    ensured_handle = ensure_contact_handle(cursor, final_contact_id, contact_name or company_name)
+    if ensured_handle:
+        service = get_record_service()
+        display_value = contact_name or company_name or ensured_handle
+        search_blob = ' '.join(filter(None, [contact_name, company_name, email, ensured_handle])).lower()
+        service.register_handle(
+            cursor.connection,
+            'contact',
+            final_contact_id,
+            ensured_handle,
+            display_name=display_value,
+            search_blob=search_blob,
+        )
+
     final_notes = notes
     if final_contact_id and notes is None:
         cursor.execute("SELECT notes FROM contacts WHERE id = ?", (final_contact_id,))
         existing_notes_row = cursor.fetchone()
         if existing_notes_row:
             final_notes = existing_notes_row['notes'] if isinstance(existing_notes_row, sqlite3.Row) else existing_notes_row[0]
-    sync_contact_mentions(cursor, extract_contact_handles(final_notes), 'contact_profile_note', f'note:{final_contact_id}', final_notes)
+    sync_record_mentions(cursor.connection, extract_mentions(final_notes), 'contact_profile_note', f'note:{final_contact_id}', final_notes)
     return final_contact_id
 
 
@@ -564,66 +560,61 @@ def update_contact_by_id(cursor, contact_id, contact_data_payload):
         cursor.execute(sql_query, tuple(values_to_update))
         if cursor.rowcount == 0:
             return None
-        ensure_contact_handle(cursor, contact_id)
+        ensured_handle = ensure_contact_handle(cursor, contact_id)
+        if ensured_handle:
+            service = get_record_service()
+            cursor.execute(
+                "SELECT contact_name, company_name, email FROM contacts WHERE id = ?",
+                (contact_id,),
+            )
+            display_row = cursor.fetchone()
+            contact_name_val = None
+            company_name_val = None
+            email_val = None
+            if display_row:
+                contact_name_val = display_row['contact_name'] if isinstance(display_row, sqlite3.Row) else display_row[0]
+                company_name_val = display_row['company_name'] if isinstance(display_row, sqlite3.Row) else display_row[1]
+                email_val = display_row['email'] if isinstance(display_row, sqlite3.Row) else display_row[2]
+            display_value = (contact_name_val or company_name_val or ensured_handle)
+            search_blob = ' '.join(filter(None, [contact_name_val, company_name_val, email_val, ensured_handle])).lower()
+            service.register_handle(
+                cursor.connection,
+                'contact',
+                contact_id,
+                ensured_handle,
+                display_name=display_value,
+                search_blob=search_blob,
+            )
         cursor.execute("SELECT id, company_name, contact_name, email, phone, billing_address, billing_city, billing_state, billing_zip_code, shipping_address, shipping_city, shipping_state, shipping_zip_code, handle, notes, created_at, updated_at FROM contacts WHERE id = ?", (contact_id,))
         uvd = cursor.fetchone()
         if not uvd:
             return None
         updated_contact = serialize_contact_row(uvd)
         if 'notes' in contact_data_payload:
-            sync_contact_mentions(cursor, extract_contact_handles(updated_contact.get('notes')), 'contact_profile_note', f'note:{contact_id}', updated_contact.get('notes'))
+            sync_record_mentions(cursor.connection, extract_mentions(updated_contact.get('notes')), 'contact_profile_note', f'note:{contact_id}', updated_contact.get('notes'))
         return updated_contact
     except sqlite3.Error as e:
         app.logger.error(f"DB error updating contact {contact_id}: {e}")
         raise
-
-
-def extract_contact_handles(text):
-    if not text:
-        return []
-    handles = []
-    for match in MENTION_PATTERN.finditer(text):
-        handle = match.group(1).lower()
-        if handle not in handles:
-            handles.append(handle)
-    return handles
-
-
-def sync_contact_mentions(cursor, handles, context_type, context_id, snippet):
-    cursor.execute("DELETE FROM contact_mentions WHERE context_type = ? AND context_id = ?", (context_type, str(context_id)))
-    if not handles:
-        return
-    snippet_text = (snippet or '').strip()
-    if len(snippet_text) > 500:
-        snippet_text = snippet_text[:497] + '...'
-    for handle in handles:
-        cursor.execute("SELECT id FROM contacts WHERE lower(handle) = ?", (handle,))
-        row = cursor.fetchone()
-        if not row:
-            continue
-        contact_id = row['id'] if isinstance(row, sqlite3.Row) else row[0]
-        cursor.execute(
-            "INSERT INTO contact_mentions (contact_id, context_type, context_id, snippet) VALUES (?, ?, ?, ?)",
-            (contact_id, context_type, str(context_id), snippet_text)
-        )
-
-
 def refresh_order_contact_links(cursor, order_id, primary_contact_id=None):
     cursor.execute("DELETE FROM order_contact_links WHERE order_id = ?", (order_id,))
     cursor.execute(
         """
-            SELECT DISTINCT contact_id
-            FROM contact_mentions
-            WHERE (context_type = 'order_note' AND context_id = ?)
-               OR (context_type = 'order_log' AND context_id IN (
-                    SELECT CAST(log_id AS TEXT) FROM order_logs WHERE order_id = ?
-               ))
+            SELECT DISTINCT mentioned_entity_id
+            FROM record_mentions
+            WHERE mentioned_entity_type = 'contact'
+              AND (
+                    (context_entity_type = 'order_note' AND context_entity_id = ?)
+                 OR (context_entity_type = 'order_log' AND context_entity_id IN (
+                        SELECT CAST(log_id AS TEXT) FROM order_logs WHERE order_id = ?
+                    ))
+              )
         """,
-        (order_id, order_id)
+        (str(order_id), str(order_id))
     )
     rows = cursor.fetchall()
     for row in rows:
-        contact_id = row['contact_id'] if isinstance(row, sqlite3.Row) else row[0]
+        contact_id = row['mentioned_entity_id'] if isinstance(row, sqlite3.Row) else row[0]
         if not contact_id:
             continue
         if primary_contact_id and str(contact_id) == str(primary_contact_id):
@@ -706,8 +697,8 @@ def handle_order_logs(order_id):
                 (order_id, "system", action, log_body, log_body, attachment_path)
             )
             log_id = cursor.lastrowid
-            handles = extract_contact_handles(log_body)
-            sync_contact_mentions(cursor, handles, 'order_log', log_id, log_body)
+            handles = extract_mentions(log_body)
+            sync_record_mentions(cursor.connection, handles, 'order_log', log_id, log_body)
             cursor.execute("SELECT contact_id FROM orders WHERE order_id = ?", (order_id,))
             primary_row = cursor.fetchone()
             primary_contact_for_order = primary_row['contact_id'] if primary_row else None
@@ -806,8 +797,8 @@ def handle_specific_order_log(order_id, log_id):
             "UPDATE order_logs SET action = ?, details = ?, note = ?, attachment_path = ? WHERE log_id = ?",
             (updated_action, log_body, log_body, attachment_path, log_id)
         )
-        handles = extract_contact_handles(log_body)
-        sync_contact_mentions(cursor, handles, 'order_log', log_id, log_body)
+        handles = extract_mentions(log_body)
+        sync_record_mentions(cursor.connection, handles, 'order_log', log_id, log_body)
         cursor.execute("SELECT contact_id FROM orders WHERE order_id = ?", (order_id,))
         primary_row = cursor.fetchone()
         primary_contact_for_order = primary_row['contact_id'] if primary_row else None
@@ -824,7 +815,10 @@ def handle_specific_order_log(order_id, log_id):
                 os.remove(file_path)
 
         cursor.execute("DELETE FROM order_logs WHERE log_id = ?", (log_id,))
-        cursor.execute("DELETE FROM contact_mentions WHERE context_type = ? AND context_id = ?", ('order_log', str(log_id)))
+        cursor.execute(
+            "DELETE FROM record_mentions WHERE context_entity_type = ? AND context_entity_id = ?",
+            ('order_log', str(log_id))
+        )
         cursor.execute("SELECT contact_id FROM orders WHERE order_id = ?", (order_id,))
         primary_row = cursor.fetchone()
         primary_contact_for_order = primary_row['contact_id'] if primary_row else None
@@ -1245,8 +1239,8 @@ def save_order():
             cursor.execute("INSERT INTO order_status_history (order_id, status, status_date) VALUES (?,?,?)", (processed_order_id, new_order_payload.get('status'), datetime.now(timezone.utc).isoformat()+"Z"))
 
         notes_text = new_order_payload.get('notes')
-        handles_from_notes = extract_contact_handles(notes_text)
-        sync_contact_mentions(cursor, handles_from_notes, 'order_note', processed_order_id, notes_text)
+        handles_from_notes = extract_mentions(notes_text)
+        sync_record_mentions(cursor.connection, handles_from_notes, 'order_note', processed_order_id, notes_text)
         refresh_order_contact_links(cursor, processed_order_id, db_processed_contact_id)
 
         existing_display_id = None
@@ -1264,6 +1258,13 @@ def save_order():
         cleaned_display_id = display_id or (existing_display_id.strip() if isinstance(existing_display_id, str) else None)
         cleaned_title = title_value or (existing_title.strip() if isinstance(existing_title, str) else '')
         order_label = cleaned_title or cleaned_display_id or processed_order_id
+
+        ensure_order_record_handle(
+            cursor,
+            str(processed_order_id),
+            cleaned_display_id,
+            cleaned_title,
+        )
 
         if existing_order_row:
             cursor.execute(
@@ -1663,15 +1664,24 @@ def api_get_contact(contact_id):
         ]
         base_contact["primaryOrders"] = primary_orders
 
-        cursor.execute("SELECT mention_id, context_type, context_id, snippet, created_at FROM contact_mentions WHERE contact_id = ? ORDER BY created_at DESC", (contact_id,))
+        cursor.execute(
+            """
+            SELECT mention_id, mentioned_handle, context_entity_type, context_entity_id, snippet, created_at
+            FROM record_mentions
+            WHERE mentioned_entity_type = 'contact' AND mentioned_entity_id = ?
+            ORDER BY created_at DESC
+            """,
+            (str(contact_id),)
+        )
         mentions = []
         for mention in cursor.fetchall():
-            context_type = mention['context_type']
-            context_id = mention['context_id']
+            context_type = mention['context_entity_type']
+            context_id = mention['context_entity_id']
             mention_entry = {
                 "id": mention['mention_id'],
                 "contextType": context_type,
                 "contextId": context_id,
+                "handle": mention['mentioned_handle'],
                 "snippet": mention['snippet'],
                 "createdAt": mention['created_at'],
             }
@@ -1741,6 +1751,109 @@ def api_create_contact():
         return jsonify({"message":"Contact processed.","contact":serialized_contact}),201
     except sqlite3.Error as e: conn.rollback(); conn.close(); app.logger.error(f"DB err create contact:{e}"); return jsonify({"message":"DB error."}),500
     except Exception as e_g: conn.rollback(); conn.close(); app.logger.error(f"Global err create contact:{e_g}"); return jsonify({"message":"Unexpected error."}),500
+
+
+@app.route('/api/records/handles', methods=['GET'])
+def api_record_handles():
+    service = get_record_service()
+    conn = get_db_connection()
+    try:
+        entity_types_param = request.args.get('entity_types') or request.args.get('entityTypes')
+        entity_types = [value.strip() for value in entity_types_param.split(',')] if entity_types_param else None
+        if entity_types:
+            entity_types = [value for value in entity_types if value]
+        search = request.args.get('q') or request.args.get('search') or None
+        handles = service.list_handles(conn, entity_types, search)
+        return jsonify({'handles': handles})
+    finally:
+        conn.close()
+
+
+@app.route('/api/records/schemas', methods=['GET', 'POST'])
+def api_record_schemas():
+    service = get_record_service()
+    conn = get_db_connection()
+    try:
+        if request.method == 'GET':
+            schemas = [schema.to_dict() for schema in service.registry.all()]
+            return jsonify({'schemas': schemas})
+        payload = request.get_json(force=True, silent=True) or {}
+        schema = service.register_schema(conn, payload)
+        conn.commit()
+        return jsonify({'schema': schema.to_dict()}), 201
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({'message': str(exc)}), 400
+    finally:
+        conn.close()
+
+@app.route('/api/records/<string:entity_type>', methods=['GET', 'POST'])
+def api_records(entity_type):
+    service = get_record_service()
+    conn = get_db_connection()
+    try:
+        if request.method == 'GET':
+            records = service.list_records(conn, entity_type)
+            return jsonify({'records': records})
+        payload = request.get_json(force=True, silent=True) or {}
+        actor = payload.pop('actor', None)
+        record_payload = payload.get('data') if isinstance(payload.get('data'), dict) else payload
+        created = service.create_record(conn, entity_type, record_payload, actor=actor)
+        conn.commit()
+        return jsonify({'record': created}), 201
+    except RecordValidationError as err:
+        conn.rollback()
+        return jsonify({'message': 'Validation failed', 'errors': err.errors}), 400
+    except KeyError:
+        conn.rollback()
+        return jsonify({'message': f'Unknown record type {entity_type}'}), 404
+    except ValueError as exc:
+        conn.rollback()
+        return jsonify({'message': str(exc)}), 400
+    finally:
+        conn.close()
+
+@app.route('/api/records/<string:entity_type>/<string:entity_id>', methods=['GET', 'PUT'])
+def api_record_detail(entity_type, entity_id):
+    service = get_record_service()
+    conn = get_db_connection()
+    try:
+        if request.method == 'GET':
+            record = service.get_record(conn, entity_type, entity_id)
+            if not record:
+                return jsonify({'message': 'Record not found'}), 404
+            return jsonify({'record': record})
+        payload = request.get_json(force=True, silent=True) or {}
+        actor = payload.pop('actor', None)
+        record_payload = payload.get('data') if isinstance(payload.get('data'), dict) else payload
+        updated = service.update_record(conn, entity_type, entity_id, record_payload, actor=actor)
+        conn.commit()
+        return jsonify({'record': updated})
+    except RecordValidationError as err:
+        conn.rollback()
+        return jsonify({'message': 'Validation failed', 'errors': err.errors}), 400
+    except KeyError:
+        conn.rollback()
+        return jsonify({'message': f'Unknown record type {entity_type}'}), 404
+    except ValueError as exc:
+        conn.rollback()
+        return jsonify({'message': str(exc)}), 400
+    finally:
+        conn.close()
+
+@app.route('/api/records/<string:entity_type>/<string:entity_id>/activity', methods=['GET'])
+def api_record_activity(entity_type, entity_id):
+    service = get_record_service()
+    conn = get_db_connection()
+    try:
+        try:
+            limit = int(request.args.get('limit', 50))
+        except (TypeError, ValueError):
+            limit = 50
+        activity = service.fetch_activity(conn, entity_type, entity_id, limit=limit)
+        return jsonify({'activity': activity})
+    finally:
+        conn.close()
 
 @app.route('/api/contacts/<string:contact_id>', methods=['DELETE'])
 def delete_contact(contact_id):
