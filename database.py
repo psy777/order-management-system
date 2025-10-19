@@ -269,7 +269,16 @@ def init_db():
     if 'customer_reference' not in order_columns and 'orders' in existing_tables:
         cursor.execute("ALTER TABLE orders ADD COLUMN customer_reference TEXT")
 
-    cursor.execute("CREATE TABLE IF NOT EXISTS orders (order_id TEXT PRIMARY KEY NOT NULL, display_id TEXT UNIQUE, contact_id TEXT, order_date TEXT, status TEXT, notes TEXT, estimated_shipping_date TEXT, shipping_address TEXT, shipping_city TEXT, shipping_state TEXT, shipping_zip_code TEXT, estimated_shipping_cost REAL, signature_data_url TEXT, total_amount REAL, title TEXT, priority_level TEXT, fulfillment_channel TEXT, customer_reference TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (contact_id) REFERENCES contacts (id) ON DELETE SET NULL);")
+    if 'tax_amount' not in order_columns and 'orders' in existing_tables:
+        cursor.execute("ALTER TABLE orders ADD COLUMN tax_amount REAL DEFAULT 0")
+
+    if 'discounts_json' not in order_columns and 'orders' in existing_tables:
+        cursor.execute("ALTER TABLE orders ADD COLUMN discounts_json TEXT")
+
+    if 'discount_total' not in order_columns and 'orders' in existing_tables:
+        cursor.execute("ALTER TABLE orders ADD COLUMN discount_total REAL DEFAULT 0")
+
+    cursor.execute("CREATE TABLE IF NOT EXISTS orders (order_id TEXT PRIMARY KEY NOT NULL, display_id TEXT UNIQUE, contact_id TEXT, order_date TEXT, status TEXT, notes TEXT, estimated_shipping_date TEXT, shipping_address TEXT, shipping_city TEXT, shipping_state TEXT, shipping_zip_code TEXT, estimated_shipping_cost REAL, tax_amount REAL, discounts_json TEXT, discount_total REAL, signature_data_url TEXT, total_amount REAL, title TEXT, priority_level TEXT, fulfillment_channel TEXT, customer_reference TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (contact_id) REFERENCES contacts (id) ON DELETE SET NULL);")
     cursor.execute("CREATE TRIGGER IF NOT EXISTS update_orders_updated_at AFTER UPDATE ON orders FOR EACH ROW BEGIN UPDATE orders SET updated_at = CURRENT_TIMESTAMP WHERE order_id = OLD.order_id; END;")
     cursor.execute("PRAGMA table_info(order_line_items)")
     order_line_item_columns = [row[1] for row in cursor.fetchall()]
@@ -290,6 +299,7 @@ def init_db():
                 price_per_unit_cents INTEGER NOT NULL,
                 package_id TEXT,
                 weight_oz REAL,
+                client_reference_id TEXT,
                 FOREIGN KEY (order_id) REFERENCES orders (order_id) ON DELETE CASCADE,
                 FOREIGN KEY (catalog_item_id) REFERENCES items (id) ON DELETE SET NULL
             );
@@ -301,7 +311,7 @@ def init_db():
             if 'item_code' in selectable_cols:
                 cursor.execute(
                     """
-                    INSERT OR IGNORE INTO order_line_items_migrated (line_item_id, order_id, catalog_item_id, name, description, quantity, price_per_unit_cents, package_id, weight_oz)
+                    INSERT OR IGNORE INTO order_line_items_migrated (line_item_id, order_id, catalog_item_id, name, description, quantity, price_per_unit_cents, package_id, weight_oz, client_reference_id)
                     SELECT
                         line_item_id,
                         order_id,
@@ -311,7 +321,8 @@ def init_db():
                         quantity,
                         price_per_unit_cents,
                         package_code,
-                        NULL
+                        NULL,
+                        CAST(line_item_id AS TEXT)
                     FROM order_line_items
                     LEFT JOIN items i ON i.id = order_line_items.item_code
                     """
@@ -319,6 +330,13 @@ def init_db():
 
         cursor.execute("DROP TABLE IF EXISTS order_line_items")
         cursor.execute("ALTER TABLE order_line_items_migrated RENAME TO order_line_items")
+
+    cursor.execute("PRAGMA table_info(order_line_items)")
+    order_line_item_columns = [row[1] for row in cursor.fetchall()]
+
+    if 'client_reference_id' not in order_line_item_columns and 'order_line_items' in existing_tables:
+        cursor.execute("ALTER TABLE order_line_items ADD COLUMN client_reference_id TEXT")
+        cursor.execute("UPDATE order_line_items SET client_reference_id = CAST(line_item_id AS TEXT) WHERE client_reference_id IS NULL")
 
     cursor.execute(
         """
@@ -332,6 +350,7 @@ def init_db():
             price_per_unit_cents INTEGER NOT NULL,
             package_id TEXT,
             weight_oz REAL,
+            client_reference_id TEXT,
             FOREIGN KEY (order_id) REFERENCES orders (order_id) ON DELETE CASCADE,
             FOREIGN KEY (catalog_item_id) REFERENCES items (id) ON DELETE SET NULL
         );

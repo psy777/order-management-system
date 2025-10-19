@@ -108,6 +108,21 @@ const hexToRgb = (hex) => {
     };
 };
 
+const getRgbLuminance = (rgb) => {
+    if (!rgb || typeof rgb.r !== 'number' || typeof rgb.g !== 'number' || typeof rgb.b !== 'number') {
+        return null;
+    }
+    return (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255;
+};
+
+const isRgbColorDark = (rgb) => {
+    const luminance = getRgbLuminance(rgb);
+    if (luminance === null) {
+        return false;
+    }
+    return luminance < 0.6;
+};
+
 const normalizePhoneDigits = (value = '') => (value || '').replace(/\D/g, '').slice(0, 10);
 
 const formatPhoneNumber = (value = '') => {
@@ -124,14 +139,13 @@ const formatPhoneNumber = (value = '') => {
 };
 
 const createEmptyLineItem = (id) => ({
-    id,
+    id: String(id),
     catalogItemId: null,
     name: '',
     description: '',
     quantity: 1,
     price: 0,
     packageId: null,
-    weightOz: null,
 });
 
 const normalizeLineItemsForSave = (items) => {
@@ -147,25 +161,107 @@ const normalizeLineItemsForSave = (items) => {
         const quantity = Number.isFinite(quantityRaw) ? Math.max(0, Math.round(quantityRaw)) : 0;
         const priceRaw = Number(safeItem.price);
         const price = Number.isFinite(priceRaw) ? Math.round(priceRaw) : 0;
-        let weightOz = safeItem.weightOz;
-        if (weightOz === '' || weightOz === null || typeof weightOz === 'undefined') {
-            weightOz = null;
-        } else {
-            const parsedWeight = Number(weightOz);
-            weightOz = Number.isFinite(parsedWeight) && parsedWeight >= 0 ? parsedWeight : null;
-        }
-
         return {
-            id: safeItem.id,
+            id: safeItem.id != null ? String(safeItem.id) : null,
             catalogItemId: safeItem.catalogItemId || null,
             name: trimmedName,
             description,
             quantity: quantity,
             price,
             packageId: safeItem.packageId || null,
-            weightOz,
         };
     }).filter(item => item.name && item.quantity > 0);
+};
+
+const parseCurrencyToNumber = (value) => {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+    }
+    if (typeof value === 'string') {
+        const cleaned = value.replace(/[^0-9.-]/g, '');
+        const parsed = parseFloat(cleaned);
+        return Number.isFinite(parsed) ? parsed : 0;
+    }
+    return 0;
+};
+
+const centsToCurrency = (cents) => {
+    return (Math.round(cents) / 100).toFixed(2);
+};
+
+const normalizeDiscountsForTotals = (discounts, lineItems) => {
+    const lineItemTotals = new Map();
+    const orderedKeys = [];
+    (Array.isArray(lineItems) ? lineItems : []).forEach((item) => {
+        const key = item && item.id != null ? String(item.id) : null;
+        if (!key || lineItemTotals.has(key)) {
+            return;
+        }
+        const quantity = Number(item.quantity) || 0;
+        const price = Number(item.price) || 0;
+        const total = Math.max(0, quantity) * Math.max(0, price);
+        lineItemTotals.set(key, total);
+        orderedKeys.push(key);
+    });
+
+    const normalized = [];
+    if (!Array.isArray(discounts)) {
+        return normalized;
+    }
+
+    discounts.forEach((entry, index) => {
+        const originalId = entry && entry.id != null ? entry.id : `discount-${index + 1}`;
+        const id = String(originalId);
+        const label = typeof entry?.label === 'string' ? entry.label.trim() : '';
+        const type = entry?.type === 'percentage' ? 'percentage' : 'fixed';
+        const rawValue = entry?.value ?? '';
+
+        const appliesRaw = Array.isArray(entry?.appliesTo) ? entry.appliesTo : [];
+        const appliesSanitized = [];
+        const appliesKeys = [];
+        appliesRaw.forEach((candidate) => {
+            const key = String(candidate);
+            if (lineItemTotals.has(key) && !appliesKeys.includes(key)) {
+                appliesKeys.push(key);
+                appliesSanitized.push(String(candidate));
+            }
+        });
+
+        const baseKeys = appliesKeys.length ? appliesKeys : orderedKeys;
+        const baseAmountCents = baseKeys.reduce((sum, key) => sum + (lineItemTotals.get(key) || 0), 0);
+        let amountCents = 0;
+        let normalizedValue = 0;
+
+        if (type === 'percentage') {
+            normalizedValue = parseFloat(rawValue);
+            if (!Number.isFinite(normalizedValue) || normalizedValue < 0) {
+                normalizedValue = 0;
+            }
+            amountCents = Math.round(baseAmountCents * (normalizedValue / 100));
+        } else {
+            normalizedValue = parseCurrencyToNumber(rawValue);
+            if (!Number.isFinite(normalizedValue) || normalizedValue < 0) {
+                normalizedValue = 0;
+            }
+            const fixedCents = Math.round(normalizedValue * 100);
+            amountCents = Math.min(fixedCents, baseAmountCents);
+        }
+
+        amountCents = Math.max(0, amountCents);
+
+        normalized.push({
+            id,
+            label,
+            type,
+            value: rawValue,
+            appliesTo: appliesSanitized,
+            appliesToAll: appliesKeys.length === 0,
+            amountCents,
+            baseAmountCents,
+        });
+    });
+
+    return normalized;
 };
 
 const sanitizePlaceholderValue = (value) => {
@@ -594,10 +690,12 @@ const generateInvoicePdf = (order, allItems, action = 'save', brandingOverride =
     const doc = new jsPDF();
     const safeItems = allItems || {};
     const safeOrder = order || {};
-    const displayId = typeof safeOrder.display_id === 'string' ? safeOrder.display_id : null;
-    const orderId = safeOrder.id || '';
+    const rawDisplayId = typeof safeOrder.display_id === 'string' ? safeOrder.display_id : '';
+    const displayId = rawDisplayId.trim();
     const orderTitle = (safeOrder.title || '').trim();
-    const orderNumber = (displayId && displayId.trim()) || orderId;
+    const orderIdentifier = displayId || orderTitle || '';
+    const baseFileLabel = orderIdentifier || 'Order';
+    const sanitizedFileLabel = baseFileLabel.replace(/[^a-z0-9-_]+/gi, '_') || 'Order';
     const timeZone = "America/Chicago";
     const dateOptions = { year: 'numeric', month: 'long', day: 'numeric' };
     const formattedDate = safeOrder.date ? formatInTimeZone(safeOrder.date, timeZone, dateOptions) : '—';
@@ -606,9 +704,15 @@ const generateInvoicePdf = (order, allItems, action = 'save', brandingOverride =
         ...(window.fireCoastBranding || {}),
         ...(brandingOverride || {}),
     };
-    const accentRgb = hexToRgb(mergedBranding.invoice_brand_color) || { r: 249, g: 115, b: 22 };
+    const accentHex = (mergedBranding.invoice_brand_color || '').trim();
+    const accentRgb = hexToRgb(accentHex) || { r: 249, g: 115, b: 22 };
+    const accentFillColor = [accentRgb.r, accentRgb.g, accentRgb.b];
+    const headerTextColor = isRgbColorDark(accentRgb) ? [255, 255, 255] : [17, 24, 39];
+    const tableBorderColor = [226, 232, 240];
+    const zebraFillColor = [248, 250, 252];
     const businessName = (mergedBranding.invoice_business_name || '').trim();
     const businessDetails = (mergedBranding.invoice_business_details || '').trim();
+    const invoiceFooter = (mergedBranding.invoice_footer || '').trim();
     const logoDataUrl = (mergedBranding.invoice_logo_data_url || '').trim();
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(10);
@@ -616,8 +720,8 @@ const generateInvoicePdf = (order, allItems, action = 'save', brandingOverride =
         ? doc.splitTextToSize(businessDetails, 90)
         : [];
     const invoiceInfoLines = [
-        `Order #: ${orderNumber || '—'}`,
-        orderTitle ? `Title: ${orderTitle}` : null,
+        `Order #: ${orderIdentifier || '—'}`,
+        displayId && orderTitle ? `Title: ${orderTitle}` : null,
         `Date: ${formattedDate}`,
     ].filter(Boolean);
     const logoHeight = logoDataUrl ? 24 : 0;
@@ -660,7 +764,7 @@ const generateInvoicePdf = (order, allItems, action = 'save', brandingOverride =
 
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(18);
-    doc.setTextColor(accentRgb.r, accentRgb.g, accentRgb.b);
+    doc.setTextColor(15, 23, 42);
     doc.text('Invoice', 196, contentTop, { align: 'right' });
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(10);
@@ -764,19 +868,43 @@ const tableHead = ["Name", "Description", "Units", "Unit Price", "Total"];
         ];
     });
 
-    doc.autoTable({ head: [tableHead], body: tableBody, startY: tableStartY });
+    doc.autoTable({
+        head: [tableHead],
+        body: tableBody,
+        startY: tableStartY,
+        styles: { cellPadding: 3, fontSize: 10, textColor: [71, 85, 105] },
+        headStyles: {
+            fillColor: accentFillColor,
+            textColor: headerTextColor,
+            fontStyle: 'bold',
+            lineWidth: 0.2,
+            lineColor: tableBorderColor,
+        },
+        bodyStyles: {
+            lineWidth: 0.2,
+            lineColor: tableBorderColor,
+        },
+        alternateRowStyles: {
+            fillColor: zebraFillColor,
+        },
+        tableLineColor: tableBorderColor,
+        tableLineWidth: 0.2,
+    });
 
     const subtotalCents = safeLineItems.reduce((acc, item) => {
         const quantity = Number(item?.quantity) || 0;
         const unitPriceCents = Number(item?.price) || 0;
         return acc + (quantity * unitPriceCents);
     }, 0);
-
-    const estimatedShippingValue = typeof safeOrder.estimatedShipping === 'number'
-        ? safeOrder.estimatedShipping
-        : parseFloat(safeOrder.estimatedShipping || '0');
-    const estimatedShippingCents = Math.round((Number.isFinite(estimatedShippingValue) ? estimatedShippingValue : 0) * 100);
-    const totalCents = subtotalCents + estimatedShippingCents;
+    const shippingCents = Math.max(0, Math.round(parseCurrencyToNumber(safeOrder.estimatedShipping) * 100));
+    const taxCents = Math.max(0, Math.round(parseCurrencyToNumber(safeOrder.taxAmount) * 100));
+    const normalizedDiscounts = normalizeDiscountsForTotals(safeOrder.discounts, safeLineItems);
+    const discountTotalCents = Math.min(
+        normalizedDiscounts.reduce((acc, discount) => acc + discount.amountCents, 0),
+        subtotalCents
+    );
+    const subtotalAfterDiscounts = Math.max(0, subtotalCents - discountTotalCents);
+    const totalCents = subtotalAfterDiscounts + shippingCents + taxCents;
 
     const tableResult = doc.lastAutoTable;
     let summaryY = (tableResult ? tableResult.finalY : tableStartY) + 10;
@@ -785,9 +913,24 @@ const tableHead = ["Name", "Description", "Units", "Unit Price", "Total"];
     doc.text(`Subtotal: $${(subtotalCents / 100).toFixed(2)}`, 14, summaryY);
     summaryY += 7;
 
-    if (estimatedShippingCents > 0) {
-        doc.text(`Est. Shipping Cost: $${(estimatedShippingCents / 100).toFixed(2)}`, 14, summaryY);
+    if (taxCents > 0) {
+        doc.text(`Taxes: $${(taxCents / 100).toFixed(2)}`, 14, summaryY);
         summaryY += 7;
+    }
+
+    if (shippingCents > 0) {
+        doc.text(`Shipping: $${(shippingCents / 100).toFixed(2)}`, 14, summaryY);
+        summaryY += 7;
+    }
+
+    if (discountTotalCents > 0) {
+        doc.text(`Discounts: -$${(discountTotalCents / 100).toFixed(2)}`, 14, summaryY);
+        summaryY += 7;
+        normalizedDiscounts.forEach((discount) => {
+            const label = discount.label || 'Discount';
+            doc.text(`  ${label}: -$${(discount.amountCents / 100).toFixed(2)}`, 14, summaryY);
+            summaryY += 6;
+        });
     }
 
     doc.setFontSize(12);
@@ -857,8 +1000,20 @@ const tableHead = ["Name", "Description", "Units", "Unit Price", "Total"];
         doc.line(50, summaryY, 120, summaryY);
     }
 
+    let footerY = summaryY + 20;
+    if (invoiceFooter) {
+        if (footerY > 260) {
+            doc.addPage();
+            footerY = 20;
+        }
+        doc.setFontSize(9);
+        const wrappedFooter = doc.splitTextToSize(invoiceFooter, 180);
+        doc.text(wrappedFooter, 14, footerY);
+        doc.setFontSize(10);
+    }
+
     if (action === 'save') {
-        doc.save(`Invoice_${orderId || 'Order'}.pdf`);
+        doc.save(`Invoice_${sanitizedFileLabel}.pdf`);
     } else if (action === 'preview') {
         doc.output('dataurlnewwindow');
     } else if (action === 'datauristring') {
@@ -1759,7 +1914,9 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
         lineItems: [],
         notes: '',
         estimatedShippingDate: '',
-        estimatedShipping: '',
+        estimatedShipping: '0.00',
+        taxAmount: '0.00',
+        discounts: [],
         priorityLevel: '',
         fulfillmentChannel: '',
         customerReference: '',
@@ -1776,6 +1933,43 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
         if (!incomingOrder) {
             return { ...defaultOrderState };
         }
+        const formatCurrencyField = (rawValue) => {
+            const numeric = Math.max(0, parseCurrencyToNumber(rawValue));
+            return centsToCurrency(Math.round(numeric * 100));
+        };
+
+        const sanitizedDiscounts = Array.isArray(incomingOrder.discounts)
+            ? incomingOrder.discounts.map((discount, index) => {
+                const rawId = discount && discount.id != null ? discount.id : `discount-${index + 1}`;
+                const discountId = String(rawId);
+                const type = discount?.type === 'percentage' ? 'percentage' : 'fixed';
+                const rawValue = discount?.value ?? '';
+                let value;
+                if (type === 'percentage') {
+                    if (typeof rawValue === 'number') {
+                        value = String(rawValue);
+                    } else if (typeof rawValue === 'string') {
+                        value = rawValue;
+                    } else {
+                        value = '';
+                    }
+                } else {
+                    const numericValue = parseCurrencyToNumber(rawValue);
+                    value = centsToCurrency(Math.round(Math.max(0, numericValue) * 100));
+                }
+                const appliesTo = Array.isArray(discount?.appliesTo)
+                    ? discount.appliesTo.map(itemId => String(itemId))
+                    : [];
+                return {
+                    id: discountId,
+                    label: typeof discount?.label === 'string' ? discount.label : '',
+                    type,
+                    value: value || (type === 'percentage' ? '' : '0.00'),
+                    appliesTo,
+                };
+            })
+            : [];
+
         return {
             ...defaultOrderState,
             ...incomingOrder,
@@ -1783,7 +1977,9 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
             title: incomingOrder.title || '',
             display_id: incomingOrder.display_id || '',
             additionalContacts: incomingOrder.additionalContacts || [],
-            estimatedShipping: incomingOrder.estimatedShipping || '',
+            estimatedShipping: formatCurrencyField(incomingOrder.estimatedShipping),
+            taxAmount: formatCurrencyField(incomingOrder.taxAmount),
+            discounts: sanitizedDiscounts,
             priorityLevel: incomingOrder.priorityLevel || '',
             fulfillmentChannel: incomingOrder.fulfillmentChannel || '',
             customerReference: incomingOrder.customerReference || '',
@@ -1793,14 +1989,17 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
             shippingZipCode: incomingOrder.shippingZipCode || '',
             lineItems: Array.isArray(incomingOrder.lineItems)
                 ? incomingOrder.lineItems.map((item, index) => ({
-                    id: item?.id ?? item?.line_item_id ?? index + 1,
+                    id: item?.id != null
+                        ? String(item.id)
+                        : item?.line_item_id != null
+                            ? String(item.line_item_id)
+                            : String(index + 1),
                     catalogItemId: item?.catalogItemId ?? item?.catalog_item_id ?? null,
                     name: item?.name || '',
                     description: item?.description || '',
                     quantity: Number(item?.quantity) || 0,
                     price: Number(item?.price) || 0,
                     packageId: item?.packageId ?? item?.package_id ?? null,
-                    weightOz: item?.weightOz ?? item?.weight_oz ?? null,
                 }))
                 : [],
             notes: incomingOrder.notes || '',
@@ -1818,6 +2017,7 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
     const [scanInput, setScanInput] = useState('');
     const scanInputRef = React.useRef(null);
     const nextLineItemIdRef = useRef(1);
+    const nextDiscountIdRef = useRef(1);
 
     useEffect(() => {
         const numericIds = formData.lineItems
@@ -1834,6 +2034,27 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
             nextLineItemIdRef.current = maxId + 1;
         }
     }, [formData.lineItems]);
+    useEffect(() => {
+        const numericIds = (formData.discounts || [])
+            .map(discount => {
+                if (!discount || discount.id == null) {
+                    return null;
+                }
+                const idString = String(discount.id);
+                const matches = idString.match(/(\d+)/g);
+                if (!matches || matches.length === 0) {
+                    return null;
+                }
+                const parsed = parseInt(matches[matches.length - 1], 10);
+                return Number.isFinite(parsed) ? parsed : null;
+            })
+            .filter(value => value !== null);
+        const maxId = numericIds.length > 0 ? Math.max(...numericIds) : 0;
+        const candidate = maxId + 1;
+        if (candidate > nextDiscountIdRef.current) {
+            nextDiscountIdRef.current = candidate;
+        }
+    }, [formData.discounts]);
     const [isSelectingPrimary, setIsSelectingPrimary] = useState(false);
     const [primarySearchTerm, setPrimarySearchTerm] = useState('');
     const [showNewContactModal, setShowNewContactModal] = useState(false);
@@ -1857,6 +2078,7 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
     }, [primaryContactId, allContacts]);
 
     const mentionedContacts = formData.additionalContacts || [];
+    const normalizedLineItems = useMemo(() => normalizeLineItemsForSave(formData.lineItems), [formData.lineItems]);
 
     const handleReturnToOrders = () => {
         const isNewUnsavedDraft = !order && (formData.lineItems.length > 0 || Boolean(primaryContactId));
@@ -1867,48 +2089,6 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
             navigateTo('dashboard');
         }
     };
-
-    const fetchEstimatedShipping = async (zipCode, items) => {
-        if (!zipCode || !/^\d{5}$/.test(zipCode)) {
-            return;
-        }
-        const normalizedItems = normalizeLineItemsForSave(items);
-        if (!normalizedItems || normalizedItems.length === 0) {
-            setFormData(prev => ({ ...prev, estimatedShipping: '0.00' }));
-            return;
-        }
-
-        try {
-            const response = await fetch('/api/calculate-shipping-estimate', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ shippingZipCode: zipCode, lineItems: normalizedItems })
-            });
-            const data = await response.json();
-            if (response.ok) {
-                setFormData(prev => ({ ...prev, estimatedShipping: data.estimatedShipping.toString() }));
-            } else {
-                console.error('Failed to fetch shipping estimate:', data.message);
-            }
-        } catch (error) {
-            console.error('Error fetching shipping estimate:', error);
-        }
-    };
-
-    useEffect(() => {
-        if (!formData.shippingZipCode || !/^\d{5}$/.test(formData.shippingZipCode)) {
-            return;
-        }
-        if (!formData.lineItems || formData.lineItems.length === 0) {
-            setFormData(prev => ({ ...prev, estimatedShipping: '0.00' }));
-            return;
-        }
-        const timeoutId = setTimeout(() => {
-            fetchEstimatedShipping(formData.shippingZipCode, formData.lineItems);
-        }, 750);
-        return () => clearTimeout(timeoutId);
-    }, [formData.shippingZipCode, formData.lineItems]);
-
 
     const handlePrimaryContactSelect = (contact) => {
         setPrimaryContactId(contact.id);
@@ -2054,14 +2234,13 @@ const unpackPackage = (id, pkgCode) => {
         return null;
       }
       return {
-        id: nextLineItemIdRef.current++,
+        id: String(nextLineItemIdRef.current++),
         catalogItemId: itemId || null,
         name: catalog.name || pkg.name || '',
         description: catalog.description || '',
         quantity: resolvedQuantity,
         price: typeof catalog.price === 'number' ? catalog.price : 0,
         packageId: pkgCode,
-        weightOz: catalog.weight_oz ?? null,
       };
     })
     .filter(Boolean);
@@ -2073,7 +2252,7 @@ const unpackPackage = (id, pkgCode) => {
   setFormData(prev => ({
     ...prev,
     lineItems: [
-      ...prev.lineItems.filter(item => item.id !== id),
+      ...prev.lineItems.filter(item => String(item.id) !== String(id)),
       ...newItems
     ]
   }));
@@ -2083,7 +2262,7 @@ const unpackPackage = (id, pkgCode) => {
         setFormData(prev => ({
             ...prev,
             lineItems: prev.lineItems.map(item => {
-                if (item.id !== id) return item;
+                if (String(item.id) !== String(id)) return item;
                 const updatedItem = { ...item };
                 switch (field) {
                     case 'name':
@@ -2102,15 +2281,6 @@ const unpackPackage = (id, pkgCode) => {
                         updatedItem.price = Number.isFinite(cents) && cents >= 0 ? cents : 0;
                         break;
                     }
-                    case 'weightOz': {
-                        if (value === '' || value === null || value === undefined) {
-                            updatedItem.weightOz = null;
-                        } else {
-                            const numeric = Number(value);
-                            updatedItem.weightOz = Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
-                        }
-                        break;
-                    }
                     default:
                         updatedItem[field] = value;
                 }
@@ -2123,14 +2293,14 @@ const unpackPackage = (id, pkgCode) => {
         if (!selectedId) {
             setFormData(prev => ({
                 ...prev,
-                lineItems: prev.lineItems.map(item => item.id !== id ? item : { ...item, catalogItemId: null })
+                lineItems: prev.lineItems.map(item => String(item.id) !== String(id) ? item : { ...item, catalogItemId: null })
             }));
             return;
         }
 
         const selectedEntry = allSelectableItems[selectedId];
         if (selectedEntry?.kind === 'package') {
-            unpackPackage(nextLineItemIdRef.current++, selectedId);
+            unpackPackage(String(nextLineItemIdRef.current++), selectedId);
             return;
         }
 
@@ -2138,14 +2308,13 @@ const unpackPackage = (id, pkgCode) => {
         setFormData(prev => ({
             ...prev,
             lineItems: prev.lineItems.map(item => {
-                if (item.id !== id) return item;
+                if (String(item.id) !== String(id)) return item;
                 return {
                     ...item,
                     catalogItemId: selectedId,
                     name: catalogItem.name || item.name || '',
                     description: catalogItem.description || item.description || '',
                     price: typeof catalogItem.price === 'number' ? catalogItem.price : item.price,
-                    weightOz: catalogItem.weight_oz ?? item.weightOz ?? null,
                     packageId: null,
                 };
             })
@@ -2175,7 +2344,7 @@ const unpackPackage = (id, pkgCode) => {
         if (matchedEntry) {
             const [matchedId, details] = matchedEntry;
             if (details.kind === 'package') {
-                unpackPackage(nextLineItemIdRef.current++, matchedId);
+                unpackPackage(String(nextLineItemIdRef.current++), matchedId);
             } else {
                 const catalogItem = itemData[matchedId] || {};
                 setFormData(prev => ({
@@ -2183,14 +2352,13 @@ const unpackPackage = (id, pkgCode) => {
                     lineItems: [
                         ...prev.lineItems,
                         {
-                            id: nextLineItemIdRef.current++,
+                            id: String(nextLineItemIdRef.current++),
                             catalogItemId: matchedId,
                             name: catalogItem.name || '',
                             description: catalogItem.description || '',
                             quantity: 1,
                             price: typeof catalogItem.price === 'number' ? catalogItem.price : 0,
                             packageId: null,
-                            weightOz: catalogItem.weight_oz ?? null,
                         },
                     ],
                 }));
@@ -2207,23 +2375,151 @@ const unpackPackage = (id, pkgCode) => {
 
     const addEmptyLineItem = () => {
         const newId = nextLineItemIdRef.current++;
-        setFormData(prev => ({ ...prev, lineItems: [...prev.lineItems, createEmptyLineItem(newId)] }));
+        setFormData(prev => ({ ...prev, lineItems: [...prev.lineItems, createEmptyLineItem(String(newId))] }));
     };
-    const removeLineItem = (id) => { setFormData(prev => ({ ...prev, lineItems: prev.lineItems.filter(item => item.id !== id) })); };
+    const removeLineItem = (id) => {
+        const targetId = String(id);
+        setFormData(prev => ({
+            ...prev,
+            lineItems: prev.lineItems.filter(item => String(item.id) !== targetId),
+            discounts: (prev.discounts || []).map(discount => {
+                if (!Array.isArray(discount.appliesTo) || discount.appliesTo.length === 0) {
+                    return discount;
+                }
+                const filtered = discount.appliesTo.filter(itemId => String(itemId) !== targetId);
+                if (filtered.length === discount.appliesTo.length) {
+                    return discount;
+                }
+                return { ...discount, appliesTo: filtered };
+            }),
+        }));
+    };
+
+    const addDiscount = () => {
+        const newId = `discount-${nextDiscountIdRef.current++}`;
+        setFormData(prev => ({
+            ...prev,
+            discounts: [
+                ...(prev.discounts || []),
+                {
+                    id: newId,
+                    label: '',
+                    type: 'fixed',
+                    value: '0.00',
+                    appliesTo: [],
+                },
+            ],
+        }));
+    };
+
+    const updateDiscount = (id, updater) => {
+        const targetId = String(id);
+        setFormData(prev => ({
+            ...prev,
+            discounts: (prev.discounts || []).map(discount => {
+                if (String(discount.id) !== targetId) {
+                    return discount;
+                }
+                const current = { ...discount };
+                const nextChanges = typeof updater === 'function' ? updater(current) : updater;
+                return { ...current, ...nextChanges };
+            }),
+        }));
+    };
+
+    const removeDiscount = (id) => {
+        const targetId = String(id);
+        setFormData(prev => ({
+            ...prev,
+            discounts: (prev.discounts || []).filter(discount => String(discount.id) !== targetId),
+        }));
+    };
+
+    const handleDiscountLabelChange = (id, value) => {
+        updateDiscount(id, { label: value });
+    };
+
+    const handleDiscountTypeChange = (id, value) => {
+        const nextType = value === 'percentage' ? 'percentage' : 'fixed';
+        updateDiscount(id, (current) => {
+            if (nextType === 'percentage') {
+                const parsed = parseFloat(current.value);
+                return {
+                    type: 'percentage',
+                    value: Number.isFinite(parsed) ? String(parsed) : '',
+                };
+            }
+            const numeric = parseCurrencyToNumber(current.value);
+            return {
+                type: 'fixed',
+                value: centsToCurrency(Math.round(Math.max(0, numeric) * 100)),
+            };
+        });
+    };
+
+    const handleDiscountPercentageValueChange = (id, value) => {
+        updateDiscount(id, { value });
+    };
+
+    const handleDiscountFixedValueChange = (id, cents) => {
+        updateDiscount(id, { value: centsToCurrency(Math.max(0, cents)) });
+    };
+
+    const toggleDiscountApplyToAll = (id, applyToAll) => {
+        if (applyToAll) {
+            updateDiscount(id, { appliesTo: [] });
+            return;
+        }
+        const fallbackIds = normalizedLineItems.map(item => String(item.id));
+        updateDiscount(id, { appliesTo: fallbackIds });
+    };
+
+    const toggleDiscountLineItem = (id, lineItemId, isChecked) => {
+        const targetLineItemId = String(lineItemId);
+        updateDiscount(id, (current) => {
+            const currentIds = Array.isArray(current.appliesTo)
+                ? current.appliesTo.map(itemId => String(itemId))
+                : [];
+            let nextIds;
+            if (isChecked) {
+                nextIds = currentIds.includes(targetLineItemId)
+                    ? currentIds
+                    : [...currentIds, targetLineItemId];
+            } else {
+                nextIds = currentIds.filter(existingId => existingId !== targetLineItemId);
+            }
+            return { appliesTo: nextIds };
+        });
+    };
 
     const orderTotals = useMemo(() => {
-        const normalized = normalizeLineItemsForSave(formData.lineItems);
-        const subtotal = normalized.reduce((acc, item) => acc + (item.quantity * item.price), 0);
-        const estimatedShipping = parseFloat(formData.estimatedShipping) || 0; // dollars
-        const estimatedShippingInCents = Math.round(estimatedShipping * 100);
-        const liveCalculatedTotal = subtotal + estimatedShippingInCents;
+        const subtotal = normalizedLineItems.reduce((acc, item) => acc + (item.quantity * item.price), 0);
+        const shippingCents = Math.max(0, Math.round(parseCurrencyToNumber(formData.estimatedShipping) * 100));
+        const taxCents = Math.max(0, Math.round(parseCurrencyToNumber(formData.taxAmount) * 100));
+        const normalizedDiscounts = normalizeDiscountsForTotals(formData.discounts, normalizedLineItems);
+        const discountTotalCents = Math.min(
+            normalizedDiscounts.reduce((acc, discount) => acc + discount.amountCents, 0),
+            subtotal
+        );
+        const subtotalAfterDiscounts = Math.max(0, subtotal - discountTotalCents);
+        const total = subtotalAfterDiscounts + shippingCents + taxCents;
 
         return {
             subtotal,
-            estimatedShipping,
-            total: liveCalculatedTotal
+            shippingCents,
+            taxCents,
+            discounts: normalizedDiscounts,
+            discountTotalCents,
+            total,
         };
-    }, [formData.lineItems, formData.estimatedShipping]);
+    }, [normalizedLineItems, formData.estimatedShipping, formData.taxAmount, formData.discounts]);
+    const discountAmountLookup = useMemo(() => {
+        const lookup = new Map();
+        (orderTotals.discounts || []).forEach(discount => {
+            lookup.set(String(discount.id), discount);
+        });
+        return lookup;
+    }, [orderTotals.discounts]);
 
     const isDraft = formData.status === 'Draft';
     const canEdit = isEditing || isDraft;
@@ -2253,19 +2549,37 @@ const unpackPackage = (id, pkgCode) => {
         // Normalize line items before saving
         const normalizedLineItems = normalizeLineItemsForSave(formData.lineItems);
 
-        // Recalculate totals based on filtered items
         const subtotal = normalizedLineItems.reduce((acc, item) => acc + (item.quantity * item.price), 0);
-        const estimatedShippingInCents = Math.round((parseFloat(formData.estimatedShipping) || 0) * 100);
-        const finalTotal = subtotal + estimatedShippingInCents;
+        const shippingCents = Math.max(0, Math.round(parseCurrencyToNumber(formData.estimatedShipping) * 100));
+        const taxCents = Math.max(0, Math.round(parseCurrencyToNumber(formData.taxAmount) * 100));
+        const normalizedDiscounts = normalizeDiscountsForTotals(formData.discounts, normalizedLineItems);
+        const discountTotalCents = Math.min(
+            normalizedDiscounts.reduce((acc, discount) => acc + discount.amountCents, 0),
+            subtotal
+        );
+        const subtotalAfterDiscounts = Math.max(0, subtotal - discountTotalCents);
+        const finalTotal = subtotalAfterDiscounts + shippingCents + taxCents;
+
+        const payloadDiscounts = normalizedDiscounts.map(discount => ({
+            id: discount.id,
+            label: discount.label,
+            type: discount.type,
+            value: discount.value,
+            appliesTo: discount.appliesTo,
+        }));
 
         return {
             ...formData,
             lineItems: normalizedLineItems, // Use the filtered list
+            estimatedShipping: centsToCurrency(shippingCents),
+            taxAmount: centsToCurrency(taxCents),
+            discounts: payloadDiscounts,
+            discountTotal: discountTotalCents,
             id: formData.id || null,
             date: isNewOrder ? (formData.date || new Date().toISOString()) : formData.date,
             status: finalStatus,
             statusHistory: newStatusHistory,
-            total: finalTotal, // Use the recalculated total
+            total: finalTotal, // Use the recalculated total in cents
             signatureDataUrl: formData.signatureDataUrl,
             primaryContactId,
             contactInfo: primaryContactSummary ? { ...primaryContactSummary, id: primaryContactId } : { id: primaryContactId }
@@ -2605,7 +2919,7 @@ const unpackPackage = (id, pkgCode) => {
 
                     <OrderLogsSection orderId={formData.id} canEdit={canEdit} allContacts={allContacts} onContactsChanged={refreshMentionedContacts} />
 
-                    <div className="bg-white rounded-lg shadow-sm border border-slate-200"><div className="p-6 border-b"><h2 className="text-xl font-semibold text-slate-700 mb-4">Line Items</h2>{canEdit && (<div className="flex gap-2"><input ref={scanInputRef} type="text" value={scanInput} onChange={e => setScanInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { handleScanAddItem(e); } }} placeholder="Scan or Enter Item Code" className="flex-grow block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm" /><button onClick={handleScanAddItem} className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors">Add</button></div>)}</div><div className="overflow-x-auto"><table className="w-full text-sm text-left text-slate-500"><thead className="text-xs text-slate-700 uppercase bg-slate-100"><tr><th scope="col" className="px-4 py-3">Name</th><th scope="col" className="px-4 py-3">Description</th><th scope="col" className="px-4 py-3 text-center">Units</th><th scope="col" className="px-4 py-3 text-right">Unit Price</th><th scope="col" className="px-4 py-3 text-right">Total</th>{canEdit && <th scope="col" className="px-2 py-3"></th>}</tr></thead><tbody>
+                    <div className="bg-white rounded-lg shadow-sm border border-slate-200"><div className="p-6 border-b"><h2 className="text-xl font-semibold text-slate-700 mb-4">Line Items</h2>{canEdit && (<div className="flex gap-2"><input ref={scanInputRef} type="text" value={scanInput} onChange={e => setScanInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { handleScanAddItem(e); } }} placeholder="Scan or Enter Item Code" className="flex-grow block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-sm placeholder-slate-400 focus:outline-none focus:ring-orange-500 focus:border-orange-500 sm:text-sm" /><button onClick={handleScanAddItem} className="px-4 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 transition-colors">Add</button></div>)}</div><div className="overflow-x-auto"><table className="w-full text-sm text-left text-slate-500"><thead className="text-xs uppercase text-slate-700 bg-slate-100"><tr><th scope="col" className="px-4 py-3">Name</th><th scope="col" className="px-4 py-3">Description</th><th scope="col" className="px-4 py-3 text-center">Units</th><th scope="col" className="px-4 py-3 text-right">Unit Price</th><th scope="col" className="px-4 py-3 text-right">Total</th>{canEdit && <th scope="col" className="px-2 py-3"></th>}</tr></thead><tbody>
 {formData.lineItems.map(item => {
     const catalogEntry = item.catalogItemId ? allSelectableItems[item.catalogItemId] : null;
     const displayName = item.name || catalogEntry?.name || 'Line Item';
@@ -2720,16 +3034,200 @@ const unpackPackage = (id, pkgCode) => {
                         />
                     </div>
                     <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
-                        <h2 className="text-xl font-semibold text-slate-700 mb-4">Order Summary</h2>
-                        <div className="space-y-3">
-                            <div className="flex justify-between items-center text-slate-600"><span>Subtotal</span><span className="font-medium">${(orderTotals.subtotal / 100).toFixed(2)}</span></div>
-                            {orderTotals.estimatedShipping > 0 && (
-                                <div className="flex justify-between items-center text-slate-600">
-                                    <span>Est. Shipping</span>
-                                    <span className="font-medium">${orderTotals.estimatedShipping.toFixed(2)}</span>
-                                </div>
+                        <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+                            <h2 className="text-xl font-semibold text-slate-700">Order Summary</h2>
+                            {canEdit && (
+                                <button
+                                    type="button"
+                                    onClick={addDiscount}
+                                    className="text-sm font-semibold text-orange-600 hover:text-orange-700"
+                                >
+                                    + Add Discount
+                                </button>
                             )}
-                            <div className="flex justify-between items-center font-bold text-xl text-slate-800"><span>Total</span><span>${(orderTotals.total / 100).toFixed(2)}</span></div>
+                        </div>
+                        <div className="mt-4 space-y-4">
+                            <div>
+                                <label className="block text-xs font-medium text-slate-500 uppercase tracking-wide">Shipping</label>
+                                {canEdit ? (
+                                    <PriceInput
+                                        value={orderTotals.shippingCents}
+                                        onChange={(cents) => setFormData(prev => ({ ...prev, estimatedShipping: centsToCurrency(Math.max(0, cents)) }))}
+                                        ariaLabel="Shipping amount"
+                                    />
+                                ) : (
+                                    <p className="mt-1 text-right font-medium text-slate-700">${centsToCurrency(orderTotals.shippingCents)}</p>
+                                )}
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-slate-500 uppercase tracking-wide">Taxes</label>
+                                {canEdit ? (
+                                    <PriceInput
+                                        value={orderTotals.taxCents}
+                                        onChange={(cents) => setFormData(prev => ({ ...prev, taxAmount: centsToCurrency(Math.max(0, cents)) }))}
+                                        ariaLabel="Tax amount"
+                                    />
+                                ) : (
+                                    <p className="mt-1 text-right font-medium text-slate-700">${centsToCurrency(orderTotals.taxCents)}</p>
+                                )}
+                            </div>
+                        </div>
+                        <div className="mt-6 space-y-4">
+                            {(formData.discounts || []).length === 0 && canEdit && (
+                                <p className="text-sm text-slate-500">No discounts applied.</p>
+                            )}
+                            {(formData.discounts || []).map(discount => {
+                                const discountId = String(discount.id);
+                                const computed = discountAmountLookup.get(discountId) || { amountCents: 0, appliesToAll: true };
+                                const appliesSet = new Set(Array.isArray(discount.appliesTo) ? discount.appliesTo.map(String) : []);
+                                return (
+                                    <div key={discountId} className="space-y-3 rounded-md border border-slate-200 p-4">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="flex-1">
+                                                <label className="block text-xs font-medium text-slate-500 uppercase tracking-wide">Label</label>
+                                                {canEdit ? (
+                                                    <input
+                                                        type="text"
+                                                        value={discount.label}
+                                                        onChange={(e) => handleDiscountLabelChange(discountId, e.target.value)}
+                                                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500"
+                                                    />
+                                                ) : (
+                                                    <p className="mt-1 text-sm font-medium text-slate-700">{discount.label || 'Discount'}</p>
+                                                )}
+                                            </div>
+                                            {canEdit && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => removeDiscount(discountId)}
+                                                    className="text-sm font-semibold text-red-600 hover:text-red-700"
+                                                >
+                                                    Remove
+                                                </button>
+                                            )}
+                                        </div>
+                                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                            <div>
+                                                <label className="block text-xs font-medium text-slate-500 uppercase tracking-wide">Type</label>
+                                                {canEdit ? (
+                                                    <select
+                                                        value={discount.type}
+                                                        onChange={(e) => handleDiscountTypeChange(discountId, e.target.value)}
+                                                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500"
+                                                    >
+                                                        <option value="fixed">Fixed Amount</option>
+                                                        <option value="percentage">Percentage</option>
+                                                    </select>
+                                                ) : (
+                                                    <p className="mt-1 text-sm text-slate-700 capitalize">{discount.type}</p>
+                                                )}
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-medium text-slate-500 uppercase tracking-wide">Value</label>
+                                                {canEdit ? (
+                                                    discount.type === 'percentage' ? (
+                                                        <input
+                                                            type="number"
+                                                            min="0"
+                                                            step="0.01"
+                                                            value={discount.value ?? ''}
+                                                            onChange={(e) => handleDiscountPercentageValueChange(discountId, e.target.value)}
+                                                            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500"
+                                                        />
+                                                    ) : (
+                                                        <PriceInput
+                                                            value={Math.max(0, Math.round(parseCurrencyToNumber(discount.value) * 100))}
+                                                            onChange={(cents) => handleDiscountFixedValueChange(discountId, cents)}
+                                                            ariaLabel="Discount amount"
+                                                        />
+                                                    )
+                                                ) : (
+                                                    <p className="mt-1 text-sm text-slate-700">
+                                                        {discount.type === 'percentage'
+                                                            ? `${discount.value || '0'}%`
+                                                            : `$${centsToCurrency(Math.round(parseCurrencyToNumber(discount.value) * 100))}`}
+                                                    </p>
+                                                )}
+                                            </div>
+                                        </div>
+                                        <div className="space-y-2">
+                                            <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-medium uppercase tracking-wide text-slate-500">
+                                                <span>Applies To</span>
+                                                <span className="text-slate-600">Amount: ${centsToCurrency(computed.amountCents)}</span>
+                                            </div>
+                                            {normalizedLineItems.length === 0 ? (
+                                                <p className="text-xs text-slate-400">Add line items to target specific discounts.</p>
+                                            ) : (
+                                                <div className="space-y-2 text-sm text-slate-600">
+                                                    <label className="inline-flex items-center gap-2">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={computed.appliesToAll}
+                                                            onChange={(e) => toggleDiscountApplyToAll(discountId, e.target.checked)}
+                                                            disabled={!canEdit}
+                                                        />
+                                                        <span>Apply to all line items</span>
+                                                    </label>
+                                                    <div className={`grid gap-2 ${computed.appliesToAll ? 'opacity-50' : ''}`}>
+                                                        {normalizedLineItems.map(item => {
+                                                            const itemId = String(item.id);
+                                                            const isChecked = computed.appliesToAll || appliesSet.has(itemId);
+                                                            return (
+                                                                <label key={itemId} className="inline-flex items-center gap-2">
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        checked={isChecked}
+                                                                        onChange={(e) => toggleDiscountLineItem(discountId, itemId, e.target.checked)}
+                                                                        disabled={!canEdit || computed.appliesToAll}
+                                                                    />
+                                                                    <span>{item.name || 'Line Item'} ({item.quantity} @ ${centsToCurrency(item.price)})</span>
+                                                                </label>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                            {!canEdit && (formData.discounts || []).length === 0 && (
+                                <p className="text-sm text-slate-500">No discounts applied.</p>
+                            )}
+                        </div>
+                        <div className="mt-6 border-t border-slate-200 pt-4">
+                            <div className="ml-auto max-w-xs space-y-2 text-right text-sm text-slate-600">
+                                <div className="flex justify-between gap-4">
+                                    <span>Subtotal</span>
+                                    <span className="font-medium text-slate-700">${centsToCurrency(orderTotals.subtotal)}</span>
+                                </div>
+                                <div className="flex justify-between gap-4">
+                                    <span>Taxes</span>
+                                    <span className="font-medium text-slate-700">${centsToCurrency(orderTotals.taxCents)}</span>
+                                </div>
+                                <div className="flex justify-between gap-4">
+                                    <span>Shipping</span>
+                                    <span className="font-medium text-slate-700">${centsToCurrency(orderTotals.shippingCents)}</span>
+                                </div>
+                                <div className={`flex justify-between gap-4 ${orderTotals.discountTotalCents > 0 ? 'text-rose-600' : 'text-slate-700'}`}>
+                                    <span>Discounts</span>
+                                    <span className="font-medium">{orderTotals.discountTotalCents > 0 ? '-' : ''}${centsToCurrency(orderTotals.discountTotalCents)}</span>
+                                </div>
+                                {orderTotals.discounts.length > 0 && (
+                                    <div className="space-y-1 text-xs text-rose-500">
+                                        {orderTotals.discounts.map(discount => (
+                                            <div key={discount.id} className="flex justify-between gap-3">
+                                                <span className="truncate">{discount.label || 'Discount'}</span>
+                                                <span>- ${centsToCurrency(discount.amountCents)}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                                <div className="flex justify-between items-center gap-4 border-t border-slate-200 pt-2 text-lg font-semibold text-slate-800">
+                                    <span>Total</span>
+                                    <span>${centsToCurrency(orderTotals.total)}</span>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <div className="space-y-3">
@@ -2864,7 +3362,6 @@ const App = () => {
                     name: item.name || '',
                     description: item.description || '',
                     price: typeof item.price === 'number' ? item.price : 0,
-                    weight_oz: item.weight_oz ?? null,
                 };
                 return acc;
             }, {});
@@ -2878,7 +3375,6 @@ const App = () => {
                     name: entry.name,
                     description: entry.description,
                     price: entry.price,
-                    weight_oz: entry.weight_oz,
                     kind: 'item',
                 };
                 return acc;
