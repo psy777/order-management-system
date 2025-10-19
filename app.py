@@ -21,7 +21,7 @@ import shutil
 import zipfile
 import pytz
 
-MENTION_PATTERN = re.compile(r'@([A-Za-z0-9_.-]+)')
+MENTION_PATTERN = re.compile(r'(?<!\S)@([A-Za-z0-9_.-]+)')
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request, send_from_directory, redirect, flash, url_for

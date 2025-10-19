@@ -148,7 +148,11 @@ const ContactMentionTextarea = ({ label, placeholder, value, onChange, disabled 
             return `<span class="text-slate-400">${escapeHtml(placeholder || '')}</span>`;
         }
         const escaped = escapeHtml(rawValue);
-        const withMentions = escaped.replace(/(@[a-z0-9_.-]+)/gi, '<span class="mention-pill inline-flex items-center gap-1 rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700">$1</span>');
+        const mentionPattern = /(^|\s)@([a-z0-9_.-]+)/gi;
+        const withMentions = escaped.replace(
+            mentionPattern,
+            (match, prefix, handle) => `${prefix}<span class="mention-pill inline-flex items-center gap-1 rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700">@${handle}</span>`
+        );
         const withBreaks = withMentions.replace(/\r?\n/g, '<br />');
         return formatSpaces(withBreaks);
     }, [value, placeholder]);
@@ -163,7 +167,7 @@ const ContactMentionTextarea = ({ label, placeholder, value, onChange, disabled 
 
     const findMentionQuery = (text, caretPosition) => {
         const uptoCaret = text.slice(0, caretPosition);
-        const match = uptoCaret.match(/@([a-z0-9_.-]*)$/i);
+        const match = uptoCaret.match(/(?:^|\s)@([a-z0-9_.-]*)$/i);
         if (match) {
             return match[1].toLowerCase();
         }
@@ -199,16 +203,16 @@ const ContactMentionTextarea = ({ label, placeholder, value, onChange, disabled 
         const caret = textarea.selectionStart;
         const text = textarea.value;
         const uptoCaret = text.slice(0, caret);
-        const match = uptoCaret.match(/@([a-z0-9_.-]*)$/i);
+        const match = uptoCaret.match(/(?:^|\s)@([a-z0-9_.-]*)$/i);
         if (!match) return;
         const queryLength = match[1].length;
-        const insertionPoint = caret - queryLength;
+        const mentionStart = caret - queryLength - 1;
         const replacement = `@${contact.handle} `;
-        const newValue = text.slice(0, insertionPoint) + replacement + text.slice(caret);
+        const newValue = text.slice(0, mentionStart) + replacement + text.slice(caret);
         onChange(newValue);
         requestAnimationFrame(() => {
             textarea.focus();
-            const newCaret = insertionPoint + replacement.length;
+            const newCaret = mentionStart + replacement.length;
             textarea.setSelectionRange(newCaret, newCaret);
         });
         setSuggestions([]);
