@@ -173,7 +173,7 @@ const buildOrderDocumentTitle = (order) => {
     const fallbackId = order?.display_id ?? order?.id ?? '';
     const rawTitle = (order?.title ?? '').toString().trim();
     if (rawTitle) {
-        return rawTitle;
+        return `Order ${rawTitle}`;
     }
     return fallbackId ? `Order ${fallbackId}` : 'Order';
 };
