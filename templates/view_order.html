@@ -855,17 +855,45 @@ const formatContactAddress = (address, city, state, zip) => {
             const showCompanyLine = Boolean(companyName && companyName !== contactDisplayName);
             const contactHandle = (primaryContact.handle || '').trim();
             const formattedPhone = formatPhoneNumber(primaryContact.phone);
+            const preferAddressValue = (primary, ...fallbacks) => {
+                const candidates = [primary, ...fallbacks];
+                for (const candidate of candidates) {
+                    if (candidate == null) continue;
+                    const value = String(candidate).trim();
+                    if (value) {
+                        return value;
+                    }
+                }
+                return '';
+            };
+            const shippingFallback = {
+                address: order.shippingAddress || '',
+                city: order.shippingCity || '',
+                state: order.shippingState || '',
+                zip: order.shippingZipCode || '',
+            };
+            const billingFallbackSource = {
+                address: order.billingAddress || '',
+                city: order.billingCity || '',
+                state: order.billingState || '',
+                zip: order.billingZipCode || '',
+            };
+            const hasBillingFallback = Object.values(billingFallbackSource).some(value => {
+                if (value == null) return false;
+                return String(value).trim().length > 0;
+            });
+            const billingFallback = hasBillingFallback ? billingFallbackSource : shippingFallback;
             const formattedShipping = formatContactAddress(
-                primaryContact.shippingAddress,
-                primaryContact.shippingCity,
-                primaryContact.shippingState,
-                primaryContact.shippingZipCode
+                preferAddressValue(primaryContact.shippingAddress, shippingFallback.address),
+                preferAddressValue(primaryContact.shippingCity, shippingFallback.city),
+                preferAddressValue(primaryContact.shippingState, shippingFallback.state),
+                preferAddressValue(primaryContact.shippingZipCode, shippingFallback.zip)
             );
             const formattedBilling = formatContactAddress(
-                primaryContact.billingAddress,
-                primaryContact.billingCity,
-                primaryContact.billingState,
-                primaryContact.billingZipCode
+                preferAddressValue(primaryContact.billingAddress, billingFallback.address),
+                preferAddressValue(primaryContact.billingCity, billingFallback.city),
+                preferAddressValue(primaryContact.billingState, billingFallback.state),
+                preferAddressValue(primaryContact.billingZipCode, billingFallback.zip)
             );
 
 
