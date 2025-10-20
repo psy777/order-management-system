@@ -1,3 +1,4 @@
+import base64
 import io
 import os
 import uuid
@@ -13,6 +14,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 from pathlib import Path
+from zipfile import ZipFile
 from werkzeug.utils import secure_filename
 from datetime import datetime, timezone, timedelta
 from dateutil.parser import parse as dateutil_parse
@@ -3800,6 +3802,8 @@ def convert_legacy_backup():
 
     safe_name = secure_filename(upload.filename) or 'legacy_payload'
 
+    report_payload: Optional[str] = None
+
     try:
         with tempfile.TemporaryDirectory(prefix='firecoast_legacy_') as tmp_dir:
             working_dir = Path(tmp_dir)
@@ -3807,15 +3811,29 @@ def convert_legacy_backup():
             upload.save(source_path)
 
             archive_path = build_legacy_backup(source_path, destination_dir=working_dir)
+            try:
+                with ZipFile(archive_path) as archive_file:
+                    report_payload = archive_file.read('legacy_import_report.json').decode('utf-8')
+            except (KeyError, OSError, UnicodeDecodeError):
+                report_payload = None
             buffer = io.BytesIO(archive_path.read_bytes())
             buffer.seek(0)
 
-        return send_file(
+        response = send_file(
             buffer,
             mimetype='application/zip',
             as_attachment=True,
             download_name=archive_path.name,
         )
+
+        if report_payload:
+            try:
+                encoded = base64.b64encode(report_payload.encode('utf-8')).decode('ascii')
+                response.headers['X-Legacy-Report'] = encoded
+            except Exception:
+                app.logger.warning('Failed to encode legacy import report header', exc_info=True)
+
+        return response
     except FileNotFoundError:
         return jsonify({"status": "error", "message": "The uploaded file could not be processed."}), 400
     except Exception as exc:  # pragma: no cover - defensive logging

@@ -1,3 +1,4 @@
+import base64
 import io
 import json
 import zipfile
@@ -148,6 +149,11 @@ def test_legacy_convert_endpoint_returns_converted_archive():
 
     assert response.status_code == 200
     assert response.mimetype == 'application/zip'
+
+    report_header = response.headers.get('X-Legacy-Report')
+    assert report_header
+    report_payload = json.loads(base64.b64decode(report_header).decode('utf-8'))
+    assert report_payload['summary']['has_database'] is False
 
     with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
         names = set(archive.namelist())

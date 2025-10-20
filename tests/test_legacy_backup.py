@@ -95,7 +95,7 @@ def test_build_legacy_backup_from_json_payload(tmp_path):
         connection.close()
 
 
-def test_build_legacy_backup_prefers_existing_database(tmp_path):
+def test_build_legacy_backup_ingests_existing_database(tmp_path):
     legacy_dir = tmp_path / "legacy"
     legacy_dir.mkdir()
 
@@ -104,8 +104,20 @@ def test_build_legacy_backup_prefers_existing_database(tmp_path):
     db_path = legacy_dir / "orders_manager.db"
     conn = sqlite3.connect(db_path)
     try:
-        conn.execute("CREATE TABLE orders (order_id TEXT PRIMARY KEY, status TEXT)")
-        conn.execute("INSERT INTO orders (order_id, status) VALUES (?, ?)", ("X1", "done"))
+        conn.execute(
+            "CREATE TABLE orders (order_id TEXT PRIMARY KEY, status TEXT, total REAL)"
+        )
+        conn.execute(
+            "INSERT INTO orders (order_id, status, total) VALUES (?, ?, ?)",
+            ("X1", "done", 42.5),
+        )
+        conn.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?)",
+            ("timezone", "America/Chicago"),
+        )
+        conn.execute("CREATE TABLE extras (id INTEGER PRIMARY KEY, body TEXT)")
+        conn.execute("INSERT INTO extras (body) VALUES (?)", ("legacy note",))
         conn.commit()
     finally:
         conn.close()
@@ -118,16 +130,27 @@ def test_build_legacy_backup_prefers_existing_database(tmp_path):
         names = set(zf.namelist())
         assert "orders_manager.db" in names
         assert "legacy_assets/note.txt" in names
+        assert "legacy_assets/legacy_databases/orders_manager.db" in names
+        assert "legacy_assets/legacy_tables/extras.json" in names
         report = json.loads(zf.read("legacy_import_report.json"))
-        assert report["summary"]["attachments"] == 1
+        assert report["summary"]["attachments"] == 3
+        assert report["summary"]["orders"] == 1
         assert report["summary"]["has_database"] is True
+
+        settings_payload = json.loads(zf.read("settings.json"))
+        assert settings_payload["timezone"] == "America/Chicago"
+
+        extras_payload = json.loads(zf.read("legacy_assets/legacy_tables/extras.json"))
+        assert extras_payload[0]["body"] == "legacy note"
 
         db_copy = tmp_path / "copied.db"
         db_copy.write_bytes(zf.read("orders_manager.db"))
 
     conn = sqlite3.connect(db_copy)
     try:
-        row = conn.execute("SELECT order_id, status FROM orders").fetchone()
-        assert row == ("X1", "done")
+        row = conn.execute(
+            "SELECT order_id, status, total_cents FROM orders"
+        ).fetchone()
+        assert row == ("X1", "done", 4250)
     finally:
         conn.close()

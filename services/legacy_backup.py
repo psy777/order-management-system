@@ -16,6 +16,7 @@ we do not understand are still included in the resulting archive under a
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import logging
 import sqlite3
@@ -23,7 +24,7 @@ import tempfile
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional
+from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Tuple
 from zipfile import ZipFile
 
 LOGGER = logging.getLogger(__name__)
@@ -56,7 +57,6 @@ class LegacyDataset:
     record_handles: List[Dict[str, Any]] = field(default_factory=list)
     records: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
     attachments: Dict[str, bytes] = field(default_factory=dict)
-    database_blob: Optional[bytes] = None
     notes: List[str] = field(default_factory=list)
 
 
@@ -133,10 +133,7 @@ def _ingest_source(source: Path) -> LegacyDataset:
     if source.suffix.lower() in JSON_EXTENSIONS:
         return _ingest_json_file(source)
     if source.suffix.lower() in DATABASE_EXTENSIONS:
-        dataset = LegacyDataset()
-        dataset.database_blob = source.read_bytes()
-        dataset.notes.append(f"Imported database file {source.name}")
-        return dataset
+        return _ingest_database_file(source)
 
     dataset = LegacyDataset()
     dataset.attachments[source.name] = source.read_bytes()
@@ -165,16 +162,7 @@ def _ingest_directory(directory: Path) -> LegacyDataset:
             elif suffix == ".zip":
                 _merge_dataset(dataset, _ingest_zip(entry))
             elif suffix in DATABASE_EXTENSIONS:
-                if dataset.database_blob is None:
-                    dataset.database_blob = entry.read_bytes()
-                    dataset.notes.append(
-                        f"Included database file {relative} as orders_manager.db"
-                    )
-                else:
-                    dataset.attachments[relative] = entry.read_bytes()
-                    dataset.notes.append(
-                        f"Additional database file {relative} preserved as attachment"
-                    )
+                _merge_dataset(dataset, _ingest_database_file(entry))
             else:
                 dataset.attachments[relative] = entry.read_bytes()
                 dataset.notes.append(f"Preserved {relative} as attachment")
@@ -196,11 +184,8 @@ def _ingest_zip(archive_path: Path) -> LegacyDataset:
                     data = handle.read()
                 if suffix in JSON_EXTENSIONS:
                     _merge_dataset(dataset, _ingest_json_payload(info.filename, data.decode("utf-8")))
-                elif suffix in DATABASE_EXTENSIONS and dataset.database_blob is None:
-                    dataset.database_blob = data
-                    dataset.notes.append(
-                        f"Included database file {info.filename} as orders_manager.db"
-                    )
+                elif suffix in DATABASE_EXTENSIONS:
+                    _merge_dataset(dataset, _ingest_database_blob(info.filename, data))
                 else:
                     dataset.attachments[info.filename] = data
                     dataset.notes.append(f"Preserved {info.filename} from ZIP as attachment")
@@ -240,6 +225,331 @@ def _ingest_json_payload(name: str, payload: str) -> LegacyDataset:
     return dataset
 
 
+def _ingest_database_file(path: Path) -> LegacyDataset:
+    return _ingest_sqlite_database(path, display_name=path.name)
+
+
+def _ingest_database_blob(name: str, payload: bytes) -> LegacyDataset:
+    suffix = Path(name).suffix or ".db"
+    with tempfile.NamedTemporaryFile(suffix=suffix) as handle:
+        handle.write(payload)
+        handle.flush()
+        return _ingest_sqlite_database(Path(handle.name), display_name=name, original_blob=payload)
+
+
+def _ingest_sqlite_database(
+    path: Path,
+    *,
+    display_name: Optional[str] = None,
+    original_blob: Optional[bytes] = None,
+) -> LegacyDataset:
+    dataset = LegacyDataset()
+    display_name = display_name or path.name
+
+    blob = original_blob
+    if blob is None:
+        try:
+            blob = path.read_bytes()
+        except OSError:
+            blob = None
+
+    try:
+        connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+        connection.row_factory = sqlite3.Row
+    except sqlite3.Error as exc:
+        if blob is not None:
+            dataset.attachments[f"legacy_databases/{display_name}"] = blob
+        dataset.notes.append(
+            f"Preserved {display_name} as attachment (database open failed: {exc})"
+        )
+        return dataset
+
+    imported_tables: List[Tuple[str, int]] = []
+    preserved_tables: List[str] = []
+
+    try:
+        cursor = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )
+        available_tables: Dict[str, str] = {}
+        for row in cursor.fetchall():
+            table_name = row[0]
+            if not table_name or str(table_name).lower().startswith("sqlite_"):
+                continue
+            available_tables[table_name.lower()] = table_name
+
+        def _record_import(table_name: str, count: int) -> None:
+            imported_tables.append((table_name, count))
+
+        orders_table = _resolve_table_name(available_tables, _ORDERS_KEYS)
+        if orders_table:
+            rows = _read_sqlite_table(connection, orders_table)
+            if rows is None:
+                dataset.notes.append(
+                    f"Failed to read table {orders_table} from {display_name}."
+                )
+            else:
+                dataset.orders.extend(rows)
+                _record_import(orders_table, len(rows))
+
+        line_items_table = _resolve_table_name(available_tables, _LINE_ITEM_KEYS)
+        if line_items_table:
+            rows = _read_sqlite_table(connection, line_items_table)
+            if rows is None:
+                dataset.notes.append(
+                    f"Failed to read table {line_items_table} from {display_name}."
+                )
+            else:
+                dataset.order_line_items.extend(rows)
+                _record_import(line_items_table, len(rows))
+
+        order_logs_table = _resolve_table_name(available_tables, _ORDER_LOG_KEYS)
+        if order_logs_table:
+            rows = _read_sqlite_table(connection, order_logs_table)
+            if rows is None:
+                dataset.notes.append(
+                    f"Failed to read table {order_logs_table} from {display_name}."
+                )
+            else:
+                dataset.order_logs.extend(rows)
+                _record_import(order_logs_table, len(rows))
+
+        status_table = _resolve_table_name(available_tables, _ORDER_STATUS_KEYS)
+        if status_table:
+            rows = _read_sqlite_table(connection, status_table)
+            if rows is None:
+                dataset.notes.append(
+                    f"Failed to read table {status_table} from {display_name}."
+                )
+            else:
+                dataset.order_status_history.extend(rows)
+                _record_import(status_table, len(rows))
+
+        contacts_table = _resolve_table_name(available_tables, _CONTACT_KEYS)
+        if contacts_table:
+            rows = _read_sqlite_table(connection, contacts_table)
+            if rows is None:
+                dataset.notes.append(
+                    f"Failed to read table {contacts_table} from {display_name}."
+                )
+            else:
+                dataset.contacts.extend(rows)
+                _record_import(contacts_table, len(rows))
+
+        items_table = _resolve_table_name(available_tables, _ITEM_KEYS)
+        if items_table:
+            rows = _read_sqlite_table(connection, items_table)
+            if rows is None:
+                dataset.notes.append(
+                    f"Failed to read table {items_table} from {display_name}."
+                )
+            else:
+                dataset.items.extend(rows)
+                _record_import(items_table, len(rows))
+
+        packages_table = _resolve_table_name(available_tables, _PACKAGE_KEYS)
+        if packages_table:
+            rows = _read_sqlite_table(connection, packages_table)
+            if rows is None:
+                dataset.notes.append(
+                    f"Failed to read table {packages_table} from {display_name}."
+                )
+            else:
+                dataset.packages.extend(rows)
+                _record_import(packages_table, len(rows))
+
+        package_items_table = _resolve_table_name(available_tables, _PACKAGE_ITEM_KEYS)
+        if package_items_table:
+            rows = _read_sqlite_table(connection, package_items_table)
+            if rows is None:
+                dataset.notes.append(
+                    f"Failed to read table {package_items_table} from {display_name}."
+                )
+            else:
+                dataset.package_items.extend(rows)
+                _record_import(package_items_table, len(rows))
+
+        record_mentions_table = _resolve_table_name(available_tables, _RECORD_MENTION_KEYS)
+        if record_mentions_table:
+            rows = _read_sqlite_table(connection, record_mentions_table)
+            if rows is None:
+                dataset.notes.append(
+                    f"Failed to read table {record_mentions_table} from {display_name}."
+                )
+            else:
+                dataset.record_mentions.extend(rows)
+                _record_import(record_mentions_table, len(rows))
+
+        record_activity_table = _resolve_table_name(available_tables, _RECORD_ACTIVITY_KEYS)
+        if record_activity_table:
+            rows = _read_sqlite_table(connection, record_activity_table)
+            if rows is None:
+                dataset.notes.append(
+                    f"Failed to read table {record_activity_table} from {display_name}."
+                )
+            else:
+                dataset.record_activity.extend(rows)
+                _record_import(record_activity_table, len(rows))
+
+        record_handles_table = _resolve_table_name(available_tables, _RECORD_HANDLE_KEYS)
+        if record_handles_table:
+            rows = _read_sqlite_table(connection, record_handles_table)
+            if rows is None:
+                dataset.notes.append(
+                    f"Failed to read table {record_handles_table} from {display_name}."
+                )
+            else:
+                dataset.record_handles.extend(rows)
+                _record_import(record_handles_table, len(rows))
+
+        records_table = _resolve_table_name(available_tables, _RECORD_KEYS)
+        if records_table:
+            rows = _read_sqlite_table(connection, records_table)
+            if rows is None:
+                dataset.notes.append(
+                    f"Failed to read table {records_table} from {display_name}."
+                )
+            else:
+                bucket: Dict[str, List[Dict[str, Any]]] = {}
+                for entry in rows:
+                    record = dict(entry)
+                    data_value = record.get("data")
+                    if data_value is not None:
+                        record["data"] = _decode_possible_json(data_value)
+                    entity_type = str(
+                        record.get("entity_type")
+                        or record.get("type")
+                        or "record"
+                    )
+                    bucket.setdefault(entity_type, []).append(record)
+                if bucket:
+                    _merge_record_buckets(dataset.records, bucket)
+                    _record_import(records_table, sum(len(v) for v in bucket.values()))
+                else:
+                    _record_import(records_table, 0)
+
+        settings_table = _resolve_table_name(available_tables, _SETTINGS_KEYS)
+        if settings_table:
+            rows = _read_sqlite_table(connection, settings_table)
+            if rows is None:
+                dataset.notes.append(
+                    f"Failed to read table {settings_table} from {display_name}."
+                )
+            else:
+                for row in rows:
+                    key = _first_value(row, "key", "setting", "name", "id")
+                    value = (
+                        row.get("value")
+                        or row.get("data")
+                        or row.get("json")
+                        or row.get("payload")
+                    )
+                    value = _decode_possible_json(value)
+                    if key:
+                        dataset.settings[str(key)] = value
+                        if str(key).lower() in {"timezone", "time_zone"} and isinstance(value, str):
+                            dataset.timezone = value
+                    timezone_value = row.get("timezone") or row.get("time_zone")
+                    if isinstance(timezone_value, str):
+                        dataset.timezone = timezone_value
+                _record_import(settings_table, len(rows))
+
+        remaining_tables = list(available_tables.values())
+        for table_name in remaining_tables:
+            rows = _read_sqlite_table(connection, table_name)
+            if rows is None:
+                dataset.notes.append(
+                    f"Failed to read table {table_name} from {display_name}; stored metadata only."
+                )
+                continue
+            attachment_name = f"legacy_tables/{table_name}.json"
+            dataset.attachments[attachment_name] = _safe_json(rows, indent=2).encode("utf-8")
+            preserved_tables.append(table_name)
+
+    finally:
+        connection.close()
+
+    if blob is not None:
+        attachment_key = f"legacy_databases/{display_name}"
+        if attachment_key not in dataset.attachments:
+            dataset.attachments[attachment_key] = blob
+            dataset.notes.append(
+                f"Included original database file {display_name} as attachment."
+            )
+
+    if imported_tables:
+        summary = ", ".join(f"{name} ({count})" for name, count in imported_tables)
+        dataset.notes.append(f"Copied {summary} from {display_name}.")
+    else:
+        dataset.notes.append(
+            f"Scanned {display_name} but no known tables were recognised."
+        )
+
+    if preserved_tables:
+        dataset.notes.append(
+            "Preserved additional tables as attachments: "
+            + ", ".join(sorted(preserved_tables))
+        )
+
+    return dataset
+
+
+def _resolve_table_name(
+    available: MutableMapping[str, str], aliases: Iterable[str]
+) -> Optional[str]:
+    for alias in aliases:
+        alias_lower = str(alias).lower()
+        if alias_lower in available:
+            return available.pop(alias_lower)
+    for alias in aliases:
+        alias_lower = str(alias).lower()
+        for key in list(available.keys()):
+            if alias_lower in key:
+                return available.pop(key)
+    return None
+
+
+def _read_sqlite_table(
+    connection: sqlite3.Connection, table_name: str
+) -> Optional[List[Dict[str, Any]]]:
+    try:
+        cursor = connection.execute(f'SELECT * FROM "{table_name}"')
+    except sqlite3.Error as exc:
+        LOGGER.warning("Failed to read table %s: %s", table_name, exc)
+        return None
+    rows: List[Dict[str, Any]] = []
+    for entry in cursor.fetchall():
+        rows.append(_row_to_dict(entry))
+    return rows
+
+
+def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
+    result: Dict[str, Any] = {}
+    for key in row.keys():
+        value = row[key]
+        if isinstance(value, bytes):
+            result[key] = base64.b64encode(value).decode("ascii")
+        else:
+            result[key] = value
+    return result
+
+
+def _decode_possible_json(value: Any) -> Any:
+    if isinstance(value, bytes):
+        try:
+            value = value.decode("utf-8")
+        except UnicodeDecodeError:
+            return base64.b64encode(value).decode("ascii")
+    if isinstance(value, str):
+        candidate = value.strip()
+        if candidate:
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                return value
+    return value
+
+
 def _merge_dataset(target: LegacyDataset, other: LegacyDataset) -> None:
     if other is None:
         return
@@ -261,8 +571,6 @@ def _merge_dataset(target: LegacyDataset, other: LegacyDataset) -> None:
         for key, value in other.records.items():
             target.records.setdefault(key, []).extend(value)
     target.attachments.update({k: v for k, v in other.attachments.items() if k not in target.attachments})
-    if other.database_blob and not target.database_blob:
-        target.database_blob = other.database_blob
     target.notes.extend(other.notes)
 
 
@@ -380,10 +688,6 @@ def _write_settings(dataset: LegacyDataset, destination: Path) -> None:
 
 
 def _write_database(dataset: LegacyDataset, target: Path) -> None:
-    if dataset.database_blob:
-        target.write_bytes(dataset.database_blob)
-        return
-
     connection = sqlite3.connect(target)
     try:
         _initialise_database_schema(connection)
@@ -733,6 +1037,23 @@ def _write_attachments(dataset: LegacyDataset, destination: Path) -> None:
 
 
 def _write_report(dataset: LegacyDataset, target: Path) -> None:
+    has_database = any(
+        (
+            dataset.orders,
+            dataset.order_line_items,
+            dataset.order_logs,
+            dataset.order_status_history,
+            dataset.contacts,
+            dataset.items,
+            dataset.packages,
+            dataset.package_items,
+            dataset.record_mentions,
+            dataset.record_activity,
+            dataset.record_handles,
+            dataset.records,
+        )
+    )
+
     report = {
         "notes": dataset.notes,
         "summary": {
@@ -743,7 +1064,7 @@ def _write_report(dataset: LegacyDataset, target: Path) -> None:
             "packages": len(dataset.packages),
             "records": sum(len(entries) for entries in dataset.records.values()),
             "attachments": len(dataset.attachments),
-            "has_database": dataset.database_blob is not None,
+            "has_database": bool(has_database),
         },
     }
     target.write_text(_safe_json(report, indent=2))
