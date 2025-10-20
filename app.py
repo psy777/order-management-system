@@ -32,6 +32,7 @@ from database import (
     generate_unique_contact_handle,
 )
 from data_paths import DATA_ROOT, ensure_data_root
+from services.analytics import get_analytics_engine
 from services.records import (
     RecordValidationError,
     bootstrap_record_service,
@@ -1526,6 +1527,46 @@ def get_dashboard_stats():
         return jsonify({"totalRevenue": round(total_revenue, 2), "averageOrderRevenue": round(avg_rev, 2), "totalOrders": total_orders})
     except sqlite3.Error as e: app.logger.error(f"DB error dashboard: {e}"); return jsonify({"status": "error"}), 500
     finally: conn.close()
+
+
+@app.route('/api/analytics/reports', methods=['GET'])
+def api_list_analytics_reports():
+    conn = get_db_connection()
+    try:
+        engine = get_analytics_engine()
+        definitions = engine.list_report_definitions(conn)
+        return jsonify({'reports': definitions})
+    except Exception as exc:  # pragma: no cover - defensive logging
+        app.logger.exception("Failed to list analytics reports: %s", exc)
+        return jsonify({'message': 'Failed to load analytics definitions.'}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/analytics/reports/run', methods=['POST'])
+def api_run_analytics_report():
+    payload = request.get_json(force=True, silent=True) or {}
+    report_id = payload.get('reportId') or payload.get('report_id')
+    if not report_id:
+        return jsonify({'message': 'reportId is required.'}), 400
+    params = payload.get('params') or {}
+    engine = get_analytics_engine()
+    conn = get_db_connection()
+    try:
+        settings = read_json_file(SETTINGS_FILE)
+        timezone_name = settings.get('timezone', 'UTC')
+        result = engine.run_report(conn, report_id, params, timezone_name=timezone_name)
+        return jsonify({'report': result})
+    except KeyError as exc:
+        return jsonify({'message': str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({'message': str(exc)}), 400
+    except Exception as exc:  # pragma: no cover - defensive logging
+        app.logger.exception("Failed to execute analytics report %s: %s", report_id, exc)
+        return jsonify({'message': 'Failed to generate analytics report.'}), 500
+    finally:
+        conn.close()
+
 
 @app.route('/api/orders', methods=['POST'])
 def save_order():
