@@ -151,6 +151,47 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
+def _table_has_column(cursor: sqlite3.Cursor, table: str, column: str) -> bool:
+    """Return True if the provided table currently exposes the given column."""
+
+    cursor.execute(f"PRAGMA table_info({table})")
+    return any(row[1] == column for row in cursor.fetchall())
+
+
+def _ensure_record_mentions_schema(cursor: sqlite3.Cursor) -> None:
+    """Create or upgrade the record_mentions table for mention extraction support."""
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS record_mentions (
+            mention_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mentioned_handle TEXT NOT NULL,
+            mentioned_entity_type TEXT NOT NULL,
+            mentioned_entity_id TEXT NOT NULL,
+            context_entity_type TEXT NOT NULL,
+            context_entity_id TEXT NOT NULL,
+            snippet TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+
+    if not _table_has_column(cursor, "record_mentions", "mentioned_entity_type"):
+        cursor.execute(
+            "ALTER TABLE record_mentions ADD COLUMN mentioned_entity_type TEXT DEFAULT 'contact' NOT NULL"
+        )
+        cursor.execute(
+            "UPDATE record_mentions SET mentioned_entity_type = COALESCE(mentioned_entity_type, 'contact')"
+        )
+
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_record_mentions_target ON record_mentions(mentioned_entity_type, mentioned_entity_id)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_record_mentions_context ON record_mentions(context_entity_type, context_entity_id)"
+    )
+
+
 def init_db():
     """Initializes the database schema."""
     conn = get_db_connection()
@@ -545,20 +586,7 @@ def init_db():
     """)
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_record_handles_entity ON record_handles(entity_type, entity_id)")
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS record_mentions (
-            mention_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            mentioned_handle TEXT NOT NULL,
-            mentioned_entity_type TEXT NOT NULL,
-            mentioned_entity_id TEXT NOT NULL,
-            context_entity_type TEXT NOT NULL,
-            context_entity_id TEXT NOT NULL,
-            snippet TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-    """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_record_mentions_target ON record_mentions(mentioned_entity_type, mentioned_entity_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_record_mentions_context ON record_mentions(context_entity_type, context_entity_id)")
+    _ensure_record_mentions_schema(cursor)
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS record_activity_logs (
