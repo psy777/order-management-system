@@ -763,9 +763,12 @@ def _initialise_database_schema(conn: sqlite3.Connection) -> None:
         );
         CREATE TABLE IF NOT EXISTS record_mentions (
             mention_id TEXT PRIMARY KEY,
-            entity_type TEXT,
-            entity_id TEXT,
             mentioned_handle TEXT,
+            mentioned_entity_type TEXT,
+            mentioned_entity_id TEXT,
+            context_entity_type TEXT,
+            context_entity_id TEXT,
+            snippet TEXT,
             created_at TEXT,
             raw_json TEXT NOT NULL
         );
@@ -946,18 +949,85 @@ def _populate_database(conn: sqlite3.Connection, dataset: LegacyDataset) -> None
         )
 
     for mention in dataset.record_mentions:
-        mention_id = _coerce_identifier(mention, "id", "mention_id", "uuid")
+        mention_id = _coerce_identifier(mention, "mention_id", "id", "uuid")
+        mentioned_handle = _normalise_optional(
+            _first_value(mention, "mentioned_handle", "handle", "target_handle")
+        )
+        mentioned_entity_type = _normalise_optional(
+            _first_value(
+                mention,
+                "mentioned_entity_type",
+                "entity_type",
+                "entityType",
+                "target_type",
+            )
+        )
+        if not mentioned_entity_type:
+            mentioned_entity_type = "record"
+        mentioned_entity_id = _normalise_optional(
+            _first_value(
+                mention,
+                "mentioned_entity_id",
+                "entity_id",
+                "entityId",
+                "target_id",
+            )
+        )
+        if mentioned_entity_id is None:
+            mentioned_entity_id = ""
+        context_entity_type = _normalise_optional(
+            _first_value(
+                mention,
+                "context_entity_type",
+                "contextType",
+                "source_type",
+                "context_type",
+            )
+        )
+        if not context_entity_type:
+            context_entity_type = mentioned_entity_type
+        context_entity_id = _normalise_optional(
+            _first_value(
+                mention,
+                "context_entity_id",
+                "contextId",
+                "source_id",
+                "context_id",
+            )
+        )
+        if context_entity_id is None:
+            context_entity_id = mentioned_entity_id or ""
+        snippet = _normalise_optional(
+            _first_value(mention, "snippet", "text", "message", "body")
+        )
+        created_at = _normalise_optional(
+            _first_value(mention, "created_at", "createdAt", "timestamp")
+        )
+
         cursor.execute(
             """
-            INSERT OR REPLACE INTO record_mentions (mention_id, entity_type, entity_id, mentioned_handle, created_at, raw_json)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO record_mentions (
+                mention_id,
+                mentioned_handle,
+                mentioned_entity_type,
+                mentioned_entity_id,
+                context_entity_type,
+                context_entity_id,
+                snippet,
+                created_at,
+                raw_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 mention_id,
-                _normalise_optional(_first_value(mention, "entity_type", "type")),
-                _normalise_optional(_first_value(mention, "entity_id", "entityId")),
-                _normalise_optional(_first_value(mention, "handle", "mentioned_handle")),
-                _normalise_optional(_first_value(mention, "created_at", "createdAt")),
+                mentioned_handle,
+                mentioned_entity_type,
+                mentioned_entity_id,
+                context_entity_type,
+                context_entity_id,
+                snippet,
+                created_at,
                 _safe_json(mention),
             ),
         )

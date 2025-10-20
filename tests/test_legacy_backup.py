@@ -2,6 +2,7 @@ import json
 import sqlite3
 from zipfile import ZipFile
 
+from database import _ensure_record_mentions_schema
 from services.legacy_backup import build_legacy_backup
 
 
@@ -154,3 +155,42 @@ def test_build_legacy_backup_ingests_existing_database(tmp_path):
         assert row == ("X1", "done", 4250)
     finally:
         conn.close()
+
+
+def test_converted_backup_supports_schema_upgrade(tmp_path):
+    payload = {
+        "record_mentions": [
+            {
+                "id": "M1",
+                "mentioned_handle": "@pat",
+                "mentioned_entity_type": "contact",
+                "mentioned_entity_id": "C1",
+                "context_entity_type": "note",
+                "context_entity_id": "note:1",
+                "snippet": "hello",
+                "created_at": "2024-02-01T02:03:04Z",
+            }
+        ]
+    }
+
+    legacy_file = tmp_path / "mentions.json"
+    legacy_file.write_text(json.dumps(payload))
+
+    archive = build_legacy_backup(legacy_file, destination_dir=tmp_path)
+
+    with ZipFile(archive) as zf:
+        db_path = tmp_path / "mentions.db"
+        db_path.write_bytes(zf.read("orders_manager.db"))
+
+    conn = sqlite3.connect(db_path)
+    try:
+        cursor = conn.cursor()
+        _ensure_record_mentions_schema(cursor)
+        cursor.execute(
+            "SELECT mentioned_handle, mentioned_entity_type, context_entity_type FROM record_mentions"
+        )
+        assert cursor.fetchall() == [("@pat", "contact", "note")]
+    finally:
+        conn.close()
+
+
