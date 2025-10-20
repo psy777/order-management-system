@@ -104,7 +104,7 @@ def test_chat_history_returns_messages_in_order(configure_chat_environment):
     assert response.status_code == 200
     data = response.get_json()
     messages = data['messages']
-    assert len(messages) >= 4
     user_messages = [msg for msg in messages if msg['author'] == 'user']
-    assert user_messages[0]['content'] == 'First note'
-    assert user_messages[1]['content'] == 'Second note'
+    assert len(user_messages) >= 2
+    assert user_messages[-2]['content'] == 'First note'
+    assert user_messages[-1]['content'] == 'Second note'

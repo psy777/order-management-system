@@ -119,9 +119,6 @@ DATE_FROM_RE = re.compile(r"\bfrom\s+(.+?)(?=\s+\b(?:to|through|until|till|by)\b
 DATE_TO_RE = re.compile(r"\b(?:to|through|until|till|by)\s+(.+)", re.IGNORECASE)
 REPORT_ID_RE = re.compile(r"run\s+(?:the\s+)?report\s+(?P<report>[A-Za-z0-9_.-]+)", re.IGNORECASE)
 REPORT_LIST_RE = re.compile(r"\b(list|show)\s+(?:all\s+)?reports\b", re.IGNORECASE)
-DEFAULT_CHAT_ACK = (
-    "Noted! Mention @firecoast for help or try the .reminder and .event commands."
-)
 MAX_CHAT_HISTORY = 250
 
 
@@ -281,18 +278,6 @@ def _format_event_window(event_payload: Dict[str, Any], timezone_name: str) -> s
     if start_dt.date() == end_dt.date():
         return f"{start_dt.strftime('%b %d, %Y %I:%M %p')} – {end_dt.strftime('%I:%M %p %Z')}"
     return f"{start_dt.strftime('%b %d, %Y %I:%M %p')} – {end_dt.strftime('%b %d, %Y %I:%M %p %Z')}"
-
-
-def _acknowledge_chat_note(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
-    return [
-        _store_chat_message(
-            conn,
-            'assistant',
-            DEFAULT_CHAT_ACK,
-            metadata={'action': 'ack'},
-        )
-    ]
-
 
 def _handle_event_command(conn: sqlite3.Connection, content: str) -> List[Dict[str, Any]]:
     body = content[len('.event'):].strip()
@@ -632,7 +617,7 @@ def _handle_chat_message(conn: sqlite3.Connection, message: Dict[str, Any]) -> L
         return _handle_report_command(conn, content)
     if lowered.startswith('@firecoast'):
         return _handle_firecoast_mention(conn, content)
-    return _acknowledge_chat_note(conn)
+    return []
 
 PHONE_CLEAN_RE = re.compile(r"\D+")
 CALENDAR_HANDLE_SANITIZE_RE = re.compile(r"[^a-z0-9.-]+")

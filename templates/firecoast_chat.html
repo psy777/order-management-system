@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="/assets/css/firecoast_chat.css">
 </head>
 <body class="fc-body">
-    <a class="fc-screen-reader-only" href="#firecoast-chat-root">Skip to chat</a>
+    <a class="fc-screen-reader-only" href="#fc-chat-log">Skip to chat</a>
     <nav class="fc-top-nav">
         <div class="fc-top-nav__inner">
             <div class="fc-nav-brand">
@@ -32,49 +32,57 @@
     </nav>
 
     <main class="fc-main">
-        <header class="fc-header">
-            <div class="fc-header__eyebrow">FireCoast Assistant</div>
-            <h1 class="fc-header__title">Direct Messages</h1>
-            <p class="fc-header__subtitle">
-                Keep private notes, queue reminders and events, and chat with <strong>@firecoast</strong> just like a personal Discord DM.
-            </p>
-        </header>
-        <section class="fc-chat-shell" aria-label="FireCoast conversation">
-            <div id="firecoast-chat-root" class="fc-chat-panel">
-                <div class="fc-chat-toolbar">
-                    <div class="fc-toolbar-copy">
-                        <div class="fc-toolbar-chip-row">
-                            <div class="fc-chip">@firecoast</div>
-                            <div class="fc-chip fc-chip--muted" aria-hidden="true">always on</div>
-                        </div>
-                        <h2>Personal Console</h2>
-                        <p>Messages stay private to you. Ask for passwords, spin up reminders, or jot quick thoughts.</p>
-                    </div>
-                    <button type="button" id="fc-refresh" class="fc-refresh-button" aria-label="Refresh conversation">
-                        <span>Refresh</span>
-                        <span aria-hidden="true">↺</span>
-                    </button>
+        <div class="fc-workspace">
+            <aside class="fc-sidebar" aria-label="FireCoast threads">
+                <div class="fc-sidebar__header">
+                    <h1 class="fc-sidebar__title">FireCoast DM</h1>
+                    <p class="fc-sidebar__subtitle">All of your notes with <strong>@firecoast</strong> in one place.</p>
                 </div>
-                <div id="fc-chat-log" class="fc-chat-log" role="log" aria-live="polite" aria-busy="false"></div>
-                <div class="fc-chat-footer">
-                    <p id="fc-error" class="fc-error" role="status" aria-live="assertive" hidden></p>
-                    <div class="fc-quick-actions" aria-label="Quick message templates">
+                <div class="fc-sidebar__threads" id="fc-thread-list" role="list"></div>
+                <p id="fc-thread-empty" class="fc-sidebar__empty">Send yourself a note or command to pin it here for quick review.</p>
+                <div class="fc-sidebar__section" aria-label="Quick commands">
+                    <h2 class="fc-sidebar__section-title">Quick commands</h2>
+                    <div class="fc-quick-actions">
                         <button type="button" class="fc-quick-button" data-template=".reminder Follow up | tomorrow 9am | add tracking number">.reminder</button>
                         <button type="button" class="fc-quick-button" data-template=".event Project kickoff | next Tuesday 2pm | next Tuesday 3:30pm | HQ West | finalize agenda">.event</button>
                         <button type="button" class="fc-quick-button" data-template="@firecoast what's my password for Example">Passwords</button>
                         <button type="button" class="fc-quick-button" data-template=".report orders_overview from 2024-01-01 to 2024-03-31">Reports</button>
                     </div>
+                </div>
+            </aside>
+            <section class="fc-conversation" aria-label="Conversation with the FireCoast assistant">
+                <header class="fc-conversation__header">
+                    <div class="fc-conversation__title">
+                        <h2>You &amp; <span>@firecoast</span></h2>
+                        <p>Capture plans, tasks, and lookups across the business.</p>
+                    </div>
+                    <div class="fc-conversation__controls">
+                        <div class="fc-search">
+                            <label class="fc-screen-reader-only" for="fc-search-input">Search messages</label>
+                            <input id="fc-search-input" class="fc-search__input" type="search" placeholder="Search notes and commands" autocomplete="off">
+                        </div>
+                        <button type="button" id="fc-refresh" class="fc-refresh-button" aria-label="Refresh conversation">
+                            <span class="fc-refresh-button__icon" aria-hidden="true">↺</span>
+                            <span class="fc-refresh-button__label">Refresh</span>
+                        </button>
+                    </div>
+                </header>
+                <div class="fc-conversation__body">
+                    <div id="fc-chat-log" class="fc-chat-log" role="log" aria-live="polite" aria-busy="false"></div>
+                </div>
+                <footer class="fc-chat-footer">
+                    <p id="fc-error" class="fc-error" role="status" aria-live="assertive" hidden></p>
                     <div class="fc-composer">
                         <label for="fc-input" class="fc-screen-reader-only">Message the FireCoast assistant</label>
-                        <textarea id="fc-input" class="fc-textarea" placeholder="Type a message. Use Shift+Enter for a new line." rows="4"></textarea>
+                        <textarea id="fc-input" class="fc-textarea" placeholder="Message #personal-console. Use Shift+Enter for a new line." rows="3"></textarea>
                         <button type="button" id="fc-send" class="fc-send-button" disabled>
                             <span>Send</span>
                             <span class="fc-send-button__icon" aria-hidden="true">↩</span>
                         </button>
                     </div>
-                </div>
-            </div>
-        </section>
+                </footer>
+            </section>
+        </div>
     </main>
 
     <script>
@@ -117,6 +125,9 @@
             const sendButton = document.getElementById('fc-send');
             const refreshButton = document.getElementById('fc-refresh');
             const errorEl = document.getElementById('fc-error');
+            const threadListEl = document.getElementById('fc-thread-list');
+            const threadEmptyEl = document.getElementById('fc-thread-empty');
+            const searchInput = document.getElementById('fc-search-input');
             const quickButtons = Array.from(document.querySelectorAll('.fc-quick-button'));
 
             const state = {
@@ -125,6 +136,7 @@
                 isSending: false,
                 error: null,
                 refreshTimer: null,
+                searchQuery: '',
             };
 
             const QUICK_TEMPLATE_FOCUS_DELAY = 10;
@@ -166,6 +178,33 @@
                     return `${formatTimestamp(start.toISOString(), true)} – ${timeFormatter.format(end)}`;
                 }
                 return `${formatTimestamp(start.toISOString(), true)} – ${formatTimestamp(end.toISOString(), true)}`;
+            };
+
+            const normalizePreview = (value) => {
+                if (!value) {
+                    return '';
+                }
+                return String(value).replace(/\s+/g, ' ').trim();
+            };
+
+            const matchesSearch = (message, query) => {
+                if (!query) {
+                    return true;
+                }
+                const lowered = query.toLowerCase();
+                const content = normalizePreview(message.content || '').toLowerCase();
+                if (content.includes(lowered)) {
+                    return true;
+                }
+                try {
+                    const metadataText = JSON.stringify(message.metadata || {});
+                    if (metadataText && metadataText.toLowerCase().includes(lowered)) {
+                        return true;
+                    }
+                } catch (error) {
+                    console.debug('Unable to stringify message metadata for search', error);
+                }
+                return false;
             };
 
             const clearError = () => {
@@ -369,12 +408,108 @@
                 return null;
             };
 
+            const scrollToMessage = (targetId) => {
+                if (!targetId) {
+                    return;
+                }
+                const element = document.getElementById(targetId);
+                if (!element) {
+                    return;
+                }
+                element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                element.classList.add('fc-message--active');
+                window.setTimeout(() => {
+                    element.classList.remove('fc-message--active');
+                }, 1200);
+            };
+
+            const createThreadButton = (message) => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'fc-thread';
+                const messageId = message.id ? `message-${message.id}` : '';
+                if (messageId) {
+                    button.setAttribute('data-target', messageId);
+                }
+
+                const title = document.createElement('div');
+                title.className = 'fc-thread__title';
+                title.textContent = 'You';
+
+                const preview = document.createElement('div');
+                preview.className = 'fc-thread__preview';
+                const previewText = normalizePreview(message.content || '') || 'Untitled note';
+                preview.textContent = previewText.length > 80 ? `${previewText.slice(0, 77)}…` : previewText;
+
+                const timestamp = document.createElement('time');
+                timestamp.className = 'fc-thread__timestamp';
+                if (message.created_at) {
+                    timestamp.dateTime = message.created_at;
+                    timestamp.textContent = formatTimestamp(message.created_at, true);
+                }
+
+                button.appendChild(title);
+                button.appendChild(preview);
+                button.appendChild(timestamp);
+                button.addEventListener('click', () => {
+                    const target = button.getAttribute('data-target');
+                    if (target) {
+                        scrollToMessage(target);
+                    }
+                });
+
+                return button;
+            };
+
+            const renderThreads = () => {
+                if (!threadListEl) {
+                    return;
+                }
+                threadListEl.innerHTML = '';
+
+                const trimmedQuery = normalizePreview(state.searchQuery || '');
+                const userMessages = state.messages.filter(
+                    (message) => (message.author || '').toLowerCase() === 'user'
+                );
+                const source = trimmedQuery
+                    ? userMessages.filter((message) => matchesSearch(message, trimmedQuery))
+                    : userMessages;
+
+                if (!source.length) {
+                    if (threadEmptyEl) {
+                        threadEmptyEl.hidden = false;
+                        threadEmptyEl.textContent = trimmedQuery
+                            ? 'No notes match this search yet.'
+                            : 'Send yourself a note or command to pin it here for quick review.';
+                    }
+                    return;
+                }
+
+                if (threadEmptyEl) {
+                    threadEmptyEl.hidden = true;
+                    threadEmptyEl.textContent = 'Send yourself a note or command to pin it here for quick review.';
+                }
+
+                const sorted = source
+                    .slice()
+                    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+                const fragment = document.createDocumentFragment();
+                sorted.slice(0, 40).forEach((message) => {
+                    fragment.appendChild(createThreadButton(message));
+                });
+                threadListEl.appendChild(fragment);
+            };
+
             const renderMessage = (message) => {
                 const author = (message.author || '').toLowerCase();
                 const isUser = author === 'user';
 
                 const wrapper = document.createElement('div');
-                wrapper.className = 'fc-message' + (isUser ? ' fc-message--user' : '');
+                const messageId = message.id ? `message-${message.id}` : '';
+                if (messageId) {
+                    wrapper.id = messageId;
+                }
+                wrapper.className = 'fc-message ' + (isUser ? 'fc-message--user' : 'fc-message--assistant');
 
                 const avatar = document.createElement('div');
                 avatar.className = 'fc-avatar ' + (isUser ? 'fc-avatar--user' : 'fc-avatar--assistant');
@@ -427,26 +562,39 @@
 
                 setBusy(false);
 
-                if (!state.messages.length) {
+                const trimmedQuery = normalizePreview(state.searchQuery || '');
+                const visibleMessages = trimmedQuery
+                    ? state.messages.filter((message) => matchesSearch(message, trimmedQuery))
+                    : state.messages.slice();
+
+                if (!visibleMessages.length) {
                     const empty = document.createElement('div');
-                    empty.className = 'fc-empty-state';
-                    const pill = document.createElement('div');
-                    pill.className = 'fc-empty-pill';
-                    pill.textContent = 'Start chatting';
-                    empty.appendChild(pill);
-                    const text = document.createElement('p');
-                    text.innerHTML = 'Send yourself notes and tasks. Try <code>.reminder Send invoices | tomorrow 9am</code> to see it in action.';
-                    empty.appendChild(text);
+                    empty.className = 'fc-empty-state' + (trimmedQuery ? ' fc-empty-state--search' : '');
+                    if (trimmedQuery) {
+                        const searchText = document.createElement('p');
+                        searchText.innerHTML = `No messages matched “<strong>${trimmedQuery}</strong>”.`;
+                        empty.appendChild(searchText);
+                    } else {
+                        const pill = document.createElement('div');
+                        pill.className = 'fc-empty-pill';
+                        pill.textContent = 'Start chatting';
+                        empty.appendChild(pill);
+                        const text = document.createElement('p');
+                        text.innerHTML = 'Send yourself notes and tasks. Try <code>.reminder Send invoices | tomorrow 9am</code> to see it in action.';
+                        empty.appendChild(text);
+                    }
                     logEl.appendChild(empty);
                     return;
                 }
 
                 const fragments = document.createDocumentFragment();
-                state.messages.forEach((message) => {
+                visibleMessages.forEach((message) => {
                     fragments.appendChild(renderMessage(message));
                 });
                 logEl.appendChild(fragments);
-                logEl.scrollTop = logEl.scrollHeight;
+                if (!trimmedQuery) {
+                    logEl.scrollTop = logEl.scrollHeight;
+                }
             };
 
             const updateSendButton = () => {
@@ -480,6 +628,7 @@
                 } finally {
                     state.isLoading = false;
                     renderMessages();
+                    renderThreads();
                 }
             };
 
@@ -511,6 +660,7 @@
                     updateSendButton();
                     clearError();
                     renderMessages();
+                    renderThreads();
                 } catch (error) {
                     console.error('Failed to send message', error);
                     showError('Unable to send that message. Please try again.');
@@ -543,6 +693,14 @@
                 });
             }
 
+            if (searchInput) {
+                searchInput.addEventListener('input', () => {
+                    state.searchQuery = searchInput.value || '';
+                    renderMessages();
+                    renderThreads();
+                });
+            }
+
             quickButtons.forEach((button) => {
                 button.addEventListener('click', () => {
                     const value = button.getAttribute('data-template') || '';
@@ -554,6 +712,7 @@
                 });
             });
 
+            renderThreads();
             loadMessages();
             state.refreshTimer = window.setInterval(() => loadMessages({ silent: true }), 25000);
 
