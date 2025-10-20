@@ -22,6 +22,8 @@
                         <a href="/orders" class="hover:text-orange-300 transition">Orders</a>
                         <a href="/contacts" class="text-orange-300">Contacts</a>
                         <a href="/analytics" class="hover:text-orange-300 transition">Analytics</a>
+                        <a href="/reminders" class="hover:text-orange-300 transition">Reminders</a>
+                        <a href="/calendar" class="hover:text-orange-300 transition">Calendar</a>
                         <a href="/passwords" class="hover:text-orange-300 transition">Password Manager</a>
                     </div>
                 </div>
@@ -296,7 +298,7 @@ const ContactMentions = ({ mentions }) => {
                     {MentionText ? (
                         <MentionText
                             text={mention.snippet}
-                            entityTypes={['contact', 'order', 'note']}
+                            entityTypes={['contact', 'order', 'note', 'calendar_event', 'reminder']}
                             as="p"
                             className="text-sm text-slate-600 mt-3"
                         />
@@ -638,7 +640,7 @@ const ContactDetail = ({ contact, onSave, isSaving, onCancelCreate }) => {
                             MentionText ? (
                                 <MentionText
                                     text={formState.notes}
-                                    entityTypes={['contact', 'order', 'note']}
+                                    entityTypes={['contact', 'order', 'note', 'calendar_event', 'reminder']}
                                     className="block"
                                 />
                             ) : (
@@ -886,7 +888,7 @@ const ContactDetail = ({ contact, onSave, isSaving, onCancelCreate }) => {
                         placeholder="Keep shared notes and mention teammates with @handle"
                         value={formState.notes}
                         onChange={value => handleBasicChange('notes', value)}
-                        entityTypes={['contact', 'order', 'note']}
+                        entityTypes={['contact', 'order', 'note', 'calendar_event', 'reminder']}
                         rows={4}
                     />
                 </form>
