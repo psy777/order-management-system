@@ -17,13 +17,21 @@ import traceback
 import time
 import json
 import csv
-import shutil
-import zipfile
 import pytz
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, request, send_from_directory, redirect, flash, url_for
+from flask import (
+    Flask,
+    jsonify,
+    render_template,
+    request,
+    send_from_directory,
+    redirect,
+    flash,
+    url_for,
+    send_file,
+)
 from database import (
     get_db_connection,
     init_db,
@@ -33,6 +41,7 @@ from database import (
 )
 from data_paths import DATA_ROOT, ensure_data_root
 from services.analytics import get_analytics_engine
+from services.backup import BackupError, create_backup_archive, restore_backup_from_stream
 from services.records import (
     RecordValidationError,
     bootstrap_record_service,
@@ -3717,104 +3726,62 @@ def calendar_page():
 def export_data():
     """Create a zip archive of the application's data directory."""
     try:
-        # It's good practice to ensure the app is not writing to the DB during backup.
-        # For this app's scale, a direct copy is likely fine, but for larger systems,
-        # you might implement a read-only mode or a brief service pause.
-
-        data_dir = DATA_DIR
-        if not data_dir.is_dir():
-            return jsonify({"status": "error", "message": "Data directory not found."}), 404
-
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        # Create the archive in a temporary location to avoid including the archive in itself
-        temp_dir = DATA_DIR.parent / 'temp_backups'
-        temp_dir.mkdir(parents=True, exist_ok=True)
-
-        archive_name = f'backup_{timestamp}'
-        archive_path_base = temp_dir / archive_name
-
-        # Create the zip file from the 'data' directory
-        shutil.make_archive(str(archive_path_base), 'zip', str(data_dir))
-
-        archive_path_zip = archive_path_base.with_suffix('.zip')
-
-        # Send the file and clean up afterwards
-        response = send_from_directory(str(temp_dir), f"{archive_name}.zip", as_attachment=True)
-
-        @response.call_on_close
-        def cleanup():
-            try:
-                if archive_path_zip.exists():
-                    archive_path_zip.unlink()
-                # If the temp dir is empty, remove it too
-                if not any(temp_dir.iterdir()):
-                    temp_dir.rmdir()
-            except Exception as e:
-                app.logger.error(f"Error cleaning up backup file: {e}")
-
-        return response
-
-    except Exception as e:
-        app.logger.error(f"Error creating data backup: {e}")
+        archive_path = create_backup_archive()
+    except BackupError as exc:
+        app.logger.error("Backup failed: %s", exc)
+        return jsonify({"status": "error", "message": str(exc)}), 500
+    except Exception as exc:  # pragma: no cover - defensive logging
+        app.logger.error(f"Error creating data backup: {exc}")
         app.logger.error(traceback.format_exc())
         return jsonify({"status": "error", "message": "Failed to create backup."}), 500
+
+    response = send_file(
+        archive_path,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=archive_path.name,
+    )
+
+    @response.call_on_close
+    def cleanup():
+        try:
+            archive_dir = archive_path.parent
+            if archive_path.exists():
+                archive_path.unlink()
+            if archive_dir.is_dir() and not any(archive_dir.iterdir()):
+                archive_dir.rmdir()
+        except Exception as cleanup_exc:  # pragma: no cover - defensive logging
+            app.logger.error("Error cleaning up backup file: %s", cleanup_exc)
+
+    return response
+
 
 @app.route('/api/import-data', methods=['POST'])
 def import_data():
     """Restore the data directory from a zip archive."""
     if 'file' not in request.files:
         return jsonify({"status": "error", "message": "No file part"}), 400
-    
+
     file = request.files['file']
     if file.filename == '' or not file.filename.endswith('.zip'):
         return jsonify({"status": "error", "message": "Invalid file. Please upload a .zip backup file."}), 400
 
-    data_dir = DATA_DIR
-
     try:
-        # Before replacing, create a temporary backup of the current data directory
-        temp_backup_dir = DATA_DIR.parent / 'data_temp_backup'
-        if temp_backup_dir.exists():
-            shutil.rmtree(temp_backup_dir) # remove old temp backup if it exists
-        if data_dir.exists():
-            shutil.copytree(data_dir, temp_backup_dir)
-
-        # Clear the existing data directory
-        if data_dir.exists():
-            shutil.rmtree(data_dir)
-        data_dir.mkdir(parents=True, exist_ok=True)
-
-        # Extract the new data from the uploaded zip file
-        with zipfile.ZipFile(file.stream, 'r') as zip_ref:
-            zip_ref.extractall(str(data_dir))
-
-        # Restore completed, can now remove the temporary backup
-        if temp_backup_dir.exists():
-            shutil.rmtree(temp_backup_dir)
-
-        # Re-initialize DB connection to ensure schema and pragmas are set if db was replaced
-        # A full app restart might be safer, but re-running init_db can cover schema changes.
+        file.stream.seek(0)
+        restore_backup_from_stream(file.stream)
         init_db()
 
-        # After a successful import, trigger a shutdown which will lead to a restart by the user or a process manager
-        Timer(1.0, lambda: os.kill(os.getpid(), 9)).start()
+        if not app.config.get('TESTING'):
+            Timer(1.0, lambda: os.kill(os.getpid(), 9)).start()
 
         return jsonify({"status": "success", "message": "Data restored successfully. The application will restart in a few moments."}), 200
 
-    except Exception as e:
-        app.logger.error(f"Error restoring data: {e}")
+    except BackupError as exc:
+        app.logger.error("Import rejected: %s", exc)
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    except Exception as exc:
+        app.logger.error(f"Error restoring data: {exc}")
         app.logger.error(traceback.format_exc())
-        
-        # Attempt to restore from the temporary backup
-        try:
-            if temp_backup_dir.exists():
-                if data_dir.exists():
-                    shutil.rmtree(data_dir)
-                shutil.move(str(temp_backup_dir), str(data_dir))
-                app.logger.info("Successfully restored data from temporary backup after import failure.")
-        except Exception as e_restore:
-            app.logger.error(f"CRITICAL: Failed to restore data from temporary backup: {e_restore}")
-
         return jsonify({"status": "error", "message": "An error occurred during the restore process. The original data has been restored."}), 500
 
 @app.route('/order-logs/<string:order_id>')
