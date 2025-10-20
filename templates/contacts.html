@@ -132,6 +132,58 @@ const formatPhoneNumber = (value = '') => {
     return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)} ${digits.slice(6)}`;
 };
 
+const addressHasFields = (address = {}) => {
+    if (!address) return false;
+    return [address.street, address.city, address.state, address.postalCode]
+        .some(value => {
+            if (value === null || value === undefined) {
+                return false;
+            }
+            return value.toString().trim().length > 0;
+        });
+};
+
+const selectAddressByKind = (addresses, preferredKind, options = {}) => {
+    if (!Array.isArray(addresses) || addresses.length === 0) {
+        return null;
+    }
+    const { excludeId = null } = options;
+    const normalizedKind = (preferredKind || '').toLowerCase();
+    const keyword = normalizedKind === 'billing' ? 'bill' : 'ship';
+
+    const filterCandidates = (shouldExclude = true) =>
+        addresses.filter(address => {
+            if (!addressHasFields(address)) return false;
+            if (shouldExclude && excludeId && address.id === excludeId) return false;
+            return true;
+        });
+
+    let candidates = filterCandidates(true);
+    if (candidates.length === 0 && excludeId) {
+        candidates = filterCandidates(false);
+    }
+    if (candidates.length === 0) {
+        return null;
+    }
+
+    const matchByKind = candidates.find(address => (address.kind || '').toLowerCase() === normalizedKind);
+    if (matchByKind) {
+        return matchByKind;
+    }
+
+    const matchByLabel = candidates.find(address => (address.label || '').toLowerCase().includes(keyword));
+    if (matchByLabel) {
+        return matchByLabel;
+    }
+
+    const matchPrimary = candidates.find(address => address.isPrimary);
+    if (matchPrimary) {
+        return matchPrimary;
+    }
+
+    return candidates[0];
+};
+
 const mentionComponents = window.RecordMentionComponents || {};
 const MentionText = mentionComponents.RecordMentionText;
 const ContactMentionTextarea = (props) => {
@@ -379,14 +431,6 @@ const ContactDetail = ({ contact, onSave, isSaving, onCancelCreate }) => {
     const handleAddressChange = (id, field, value) => {
         updateDetails('addresses', addresses => addresses.map(address => address.id === id ? { ...address, [field]: value } : address));
     };
-    const handleAddressKindChange = (id, kind) => {
-        const normalizedKind = ['shipping', 'billing'].includes(kind) ? kind : 'other';
-        updateDetails('addresses', addresses => addresses.map(address => {
-            if (address.id !== id) return address;
-            const label = normalizedKind === 'shipping' ? 'Shipping Address' : normalizedKind === 'billing' ? 'Billing Address' : (address.label || 'Address');
-            return { ...address, kind: normalizedKind, label };
-        }));
-    };
     const handleAddAddress = () => updateDetails('addresses', addresses => [...addresses, createBlankAddress('other')]);
     const handleRemoveAddress = (id) => {
         updateDetails('addresses', addresses => {
@@ -427,8 +471,9 @@ const ContactDetail = ({ contact, onSave, isSaving, onCancelCreate }) => {
     const primaryOrders = contact.primaryOrders || [];
     const primaryEmailEntry = formState.contactDetails.emails.find(email => email.isPrimary && email.value.trim()) || formState.contactDetails.emails.find(email => email.value.trim());
     const primaryPhoneEntry = formState.contactDetails.phones.find(phone => phone.isPrimary && normalizePhoneDigits(phone.value).length) || formState.contactDetails.phones.find(phone => normalizePhoneDigits(phone.value).length);
-    const shippingEntry = formState.contactDetails.addresses.find(address => address.kind === 'shipping');
-    const billingEntry = formState.contactDetails.addresses.find(address => address.kind === 'billing');
+    const addressList = formState.contactDetails.addresses || [];
+    const shippingEntry = selectAddressByKind(addressList, 'shipping');
+    const billingEntry = selectAddressByKind(addressList, 'billing', { excludeId: shippingEntry?.id }) || shippingEntry;
     const displayName = (formState.contactName && formState.contactName.trim()) || (formState.companyName && formState.companyName.trim()) || (primaryEmailEntry && primaryEmailEntry.value.trim()) || 'Unnamed contact';
     const showCompanyLine = Boolean(formState.companyName && formState.companyName.trim() && formState.companyName.trim() !== formState.contactName?.trim());
     const hasIdentity = Boolean((formState.contactName && formState.contactName.trim()) || (formState.companyName && formState.companyName.trim()));
@@ -445,7 +490,7 @@ const ContactDetail = ({ contact, onSave, isSaving, onCancelCreate }) => {
 
     const emailEntries = formState.contactDetails.emails.filter(email => email.value && email.value.trim());
     const phoneEntries = formState.contactDetails.phones.filter(phone => normalizePhoneDigits(phone.value).length);
-    const addressEntries = formState.contactDetails.addresses.filter(address => [address.street, address.city, address.state, address.postalCode].some(value => value && value.toString().trim()));
+    const addressEntries = addressList.filter(addressHasFields);
 
     return (
         <div className="space-y-6">
@@ -734,27 +779,13 @@ const ContactDetail = ({ contact, onSave, isSaving, onCancelCreate }) => {
                         <div className="space-y-3">
                             {formState.contactDetails.addresses.map(address => (
                                 <div key={address.id} className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                        <div>
-                                            <label className="block text-xs font-medium text-slate-600">Label</label>
-                                            <input
-                                                value={address.label}
-                                                onChange={e => handleAddressChange(address.id, 'label', e.target.value)}
-                                                className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500"
-                                            />
-                                        </div>
-                                        <div>
-                                            <label className="block text-xs font-medium text-slate-600">Type</label>
-                                            <select
-                                                value={address.kind}
-                                                onChange={e => handleAddressKindChange(address.id, e.target.value)}
-                                                className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500"
-                                            >
-                                                <option value="shipping">Shipping</option>
-                                                <option value="billing">Billing</option>
-                                                <option value="other">Other</option>
-                                            </select>
-                                        </div>
+                                    <div>
+                                        <label className="block text-xs font-medium text-slate-600">Label</label>
+                                        <input
+                                            value={address.label}
+                                            onChange={e => handleAddressChange(address.id, 'label', e.target.value)}
+                                            className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500"
+                                        />
                                     </div>
                                     <div>
                                         <label className="block text-xs font-medium text-slate-600">Street</label>
@@ -953,12 +984,24 @@ const ContactsApp = () => {
                     isPrimary: Boolean(entry.isPrimary),
                 };
             })
-            .filter(entry => [entry.street, entry.city, entry.state, entry.postalCode].some(value => value));
+            .filter(addressHasFields);
+
+        const shippingAddress = selectAddressByKind(addresses, 'shipping');
+        const billingCandidate = selectAddressByKind(addresses, 'billing', { excludeId: shippingAddress?.id });
+        const billingAddress = billingCandidate || shippingAddress || null;
+
+        const addressesForPayload = addresses.map(entry => {
+            if (shippingAddress && entry.id === shippingAddress.id) {
+                return { ...entry, kind: 'shipping' };
+            }
+            if (billingAddress && entry.id === billingAddress.id) {
+                return { ...entry, kind: 'billing' };
+            }
+            return { ...entry, kind: 'other' };
+        });
 
         const primaryEmail = emails.find(entry => entry.isPrimary) || emails[0];
         const primaryPhone = phones.find(entry => entry.isPrimary) || phones[0];
-        const shippingAddress = addresses.find(entry => entry.kind === 'shipping');
-        const billingAddress = addresses.find(entry => entry.kind === 'billing');
 
         const payload = {
             contactName: trim(formState.contactName),
@@ -966,7 +1009,7 @@ const ContactsApp = () => {
             contactDetails: {
                 emails,
                 phones,
-                addresses,
+                addresses: addressesForPayload,
             },
             email: primaryEmail ? primaryEmail.value : '',
             phone: primaryPhone ? primaryPhone.value : '',

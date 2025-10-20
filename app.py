@@ -134,6 +134,79 @@ def _infer_address_kind(kind_value, label_value):
     return "other"
 
 
+def _address_has_fields(entry):
+    if not isinstance(entry, dict):
+        return False
+    for field in ("street", "city", "state", "postalCode"):
+        value = entry.get(field)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            if value.strip():
+                return True
+        else:
+            if str(value).strip():
+                return True
+    return False
+
+
+def _pick_address_candidate(addresses, preferred_kind, *, exclude_id=None):
+    """Select a reasonable address for the preferred kind with sensible fallbacks."""
+    if not addresses:
+        return None
+
+    normalized_kind = (preferred_kind or "").strip().lower()
+    keyword = "bill" if normalized_kind == "billing" else "ship"
+
+    def _filter_candidates(exclude=True):
+        filtered = []
+        for entry in addresses:
+            if not _address_has_fields(entry):
+                continue
+            if exclude and exclude_id and entry.get("id") == exclude_id:
+                continue
+            filtered.append(entry)
+        return filtered
+
+    candidates = _filter_candidates(exclude=True)
+    if not candidates and exclude_id:
+        candidates = _filter_candidates(exclude=False)
+    if not candidates:
+        return None
+
+    for entry in candidates:
+        if (entry.get("kind") or "").lower() == normalized_kind:
+            return entry
+    for entry in candidates:
+        if keyword in (entry.get("label") or "").strip().lower():
+            return entry
+    for entry in candidates:
+        if entry.get("isPrimary"):
+            return entry
+    return candidates[0]
+
+
+def _assign_address_kinds(addresses):
+    if not addresses:
+        return addresses
+
+    shipping_entry = _pick_address_candidate(addresses, "shipping")
+    billing_entry = _pick_address_candidate(
+        addresses,
+        "billing",
+        exclude_id=shipping_entry.get("id") if shipping_entry else None,
+    )
+
+    for entry in addresses:
+        if shipping_entry and entry.get("id") == shipping_entry.get("id"):
+            entry["kind"] = "shipping"
+        elif billing_entry and entry.get("id") == billing_entry.get("id"):
+            entry["kind"] = "billing"
+        else:
+            entry["kind"] = "other"
+    return addresses
+
+
 def _sanitize_email_entries(entries):
     sanitized = []
     seen = set()
@@ -228,13 +301,18 @@ def _sanitize_address_entries(entries):
         # Ensure at least one address is marked primary, preferring shipping and billing entries
         kind_order = ["shipping", "billing"]
         if not any(addr.get("isPrimary") for addr in sanitized):
+            assigned = False
             for preferred_kind in kind_order:
                 for addr in sanitized:
                     if addr["kind"] == preferred_kind:
                         addr["isPrimary"] = True
-                        return sanitized
-            sanitized[0]["isPrimary"] = True
-    return sanitized
+                        assigned = True
+                        break
+                if assigned:
+                    break
+            if not assigned:
+                sanitized[0]["isPrimary"] = True
+    return _assign_address_kinds(sanitized)
 
 
 def _prepare_contact_details_for_storage(payload, *, force=False):
@@ -287,8 +365,12 @@ def _prepare_contact_details_for_storage(payload, *, force=False):
     emails = _sanitize_email_entries(raw_emails)
     phones = _sanitize_phone_entries(raw_phones)
 
-    shipping_entry = next((addr for addr in addresses if addr["kind"] == "shipping"), None)
-    billing_entry = next((addr for addr in addresses if addr["kind"] == "billing"), None)
+    shipping_entry = _pick_address_candidate(addresses, "shipping")
+    billing_entry = _pick_address_candidate(
+        addresses,
+        "billing",
+        exclude_id=shipping_entry.get("id") if shipping_entry else None,
+    )
     primary_email = emails[0]["value"] if emails else ""
     primary_phone = phones[0]["value"] if phones else ""
 
@@ -393,6 +475,7 @@ def _deserialize_contact_details(contact_dict, raw_details):
                 candidates[0]["isPrimary"] = True
         if not any(addr.get("isPrimary") for addr in addresses):
             addresses[0]["isPrimary"] = True
+        _assign_address_kinds(addresses)
 
     return {
         "addresses": addresses,
@@ -659,7 +742,7 @@ def serialize_order(cursor, order_row, user_timezone, include_logs=False):
     if not contact_snapshot['id']:
         contact_snapshot = {
             "id": None,
-            "companyName": "[Contact Not Found]",
+            "companyName": "",
             "contactName": "",
             "email": "",
             "phone": "",
