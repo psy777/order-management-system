@@ -179,6 +179,21 @@ def _sanitize_phone_entries(entries):
     return _ensure_primary(sanitized)
 
 
+def _normalize_contact_display_value(value):
+    """Coerce contact-related values into a clean display-friendly string."""
+    if value in (None, ""):
+        return ""
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return ""
+        lowered = cleaned.lower()
+        if lowered in {"[contact not found]", "contact not found", "[no contact found]", "no contact found"}:
+            return ""
+        return cleaned
+    return str(value).strip()
+
+
 def _sanitize_address_entries(entries):
     sanitized = []
     seen = set()
@@ -407,6 +422,23 @@ def serialize_contact_row(row):
         "handle": row["handle"] if "handle" in keys else None,
         "notes": row["notes"] if "notes" in keys else None,
     }
+
+    for key in (
+        "companyName",
+        "contactName",
+        "email",
+        "phone",
+        "billingAddress",
+        "billingCity",
+        "billingState",
+        "billingZipCode",
+        "shippingAddress",
+        "shippingCity",
+        "shippingState",
+        "shippingZipCode",
+        "handle",
+    ):
+        contact[key] = _normalize_contact_display_value(contact.get(key))
     if "created_at" in keys:
         contact["createdAt"] = row["created_at"]
     if "updated_at" in keys:
@@ -570,7 +602,7 @@ def serialize_order(cursor, order_row, user_timezone, include_logs=False):
 
     contact_snapshot = {
         "id": order_dict.pop('contact_id'),
-        "companyName": order_dict.pop('contact_company_name', None) or "[Contact Not Found]",
+        "companyName": order_dict.pop('contact_company_name', None),
         "contactName": order_dict.pop('contact_contact_name', None),
         "email": order_dict.pop('contact_email', None),
         "phone": order_dict.pop('contact_phone', None),
@@ -585,6 +617,23 @@ def serialize_order(cursor, order_row, user_timezone, include_logs=False):
         "handle": order_dict.pop('contact_handle', None),
         "notes": order_dict.pop('contact_notes', None),
     }
+
+    for key in (
+        "companyName",
+        "contactName",
+        "email",
+        "phone",
+        "billingAddress",
+        "billingCity",
+        "billingState",
+        "billingZipCode",
+        "shippingAddress",
+        "shippingCity",
+        "shippingState",
+        "shippingZipCode",
+        "handle",
+    ):
+        contact_snapshot[key] = _normalize_contact_display_value(contact_snapshot.get(key))
     contact_details_raw = order_dict.pop('contact_details_json', None)
     contact_details = _deserialize_contact_details(contact_snapshot, contact_details_raw)
     contact_snapshot['contactDetails'] = contact_details
