@@ -12,7 +12,6 @@ def test_ensure_record_mentions_schema_backfills_missing_columns():
         CREATE TABLE record_mentions (
             mention_id INTEGER PRIMARY KEY AUTOINCREMENT,
             mentioned_handle TEXT NOT NULL,
-            mentioned_entity_id TEXT NOT NULL,
             context_entity_type TEXT NOT NULL,
             context_entity_id TEXT NOT NULL,
             snippet TEXT,
@@ -25,14 +24,13 @@ def test_ensure_record_mentions_schema_backfills_missing_columns():
         """
         INSERT INTO record_mentions (
             mentioned_handle,
-            mentioned_entity_id,
             context_entity_type,
             context_entity_id,
             snippet
         )
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?)
         """,
-        ("@acustomer", "1", "contact_profile_note", "note:1", "hello"),
+        ("@acustomer", "contact_profile_note", "note:1", "hello"),
     )
 
     _ensure_record_mentions_schema(cursor)
@@ -40,9 +38,10 @@ def test_ensure_record_mentions_schema_backfills_missing_columns():
     cursor.execute("PRAGMA table_info(record_mentions)")
     column_names = {row[1] for row in cursor.fetchall()}
     assert "mentioned_entity_type" in column_names
+    assert "mentioned_entity_id" in column_names
 
-    cursor.execute("SELECT mentioned_entity_type FROM record_mentions")
-    assert [row[0] for row in cursor.fetchall()] == ["contact"]
+    cursor.execute("SELECT mentioned_entity_type, mentioned_entity_id FROM record_mentions")
+    assert [tuple(row) for row in cursor.fetchall()] == [("contact", "")]
 
     cursor.execute("PRAGMA index_list(record_mentions)")
     index_names = {row[1] for row in cursor.fetchall()}

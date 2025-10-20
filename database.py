@@ -184,6 +184,14 @@ def _ensure_record_mentions_schema(cursor: sqlite3.Cursor) -> None:
             "UPDATE record_mentions SET mentioned_entity_type = COALESCE(mentioned_entity_type, 'contact')"
         )
 
+    if not _table_has_column(cursor, "record_mentions", "mentioned_entity_id"):
+        cursor.execute(
+            "ALTER TABLE record_mentions ADD COLUMN mentioned_entity_id TEXT DEFAULT ''"
+        )
+        cursor.execute(
+            "UPDATE record_mentions SET mentioned_entity_id = COALESCE(mentioned_entity_id, '')"
+        )
+
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_record_mentions_target ON record_mentions(mentioned_entity_type, mentioned_entity_id)"
     )
