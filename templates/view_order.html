@@ -485,6 +485,42 @@ const formatContactAddress = (address, city, state, zip) => {
                 shippingZipCode: '',
                 ...baseContact
             };
+            const preferAddressValue = (primary, ...fallbacks) => {
+                const candidates = [primary, ...fallbacks];
+                for (const candidate of candidates) {
+                    if (candidate == null) continue;
+                    const value = String(candidate).trim();
+                    if (value) {
+                        return value;
+                    }
+                }
+                return '';
+            };
+            const shippingFallback = {
+                address: preferAddressValue(contactInfo.shippingAddress, safeOrder.shippingAddress),
+                city: preferAddressValue(contactInfo.shippingCity, safeOrder.shippingCity),
+                state: preferAddressValue(contactInfo.shippingState, safeOrder.shippingState),
+                zip: preferAddressValue(contactInfo.shippingZipCode, safeOrder.shippingZipCode),
+            };
+            const billingFallbackSource = {
+                address: preferAddressValue(contactInfo.billingAddress, safeOrder.billingAddress, shippingFallback.address),
+                city: preferAddressValue(contactInfo.billingCity, safeOrder.billingCity, shippingFallback.city),
+                state: preferAddressValue(contactInfo.billingState, safeOrder.billingState, shippingFallback.state),
+                zip: preferAddressValue(contactInfo.billingZipCode, safeOrder.billingZipCode, shippingFallback.zip),
+            };
+            const hasBillingFallback = Object.values(billingFallbackSource).some(value => value && String(value).trim());
+            const billingFallback = hasBillingFallback ? billingFallbackSource : shippingFallback;
+            const resolvedContactInfo = {
+                ...contactInfo,
+                shippingAddress: shippingFallback.address,
+                shippingCity: shippingFallback.city,
+                shippingState: shippingFallback.state,
+                shippingZipCode: shippingFallback.zip,
+                billingAddress: billingFallback.address,
+                billingCity: billingFallback.city,
+                billingState: billingFallback.state,
+                billingZipCode: billingFallback.zip,
+            };
 
             const renderBlock = (label, lines, x, y, wrapWidth = null) => {
                 doc.setFontSize(12);
@@ -526,16 +562,16 @@ const formatContactAddress = (address, city, state, zip) => {
             const leftColumnX = 14;
             const rightColumnX = 105;
 
-            const customerPhone = formatPhoneNumber(contactInfo.phone);
-            const customerLines = [contactInfo.companyName, contactInfo.contactName, contactInfo.email, customerPhone].filter(Boolean);
+            const customerPhone = formatPhoneNumber(resolvedContactInfo.phone);
+            const customerLines = [resolvedContactInfo.companyName, resolvedContactInfo.contactName, resolvedContactInfo.email, customerPhone].filter(Boolean);
             leftColumnY = renderBlock("Bill To", customerLines, leftColumnX, leftColumnY);
 
-            const billingLines = buildAddressLines(contactInfo.billingAddress, contactInfo.billingCity, contactInfo.billingState, contactInfo.billingZipCode);
+            const billingLines = buildAddressLines(resolvedContactInfo.billingAddress, resolvedContactInfo.billingCity, resolvedContactInfo.billingState, resolvedContactInfo.billingZipCode);
             if (billingLines.length) {
                 rightColumnY = renderBlock("Billing Address", billingLines, rightColumnX, rightColumnY, 90);
             }
 
-            const shippingLines = buildAddressLines(contactInfo.shippingAddress, contactInfo.shippingCity, contactInfo.shippingState, contactInfo.shippingZipCode);
+            const shippingLines = buildAddressLines(resolvedContactInfo.shippingAddress, resolvedContactInfo.shippingCity, resolvedContactInfo.shippingState, resolvedContactInfo.shippingZipCode);
             if (shippingLines.length) {
                 rightColumnY = renderBlock("Shipping Address", shippingLines, rightColumnX, rightColumnY, 90);
             }
