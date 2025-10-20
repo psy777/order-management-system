@@ -143,6 +143,46 @@ const addressHasFields = (address = {}) => {
         });
 };
 
+const buildAddressKey = (address = {}) => {
+    if (!address) return '';
+    return ['street', 'city', 'state', 'postalCode']
+        .map(field => {
+            const raw = address[field];
+            return raw === null || raw === undefined ? '' : raw.toString().trim().toLowerCase();
+        })
+        .join('|')
+        .trim();
+};
+
+const dedupeAddresses = (list = []) => {
+    const seen = new Map();
+    const result = [];
+    (list || []).forEach((entry, index) => {
+        if (!entry) return;
+        const key = buildAddressKey(entry) || (entry.id ? `id:${entry.id}` : `blank:${index}`);
+        if (seen.has(key)) {
+            const existing = seen.get(key);
+            if ((!existing.label || existing.label === 'Address') && entry.label) {
+                existing.label = entry.label;
+            }
+            if (existing.kind === 'other' && ['shipping', 'billing'].includes(entry.kind)) {
+                existing.kind = entry.kind;
+            }
+            if (entry.kind === 'shipping' && existing.kind === 'billing') {
+                existing.kind = 'shipping';
+            }
+            if (entry.isPrimary && !existing.isPrimary) {
+                existing.isPrimary = true;
+            }
+            return;
+        }
+        const clone = { ...entry };
+        seen.set(key, clone);
+        result.push(clone);
+    });
+    return result;
+};
+
 const selectAddressByKind = (addresses, preferredKind, options = {}) => {
     if (!Array.isArray(addresses) || addresses.length === 0) {
         return null;
@@ -288,7 +328,7 @@ const ContactDetail = ({ contact, onSave, isSaving, onCancelCreate }) => {
     const createBlankPhone = () => ({ id: generateLocalId('phone'), label: 'Phone', value: '', isPrimary: false });
     const createBlankAddress = (kind = 'other', options = {}) => {
         const normalizedKind = ['shipping', 'billing', 'other'].includes(kind) ? kind : 'other';
-        const fallbackLabel = normalizedKind === 'shipping' ? 'Shipping Address' : normalizedKind === 'billing' ? 'Billing Address' : 'Address';
+        const fallbackLabel = 'Address';
         const { label, isPrimary = false } = options;
         return {
             id: generateLocalId('addr'),
@@ -338,10 +378,9 @@ const ContactDetail = ({ contact, onSave, isSaving, onCancelCreate }) => {
         const normalized = (list || []).map(address => {
             const kindRaw = (address?.kind || '').toLowerCase();
             const kind = ['shipping', 'billing', 'other'].includes(kindRaw) ? kindRaw : 'other';
-            const fallbackLabel = kind === 'shipping' ? 'Shipping Address' : kind === 'billing' ? 'Billing Address' : 'Address';
             return {
                 id: address?.id || generateLocalId('addr'),
-                label: address?.label || fallbackLabel,
+                label: address?.label || 'Address',
                 kind,
                 street: address?.street || '',
                 city: address?.city || '',
@@ -350,13 +389,14 @@ const ContactDetail = ({ contact, onSave, isSaving, onCancelCreate }) => {
                 isPrimary: Boolean(address?.isPrimary),
             };
         });
-        if (normalized.length === 0) {
-            normalized.push(createBlankAddress('other', { isPrimary: true }));
+        const deduped = dedupeAddresses(normalized);
+        if (deduped.length === 0) {
+            deduped.push(createBlankAddress('other', { isPrimary: true }));
         }
-        if (!normalized.some(addr => addr.isPrimary)) {
-            normalized[0].isPrimary = true;
+        if (!deduped.some(addr => addr.isPrimary)) {
+            deduped[0].isPrimary = true;
         }
-        return normalized;
+        return deduped;
     };
 
     const mapContactToFormState = (contactData = EMPTY_CONTACT) => {
@@ -472,8 +512,6 @@ const ContactDetail = ({ contact, onSave, isSaving, onCancelCreate }) => {
     const primaryEmailEntry = formState.contactDetails.emails.find(email => email.isPrimary && email.value.trim()) || formState.contactDetails.emails.find(email => email.value.trim());
     const primaryPhoneEntry = formState.contactDetails.phones.find(phone => phone.isPrimary && normalizePhoneDigits(phone.value).length) || formState.contactDetails.phones.find(phone => normalizePhoneDigits(phone.value).length);
     const addressList = formState.contactDetails.addresses || [];
-    const shippingEntry = selectAddressByKind(addressList, 'shipping');
-    const billingEntry = selectAddressByKind(addressList, 'billing', { excludeId: shippingEntry?.id }) || shippingEntry;
     const displayName = (formState.contactName && formState.contactName.trim()) || (formState.companyName && formState.companyName.trim()) || (primaryEmailEntry && primaryEmailEntry.value.trim()) || 'Unnamed contact';
     const showCompanyLine = Boolean(formState.companyName && formState.companyName.trim() && formState.companyName.trim() !== formState.contactName?.trim());
     const hasIdentity = Boolean((formState.contactName && formState.contactName.trim()) || (formState.companyName && formState.companyName.trim()));
@@ -490,7 +528,7 @@ const ContactDetail = ({ contact, onSave, isSaving, onCancelCreate }) => {
 
     const emailEntries = formState.contactDetails.emails.filter(email => email.value && email.value.trim());
     const phoneEntries = formState.contactDetails.phones.filter(phone => normalizePhoneDigits(phone.value).length);
-    const addressEntries = addressList.filter(addressHasFields);
+    const addressEntries = dedupeAddresses(addressList).filter(addressHasFields);
 
     return (
         <div className="space-y-6">
@@ -553,14 +591,6 @@ const ContactDetail = ({ contact, onSave, isSaving, onCancelCreate }) => {
                                 ))}
                             </ul>
                         )}
-                    </div>
-                    <div>
-                        <p className="font-semibold text-slate-700">Shipping Address</p>
-                        <p>{formatAddress(shippingEntry)}</p>
-                    </div>
-                    <div>
-                        <p className="font-semibold text-slate-700">Billing Address</p>
-                        <p>{formatAddress(billingEntry)}</p>
                     </div>
                 </div>
                 {addressEntries.length > 0 && (
@@ -968,11 +998,11 @@ const ContactsApp = () => {
             }))
             .filter(entry => entry.value);
 
-        const addresses = (details.addresses || [])
+        const addresses = dedupeAddresses((details.addresses || [])
             .map(entry => {
                 const kindRaw = trim(entry.kind).toLowerCase();
                 const kind = ['shipping', 'billing', 'other'].includes(kindRaw) ? kindRaw : 'other';
-                const label = trim(entry.label) || (kind === 'billing' ? 'Billing Address' : kind === 'shipping' ? 'Shipping Address' : 'Address');
+                const label = trim(entry.label) || 'Address';
                 return {
                     id: entry.id,
                     label,
@@ -983,7 +1013,7 @@ const ContactsApp = () => {
                     postalCode: trim(entry.postalCode),
                     isPrimary: Boolean(entry.isPrimary),
                 };
-            })
+            }))
             .filter(addressHasFields);
 
         const shippingAddress = selectAddressByKind(addresses, 'shipping');

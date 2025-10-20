@@ -269,7 +269,7 @@ def _normalize_contact_display_value(value):
 
 def _sanitize_address_entries(entries):
     sanitized = []
-    seen = set()
+    seen = {}
     for entry in entries or []:
         if not isinstance(entry, dict):
             continue
@@ -282,12 +282,10 @@ def _sanitize_address_entries(entries):
         label = (entry.get("label") or "").strip()
         kind = _infer_address_kind(entry.get("kind"), label)
         if not label:
-            label = "Shipping Address" if kind == "shipping" else "Billing Address" if kind == "billing" else "Address"
-        key = (kind, street.lower(), city.lower(), state.lower(), postal.lower())
-        if key in seen:
-            continue
-        seen.add(key)
-        sanitized.append({
+            label = "Address"
+
+        key = (street.lower(), city.lower(), state.lower(), postal.lower())
+        normalized = {
             "id": str(entry.get("id") or uuid.uuid4()),
             "label": label,
             "kind": kind,
@@ -296,7 +294,23 @@ def _sanitize_address_entries(entries):
             "state": state,
             "postalCode": postal,
             "isPrimary": bool(entry.get("isPrimary")),
-        })
+        }
+
+        if key in seen:
+            existing_index = seen[key]
+            existing = sanitized[existing_index]
+            if (not existing.get("label")) or existing.get("label") == "Address":
+                existing["label"] = normalized["label"]
+            if existing.get("kind") == "other" and kind in {"shipping", "billing"}:
+                existing["kind"] = kind
+            if kind == "shipping" and existing.get("kind") == "billing":
+                existing["kind"] = "shipping"
+            if normalized.get("isPrimary"):
+                existing["isPrimary"] = True
+            continue
+
+        seen[key] = len(sanitized)
+        sanitized.append(normalized)
     if sanitized:
         # Ensure at least one address is marked primary, preferring shipping and billing entries
         kind_order = ["shipping", "billing"]
@@ -336,7 +350,7 @@ def _prepare_contact_details_for_storage(payload, *, force=False):
     if any(key in payload for key in ("shippingAddress", "shippingCity", "shippingState", "shippingZipCode")):
         raw_addresses.append({
             "id": payload.get("shippingAddressId"),
-            "label": "Shipping Address",
+            "label": "Address",
             "kind": "shipping",
             "street": payload.get("shippingAddress", ""),
             "city": payload.get("shippingCity", ""),
@@ -347,7 +361,7 @@ def _prepare_contact_details_for_storage(payload, *, force=False):
     if any(key in payload for key in ("billingAddress", "billingCity", "billingState", "billingZipCode")):
         raw_addresses.append({
             "id": payload.get("billingAddressId"),
-            "label": "Billing Address",
+            "label": "Address",
             "kind": "billing",
             "street": payload.get("billingAddress", ""),
             "city": payload.get("billingCity", ""),
@@ -421,7 +435,7 @@ def _deserialize_contact_details(contact_dict, raw_details):
     if any(field for field in shipping_fields) and not _has_address_kind("shipping"):
         addresses.append({
             "id": str(uuid.uuid4()),
-            "label": "Shipping Address",
+            "label": "Address",
             "kind": "shipping",
             "street": contact_dict.get("shippingAddress", "") or "",
             "city": contact_dict.get("shippingCity", "") or "",
@@ -439,7 +453,7 @@ def _deserialize_contact_details(contact_dict, raw_details):
     if any(field for field in billing_fields) and not _has_address_kind("billing"):
         addresses.append({
             "id": str(uuid.uuid4()),
-            "label": "Billing Address",
+            "label": "Address",
             "kind": "billing",
             "street": contact_dict.get("billingAddress", "") or "",
             "city": contact_dict.get("billingCity", "") or "",
