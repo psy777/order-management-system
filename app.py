@@ -18,7 +18,7 @@ import time
 import json
 import csv
 import pytz
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 from flask import (
@@ -114,6 +114,526 @@ def read_password_entries():
 
 def write_password_entries(entries):
     write_json_file(PASSWORDS_FILE, {"entries": entries})
+PASSWORD_SUBJECT_CLEAN_RE = re.compile(r"^(?:my|the)\s+", re.IGNORECASE)
+DATE_FROM_RE = re.compile(r"\bfrom\s+(.+?)(?=\s+\b(?:to|through|until|till|by)\b|$)", re.IGNORECASE)
+DATE_TO_RE = re.compile(r"\b(?:to|through|until|till|by)\s+(.+)", re.IGNORECASE)
+REPORT_ID_RE = re.compile(r"run\s+(?:the\s+)?report\s+(?P<report>[A-Za-z0-9_.-]+)", re.IGNORECASE)
+REPORT_LIST_RE = re.compile(r"\b(list|show)\s+(?:all\s+)?reports\b", re.IGNORECASE)
+DEFAULT_CHAT_ACK = (
+    "Noted! Mention @firecoast for help or try the .reminder and .event commands."
+)
+MAX_CHAT_HISTORY = 250
+
+
+def _resolve_timezone_setting() -> str:
+    settings = read_json_file(SETTINGS_FILE)
+    if isinstance(settings, dict):
+        tz_value = (settings.get('timezone') or 'UTC').strip() or 'UTC'
+    else:
+        tz_value = 'UTC'
+    try:
+        pytz.timezone(tz_value)
+    except Exception:
+        tz_value = 'UTC'
+    return tz_value
+
+
+def _normalize_password_subject(subject: str) -> str:
+    cleaned = subject.strip().strip("?!.,")
+    cleaned = PASSWORD_SUBJECT_CLEAN_RE.sub('', cleaned)
+    return cleaned.strip()
+
+
+def _infer_password_subject(text: str) -> str:
+    if not text:
+        return ''
+    lowered = text.strip()
+    match = re.search(
+        r"password(?:\s+(?:for|to|on|about|for the))?\s+(?P<subject>.+)",
+        lowered,
+        re.IGNORECASE,
+    )
+    if match:
+        return _normalize_password_subject(match.group('subject'))
+    alt = re.search(r"(?P<subject>.+?)\s+password\b", lowered, re.IGNORECASE)
+    if alt:
+        return _normalize_password_subject(alt.group('subject'))
+    return _normalize_password_subject(lowered)
+
+
+def _serialize_chat_row(row: sqlite3.Row) -> Dict[str, Any]:
+    if isinstance(row, sqlite3.Row):
+        keys = set(row.keys())
+        raw_metadata = row['metadata_json'] if 'metadata_json' in keys else None
+        created_at = row['created_at'] if 'created_at' in keys else None
+        message_id = row['id'] if 'id' in keys else None
+        author = row['author'] if 'author' in keys else None
+        content = row['content'] if 'content' in keys else None
+    else:
+        message_id, author, content, raw_metadata, created_at = row
+    metadata = None
+    if raw_metadata:
+        try:
+            metadata = json.loads(raw_metadata)
+        except json.JSONDecodeError:
+            metadata = {'raw': raw_metadata}
+    return {
+        'id': message_id,
+        'author': author,
+        'content': content,
+        'metadata': metadata,
+        'created_at': created_at,
+    }
+
+
+def _store_chat_message(
+    conn: sqlite3.Connection,
+    author: str,
+    content: str,
+    *,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    message_id = str(uuid.uuid4())
+    metadata_json = json.dumps(metadata) if metadata else None
+    conn.execute(
+        """
+        INSERT INTO firecoast_chat_messages (id, author, content, metadata_json)
+        VALUES (?, ?, ?, ?)
+        """,
+        (message_id, author, content, metadata_json),
+    )
+    cursor = conn.execute(
+        """
+        SELECT id, author, content, metadata_json, created_at
+        FROM firecoast_chat_messages
+        WHERE id = ?
+        """,
+        (message_id,),
+    )
+    row = cursor.fetchone()
+    return _serialize_chat_row(row)
+
+
+def _list_chat_messages(conn: sqlite3.Connection, limit: int) -> List[Dict[str, Any]]:
+    limit = max(1, min(MAX_CHAT_HISTORY, limit))
+    cursor = conn.execute(
+        """
+        SELECT id, author, content, metadata_json, created_at
+        FROM firecoast_chat_messages
+        ORDER BY datetime(created_at) DESC, rowid DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    rows = [_serialize_chat_row(row) for row in cursor.fetchall()]
+    rows.reverse()
+    return rows
+
+
+def _format_datetime_for_display(
+    value: Optional[str],
+    timezone_name: str,
+    *,
+    include_time: bool = True,
+) -> Optional[str]:
+    if not value:
+        return None
+    try:
+        parsed = dateutil_parse(value)
+    except (TypeError, ValueError):
+        return value
+    try:
+        tz = pytz.timezone(timezone_name)
+        parsed = parsed.astimezone(tz)
+    except Exception:
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+    if include_time:
+        return parsed.strftime('%b %d, %Y %I:%M %p %Z')
+    return parsed.strftime('%b %d, %Y')
+
+
+def _format_event_window(event_payload: Dict[str, Any], timezone_name: str) -> str:
+    start_value = event_payload.get('start_at')
+    end_value = event_payload.get('end_at') or start_value
+    all_day = bool(event_payload.get('all_day'))
+    try:
+        tz = pytz.timezone(timezone_name)
+    except Exception:
+        tz = timezone.utc
+    try:
+        start_dt = dateutil_parse(start_value)
+        end_dt = dateutil_parse(end_value)
+    except (TypeError, ValueError):
+        return start_value or ''
+    if start_dt.tzinfo is None:
+        start_dt = tz.localize(start_dt)
+    else:
+        start_dt = start_dt.astimezone(tz)
+    if end_dt.tzinfo is None:
+        end_dt = tz.localize(end_dt)
+    else:
+        end_dt = end_dt.astimezone(tz)
+    if all_day:
+        if start_dt.date() == end_dt.date():
+            return start_dt.strftime('%b %d, %Y')
+        return f"{start_dt.strftime('%b %d, %Y')} – {end_dt.strftime('%b %d, %Y')}"
+    if start_dt.date() == end_dt.date():
+        return f"{start_dt.strftime('%b %d, %Y %I:%M %p')} – {end_dt.strftime('%I:%M %p %Z')}"
+    return f"{start_dt.strftime('%b %d, %Y %I:%M %p')} – {end_dt.strftime('%b %d, %Y %I:%M %p %Z')}"
+
+
+def _acknowledge_chat_note(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+    return [
+        _store_chat_message(
+            conn,
+            'assistant',
+            DEFAULT_CHAT_ACK,
+            metadata={'action': 'ack'},
+        )
+    ]
+
+
+def _handle_event_command(conn: sqlite3.Connection, content: str) -> List[Dict[str, Any]]:
+    body = content[len('.event'):].strip()
+    if not body:
+        message = _store_chat_message(
+            conn,
+            'assistant',
+            "I need event details. Try `.event Team sync | tomorrow 3pm | tomorrow 4pm | HQ | bring deck`.",
+            metadata={'action': 'error', 'context': 'event', 'reason': 'missing_details'},
+        )
+        return [message]
+    parts = [segment.strip() for segment in body.split('|')]
+    title = parts[0] if parts else ''
+    start_part = parts[1] if len(parts) > 1 else ''
+    end_part = parts[2] if len(parts) > 2 else ''
+    location_part = parts[3] if len(parts) > 3 else ''
+    notes_part = parts[4] if len(parts) > 4 else ''
+    timezone_name = _resolve_timezone_setting()
+    if not title:
+        title = 'Untitled event'
+    if not start_part:
+        try:
+            tz = pytz.timezone(timezone_name)
+        except Exception:
+            tz = timezone.utc
+        start_part = datetime.now(tz).isoformat()
+    payload = {
+        'title': title,
+        'start_at': start_part,
+        'timezone': timezone_name,
+        'location': location_part,
+        'notes': notes_part or f'Created from chat command: {body}',
+    }
+    if end_part:
+        payload['end_at'] = end_part
+    service = get_record_service()
+    try:
+        normalized = _normalize_calendar_event_payload(conn, payload)
+        created = service.create_record(conn, 'calendar_event', normalized, actor='firecoast-chat')
+        event_payload = _serialize_calendar_event(created['data'])
+        window_label = _format_event_window(event_payload, event_payload.get('timezone') or timezone_name)
+        message_text = f"Scheduled \"{event_payload['title']}\" for {window_label}."
+        metadata = {
+            'action': 'calendar_event_created',
+            'event': event_payload,
+        }
+        return [_store_chat_message(conn, 'assistant', message_text, metadata=metadata)]
+    except (ValueError, RecordValidationError) as exc:
+        message = _store_chat_message(
+            conn,
+            'assistant',
+            f"I couldn't create that event: {exc}",
+            metadata={'action': 'error', 'context': 'event', 'reason': str(exc)},
+        )
+        return [message]
+
+
+def _format_reminder_due(reminder_payload: Dict[str, Any]) -> str:
+    due_value = reminder_payload.get('due_at')
+    timezone_name = reminder_payload.get('timezone') or _resolve_timezone_setting()
+    if not due_value:
+        return 'no due date'
+    label = _format_datetime_for_display(
+        due_value,
+        timezone_name,
+        include_time=bool(reminder_payload.get('due_has_time')),
+    )
+    return f"due {label}" if label else 'no due date'
+
+
+def _handle_reminder_command(conn: sqlite3.Connection, content: str) -> List[Dict[str, Any]]:
+    body = content[len('.reminder'):].strip()
+    if not body:
+        message = _store_chat_message(
+            conn,
+            'assistant',
+            "Let's add a reminder. Try `.reminder Follow up | next Monday 9am | include tracking link`.",
+            metadata={'action': 'error', 'context': 'reminder', 'reason': 'missing_details'},
+        )
+        return [message]
+    parts = [segment.strip() for segment in body.split('|')]
+    title = parts[0] if parts else ''
+    due_part = parts[1] if len(parts) > 1 else ''
+    notes_part = parts[2] if len(parts) > 2 else ''
+    if not title:
+        title = 'Reminder'
+    timezone_name = _resolve_timezone_setting()
+    payload = {
+        'title': title,
+        'notes': notes_part or f'Created from chat command: {body}',
+        'timezone': timezone_name,
+    }
+    if due_part:
+        payload['due_at'] = due_part
+    service = get_record_service()
+    try:
+        normalized = _normalize_reminder_payload(conn, payload)
+        created = service.create_record(conn, 'reminder', normalized, actor='firecoast-chat')
+        reminder_payload = _serialize_reminder(created['data'])
+        due_label = _format_reminder_due(reminder_payload)
+        message_text = f"Reminder \"{reminder_payload['title']}\" {due_label}."
+        metadata = {
+            'action': 'reminder_created',
+            'reminder': reminder_payload,
+        }
+        return [_store_chat_message(conn, 'assistant', message_text, metadata=metadata)]
+    except (ValueError, RecordValidationError) as exc:
+        message = _store_chat_message(
+            conn,
+            'assistant',
+            f"I couldn't save that reminder: {exc}",
+            metadata={'action': 'error', 'context': 'reminder', 'reason': str(exc)},
+        )
+        return [message]
+
+
+def _normalise_date_fragment(fragment: Optional[str]) -> Optional[str]:
+    if not fragment:
+        return None
+    cleaned = fragment.strip().strip('.,')
+    if not cleaned:
+        return None
+    try:
+        parsed = dateutil_parse(cleaned)
+    except (TypeError, ValueError):
+        return None
+    return parsed.date().isoformat()
+
+
+def _extract_date_filters(text: str) -> Tuple[Optional[str], Optional[str]]:
+    start_fragment = None
+    end_fragment = None
+    if text:
+        match_from = DATE_FROM_RE.search(text)
+        if match_from:
+            start_fragment = match_from.group(1)
+        match_to = DATE_TO_RE.search(text)
+        if match_to:
+            end_fragment = match_to.group(1)
+    return _normalise_date_fragment(start_fragment), _normalise_date_fragment(end_fragment)
+
+
+def _summarize_report_result(result: Dict[str, Any]) -> str:
+    name = result.get('name') or result.get('id') or 'report'
+    summary_entries = result.get('summary') or []
+    if not summary_entries:
+        return f"Report \"{name}\" is ready."
+    lines = [f"Report \"{name}\" is ready:"]
+    for entry in summary_entries[:4]:
+        label = entry.get('label') or entry.get('id')
+        display = entry.get('display')
+        value = display if display not in (None, '') else entry.get('value')
+        lines.append(f"- {label}: {value}")
+    if len(summary_entries) > 4:
+        lines.append(f"…plus {len(summary_entries) - 4} more metrics.")
+    return "\n".join(lines)
+
+
+def _list_reports_message(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+    engine = get_analytics_engine()
+    definitions = engine.list_report_definitions(conn)
+    if not definitions:
+        message = _store_chat_message(
+            conn,
+            'assistant',
+            "I couldn't find any analytics reports.",
+            metadata={'action': 'report_list', 'reports': []},
+        )
+        return [message]
+    lines = ["Available reports:"]
+    for definition in definitions:
+        lines.append(f"- {definition['id']}: {definition.get('name', '')}")
+    metadata = {'action': 'report_list', 'reports': definitions}
+    message = _store_chat_message(conn, 'assistant', "\n".join(lines), metadata=metadata)
+    return [message]
+
+
+def _run_report_via_chat(
+    conn: sqlite3.Connection,
+    report_id: str,
+    context_text: str,
+) -> List[Dict[str, Any]]:
+    report_id = report_id.strip()
+    if not report_id:
+        return _list_reports_message(conn)
+    params: Dict[str, Any] = {}
+    start_value, end_value = _extract_date_filters(context_text)
+    if start_value:
+        params['start_date'] = start_value
+    if end_value:
+        params['end_date'] = end_value
+    engine = get_analytics_engine()
+    timezone_name = _resolve_timezone_setting()
+    try:
+        result = engine.run_report(conn, report_id, params, timezone_name=timezone_name)
+    except KeyError:
+        message = _store_chat_message(
+            conn,
+            'assistant',
+            f"I don't know a report named '{report_id}'. Try `.report list` for options.",
+            metadata={'action': 'error', 'context': 'report', 'requested': report_id},
+        )
+        return [message]
+    except ValueError as exc:
+        message = _store_chat_message(
+            conn,
+            'assistant',
+            f"I couldn't run that report: {exc}",
+            metadata={'action': 'error', 'context': 'report', 'requested': report_id},
+        )
+        return [message]
+    summary_text = _summarize_report_result(result)
+    metadata = {'action': 'report_run', 'report': result, 'params': params}
+    message = _store_chat_message(conn, 'assistant', summary_text, metadata=metadata)
+    return [message]
+
+
+def _handle_report_command(conn: sqlite3.Connection, content: str) -> List[Dict[str, Any]]:
+    body = content[len('.report'):].strip()
+    if not body or body.lower() in {'list', 'help'}:
+        return _list_reports_message(conn)
+    tokens = body.split(None, 1)
+    report_id = tokens[0]
+    remainder = tokens[1] if len(tokens) > 1 else ''
+    return _run_report_via_chat(conn, report_id, remainder)
+
+
+def _handle_password_lookup(conn: sqlite3.Connection, text: str) -> List[Dict[str, Any]]:
+    subject = _infer_password_subject(text)
+    if not subject:
+        message = _store_chat_message(
+            conn,
+            'assistant',
+            "Let me know which service you'd like me to look up.",
+            metadata={'action': 'password_lookup', 'query': '', 'matches': []},
+        )
+        return [message]
+    entries = read_password_entries()
+    needle = subject.lower()
+    matches = []
+    for entry in entries:
+        haystack = " ".join(
+            [
+                str(entry.get('service', '')),
+                str(entry.get('username', '')),
+                str(entry.get('notes', '')),
+            ]
+        ).lower()
+        if needle in haystack:
+            matches.append(entry)
+    matches.sort(key=lambda item: (item.get('service') or '').lower())
+    if not matches:
+        message = _store_chat_message(
+            conn,
+            'assistant',
+            f"I couldn't find anything for \"{subject}\" in the password vault.",
+            metadata={'action': 'password_lookup', 'query': subject, 'matches': []},
+        )
+        return [message]
+    preview_lines = [
+        f"Here {'are' if len(matches) > 1 else 'is'} what I found for \"{subject}\":"
+    ]
+    for entry in matches[:5]:
+        service = entry.get('service') or '(unknown)'
+        username = entry.get('username') or '—'
+        password_value = entry.get('password') or '—'
+        preview_lines.append(f"- {service}: {username} / {password_value}")
+    if len(matches) > 5:
+        preview_lines.append(f"…and {len(matches) - 5} more saved credentials.")
+    metadata = {
+        'action': 'password_lookup',
+        'query': subject,
+        'matches': matches,
+    }
+    message = _store_chat_message(conn, 'assistant', "\n".join(preview_lines), metadata=metadata)
+    return [message]
+
+
+def _firecoast_help(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+    help_text = "\n".join(
+        [
+            "Here's what I can do:",
+            "• `.reminder Title | tomorrow 9am | notes` to capture a follow-up.",
+            "• `.event Planning session | Friday 2pm | 3pm | HQ | bring slides` to schedule a calendar block.",
+            "• `.report list` or `@firecoast run report orders_overview from 2024-01-01 to 2024-03-31` to pull analytics.",
+            "• `@firecoast what's my password for Example` to retrieve saved credentials.",
+        ]
+    )
+    message = _store_chat_message(conn, 'assistant', help_text, metadata={'action': 'help'})
+    return [message]
+
+
+def _handle_firecoast_mention(conn: sqlite3.Connection, content: str) -> List[Dict[str, Any]]:
+    text = content[len('@firecoast'):].strip()
+    if not text:
+        return _firecoast_help(conn)
+    lowered = text.lower()
+    if 'password' in lowered:
+        return _handle_password_lookup(conn, text)
+    if REPORT_LIST_RE.search(text):
+        return _list_reports_message(conn)
+    report_match = REPORT_ID_RE.search(text)
+    if report_match:
+        report_id = report_match.group('report')
+        remainder = text[report_match.end():]
+        return _run_report_via_chat(conn, report_id, remainder)
+    if lowered.startswith('run '):
+        tokens = text.split(None, 2)
+        if len(tokens) >= 2:
+            report_id = tokens[1]
+            remainder = tokens[2] if len(tokens) > 2 else ''
+            return _run_report_via_chat(conn, report_id, remainder)
+    if 'help' in lowered or 'what can you do' in lowered:
+        return _firecoast_help(conn)
+    fallback = _store_chat_message(
+        conn,
+        'assistant',
+        "I'm here! Ask for `.report list`, saved passwords, reminders, or events whenever you need them.",
+        metadata={'action': 'fallback'},
+    )
+    return [fallback]
+
+
+def _handle_chat_message(conn: sqlite3.Connection, message: Dict[str, Any]) -> List[Dict[str, Any]]:
+    author = (message.get('author') or '').lower()
+    if author != 'user':
+        return []
+    content = (message.get('content') or '').strip()
+    if not content:
+        return []
+    lowered = content.lower()
+    if lowered.startswith('.event'):
+        return _handle_event_command(conn, content)
+    if lowered.startswith('.reminder'):
+        return _handle_reminder_command(conn, content)
+    if lowered.startswith('.report'):
+        return _handle_report_command(conn, content)
+    if lowered.startswith('@firecoast'):
+        return _handle_firecoast_mention(conn, content)
+    return _acknowledge_chat_note(conn)
+
 PHONE_CLEAN_RE = re.compile(r"\D+")
 CALENDAR_HANDLE_SANITIZE_RE = re.compile(r"[^a-z0-9.-]+")
 
@@ -3672,12 +4192,58 @@ def password_entry_detail(entry_id):
     write_password_entries(entries)
     return jsonify(entry)
 
+
+@app.route('/api/firecoast/chat', methods=['GET', 'POST'])
+def api_firecoast_chat():
+    conn = get_db_connection()
+    try:
+        if request.method == 'GET':
+            limit_param = request.args.get('limit') or request.args.get('pageSize')
+            try:
+                limit_value = int(limit_param) if limit_param is not None else 100
+            except ValueError:
+                limit_value = 100
+            messages = _list_chat_messages(conn, limit_value)
+            return jsonify({'messages': messages})
+
+        payload = request.get_json(force=True, silent=True) or {}
+        content = (payload.get('content') or '').strip()
+        if not content:
+            return jsonify({'message': 'content is required.'}), 400
+        author = (payload.get('author') or 'user').strip().lower() or 'user'
+        stored = _store_chat_message(conn, author, content)
+        responses: List[Dict[str, Any]] = []
+        if author == 'user':
+            try:
+                responses = _handle_chat_message(conn, stored)
+            except (ValueError, RecordValidationError) as exc:
+                error_message = _store_chat_message(
+                    conn,
+                    'assistant',
+                    f"Something went wrong: {exc}",
+                    metadata={'action': 'error', 'reason': str(exc)},
+                )
+                responses = [error_message]
+        conn.commit()
+        return jsonify({'messages': [stored] + responses})
+    except Exception as exc:
+        conn.rollback()
+        app.logger.exception("Failed to process FireCoast chat request: %s", exc)
+        return jsonify({'message': 'Unable to process chat request.'}), 500
+    finally:
+        conn.close()
+
+
 @app.route('/manage/customers')
 def manage_customers_page(): return render_template('manage_customers.html')
 @app.route('/manage/items')
 def manage_items_page(): return render_template('manage_items.html')
 @app.route('/manage/packages')
 def manage_packages_page(): return render_template('manage_packages.html')
+
+@app.route('/firecoast')
+def firecoast_chat_page():
+    return render_template('firecoast_chat.html')
 
 @app.route('/settings')
 def settings_page():

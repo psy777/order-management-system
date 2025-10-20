@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FireCoast DM</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="/assets/css/styles.css">
+</head>
+<body class="bg-slate-50 min-h-screen font-sans">
+    <nav class="bg-slate-900 text-white shadow">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex h-16 items-center justify-between">
+                <div class="flex items-center space-x-10">
+                    <a href="/dashboard" id="nav-home-link" class="text-lg font-semibold tracking-wide">FireCoast OMS</a>
+                    <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
+                        <a href="/orders" class="hover:text-orange-300 transition">Orders</a>
+                        <a href="/contacts" class="hover:text-orange-300 transition">Contacts</a>
+                        <a href="/analytics" class="hover:text-orange-300 transition">Analytics</a>
+                        <a href="/passwords" class="hover:text-orange-300 transition">Password Manager</a>
+                        <a href="/reminders" class="hover:text-orange-300 transition">Reminders</a>
+                        <a href="/calendar" class="hover:text-orange-300 transition">Calendar</a>
+                        <a href="/firecoast" class="text-orange-300">FireCoast Chat</a>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-3 text-sm font-medium">
+                    <a href="/settings" class="hover:text-orange-300 transition">Settings</a>
+                    <a href="#" id="nav-log-out" class="hover:text-orange-300 transition">Log Out</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const brandLink = document.getElementById('nav-home-link');
+            if (brandLink) {
+                brandLink.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    window.location.href = '/dashboard';
+                });
+            }
+            const logoutLink = document.getElementById('nav-log-out');
+            if (logoutLink) {
+                logoutLink.addEventListener('click', async (event) => {
+                    event.preventDefault();
+                    if (window.fireCoastLogout) {
+                        window.fireCoastLogout();
+                        return;
+                    }
+                    try {
+                        const response = await fetch('/shutdown', { method: 'POST' });
+                        if (response.ok) {
+                            document.body.innerHTML = '<div class="min-h-screen flex items-center justify-center text-slate-700 text-lg">Application has been shut down. You can now close this tab.</div>';
+                        } else {
+                            alert('Failed to log out.');
+                        }
+                    } catch (error) {
+                        console.error('Error logging out:', error);
+                        alert('Error attempting to log out.');
+                    }
+                });
+            }
+        });
+    </script>
+
+    <main class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8">
+        <header class="space-y-3">
+            <p class="text-sm uppercase tracking-[0.3em] text-slate-500">FireCoast Assistant</p>
+            <h1 class="text-3xl sm:text-4xl font-bold text-slate-800">Direct Messages</h1>
+            <p class="text-slate-600 max-w-2xl">
+                Jot down notes, spin up reminders and calendar events, or ask <span class="font-semibold text-orange-600">@firecoast</span> to surface passwords and run analytics reports without leaving the console.
+            </p>
+        </header>
+        <section class="bg-white border border-slate-200 rounded-2xl shadow-sm">
+            <div id="firecoast-chat-root" class="flex h-[640px] flex-col"></div>
+        </section>
+    </main>
+
+    <script type="text/babel">
+        const { useCallback, useEffect, useRef, useState } = React;
+
+        const QUICK_TEMPLATES = [
+            { label: '.reminder', value: '.reminder Follow up | tomorrow 9am | add tracking number' },
+            { label: '.event', value: '.event Project kickoff | next Tuesday 2pm | next Tuesday 3:30pm | HQ West | finalize agenda' },
+            { label: 'Passwords', value: '@firecoast what\'s my password for Example' },
+            { label: 'Reports', value: '.report orders_overview from 2024-01-01 to 2024-03-31' },
+        ];
+
+        const formatDateTime = (iso, withTime = true) => {
+            if (!iso) return '';
+            try {
+                const date = new Date(iso);
+                if (Number.isNaN(date.getTime())) {
+                    return iso;
+                }
+                const options = withTime
+                    ? { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }
+                    : { year: 'numeric', month: 'short', day: 'numeric' };
+                return new Intl.DateTimeFormat(undefined, options).format(date);
+            } catch (error) {
+                return iso;
+            }
+        };
+
+        const formatEventWindow = (event) => {
+            if (!event || !event.start_at) {
+                return '';
+            }
+            const start = new Date(event.start_at);
+            const end = new Date(event.end_at || event.start_at);
+            if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+                return formatDateTime(event.start_at, !event.all_day);
+            }
+            const sameDay = start.toDateString() === end.toDateString();
+            if (event.all_day || (start.getHours() === 0 && start.getMinutes() === 0 && sameDay)) {
+                return sameDay
+                    ? formatDateTime(start.toISOString(), false)
+                    : `${formatDateTime(start.toISOString(), false)} – ${formatDateTime(end.toISOString(), false)}`;
+            }
+            if (sameDay) {
+                return `${formatDateTime(start.toISOString(), true)} – ${new Intl.DateTimeFormat(undefined, {
+                    hour: 'numeric',
+                    minute: '2-digit',
+                }).format(end)}`;
+            }
+            return `${formatDateTime(start.toISOString(), true)} – ${formatDateTime(end.toISOString(), true)}`;
+        };
+
+        const MetadataPanel = ({ metadata, isUser }) => {
+            if (!metadata || !metadata.action) {
+                return null;
+            }
+            const baseClasses = isUser ? 'bg-white/15 text-white' : 'bg-slate-100/80 border border-slate-200 text-slate-700';
+            const titleClasses = isUser ? 'text-white/80' : 'text-slate-500';
+
+            if (metadata.action === 'calendar_event_created') {
+                const event = metadata.event || {};
+                return (
+                    <div className={`mt-3 rounded-xl px-3 py-2 ${baseClasses}`}>
+                        <div className={`text-xs font-semibold uppercase ${titleClasses}`}>Calendar event created</div>
+                        <div className={`mt-1 text-sm font-medium ${isUser ? 'text-white' : 'text-slate-800'}`}>{event.title || 'Event'}</div>
+                        <div className={`text-sm ${isUser ? 'text-white/80' : 'text-slate-600'}`}>{formatEventWindow(event)}</div>
+                        <a href="/calendar" className={`mt-2 inline-flex items-center gap-1 text-xs font-medium ${isUser ? 'text-white/80 hover:text-white' : 'text-orange-600 hover:text-orange-500'}`}>Open calendar →</a>
+                    </div>
+                );
+            }
+
+            if (metadata.action === 'reminder_created') {
+                const reminder = metadata.reminder || {};
+                const dueText = reminder.due_at ? formatDateTime(reminder.due_at, reminder.due_has_time) : 'No due date';
+                return (
+                    <div className={`mt-3 rounded-xl px-3 py-2 ${baseClasses}`}>
+                        <div className={`text-xs font-semibold uppercase ${titleClasses}`}>Reminder created</div>
+                        <div className={`mt-1 text-sm font-medium ${isUser ? 'text-white' : 'text-slate-800'}`}>{reminder.title || 'Reminder'}</div>
+                        <div className={`text-sm ${isUser ? 'text-white/80' : 'text-slate-600'}`}>{dueText}</div>
+                        <a href="/reminders" className={`mt-2 inline-flex items-center gap-1 text-xs font-medium ${isUser ? 'text-white/80 hover:text-white' : 'text-orange-600 hover:text-orange-500'}`}>View reminders →</a>
+                    </div>
+                );
+            }
+
+            if (metadata.action === 'password_lookup') {
+                const matches = Array.isArray(metadata.matches) ? metadata.matches : [];
+                if (!matches.length) {
+                    return null;
+                }
+                return (
+                    <div className={`mt-3 rounded-xl px-3 py-2 ${baseClasses}`}>
+                        <div className={`text-xs font-semibold uppercase ${titleClasses}`}>Saved passwords</div>
+                        <div className="mt-2 space-y-1 text-sm">
+                            {matches.slice(0, 5).map((entry) => (
+                                <div key={entry.id || `${entry.service}-${entry.username}`} className={isUser ? 'text-white/80' : 'text-slate-700'}>
+                                    <span className="font-medium">{entry.service || 'Service'}</span>
+                                    <span className="ml-2 text-xs uppercase tracking-wide align-middle px-2 py-0.5 rounded-full bg-orange-100 text-orange-700">{entry.username || 'no user'}</span>
+                                    <div className={`text-xs mt-1 ${isUser ? 'text-white/80' : 'text-slate-500'}`}>{entry.password ? `Password: ${entry.password}` : 'No password saved'}</div>
+                                </div>
+                            ))}
+                            {matches.length > 5 && (
+                                <div className={`text-xs ${isUser ? 'text-white/70' : 'text-slate-500'}`}>…and {matches.length - 5} more saved credentials.</div>
+                            )}
+                        </div>
+                        <a href="/passwords" className={`mt-2 inline-flex items-center gap-1 text-xs font-medium ${isUser ? 'text-white/80 hover:text-white' : 'text-orange-600 hover:text-orange-500'}`}>Open password vault →</a>
+                    </div>
+                );
+            }
+
+            if (metadata.action === 'report_run') {
+                const report = metadata.report || {};
+                const summary = Array.isArray(report.summary) ? report.summary.slice(0, 4) : [];
+                return (
+                    <div className={`mt-3 rounded-xl px-3 py-2 ${baseClasses}`}>
+                        <div className={`text-xs font-semibold uppercase ${titleClasses}`}>Report generated</div>
+                        <div className={`mt-1 text-sm font-medium ${isUser ? 'text-white' : 'text-slate-800'}`}>{report.name || report.id || 'Analytics report'}</div>
+                        <ul className={`mt-2 space-y-1 text-sm ${isUser ? 'text-white/80' : 'text-slate-700'}`}>
+                            {summary.map((entry) => (
+                                <li key={entry.id || entry.label}>{entry.label || entry.id}: <span className="font-semibold">{entry.display || entry.value}</span></li>
+                            ))}
+                        </ul>
+                        <a href="/analytics" className={`mt-2 inline-flex items-center gap-1 text-xs font-medium ${isUser ? 'text-white/80 hover:text-white' : 'text-orange-600 hover:text-orange-500'}`}>Open analytics →</a>
+                    </div>
+                );
+            }
+
+            if (metadata.action === 'report_list') {
+                const reports = Array.isArray(metadata.reports) ? metadata.reports : [];
+                return (
+                    <div className={`mt-3 rounded-xl px-3 py-2 ${baseClasses}`}>
+                        <div className={`text-xs font-semibold uppercase ${titleClasses}`}>Available reports</div>
+                        <ul className={`mt-2 space-y-1 text-sm ${isUser ? 'text-white/80' : 'text-slate-700'}`}>
+                            {reports.map((report) => (
+                                <li key={report.id}><span className="font-medium">{report.id}</span> — {report.name}</li>
+                            ))}
+                        </ul>
+                    </div>
+                );
+            }
+
+            if (metadata.action === 'error') {
+                return (
+                    <div className={`mt-3 rounded-xl px-3 py-2 ${isUser ? 'bg-white/15 text-white' : 'bg-red-50 border border-red-200 text-red-700'}`}>
+                        <div className={`text-xs font-semibold uppercase ${isUser ? 'text-white/80' : 'text-red-600'}`}>Something went wrong</div>
+                        <div className={`text-sm ${isUser ? 'text-white' : 'text-red-700'}`}>{metadata.reason || 'Unable to process the request.'}</div>
+                    </div>
+                );
+            }
+
+            return null;
+        };
+
+        const MessageBubble = ({ message }) => {
+            const isUser = (message.author || '').toLowerCase() === 'user';
+            const bubbleClasses = isUser
+                ? 'bg-orange-500 text-white'
+                : 'bg-white text-slate-800 border border-slate-200';
+            const alignment = isUser ? 'justify-end' : 'justify-start';
+            const label = isUser ? 'You' : '@firecoast';
+
+            return (
+                <div className={`flex ${alignment}`}>
+                    <div className={`max-w-xl w-full sm:w-auto rounded-2xl px-4 py-3 shadow-sm ${bubbleClasses}`}>
+                        <div className={`text-xs uppercase tracking-wide mb-1 ${isUser ? 'text-white/70' : 'text-slate-500'}`}>{label}</div>
+                        <div className={`whitespace-pre-wrap leading-relaxed ${isUser ? 'text-white' : 'text-slate-800'}`}>
+                            {message.content || ''}
+                        </div>
+                        <MetadataPanel metadata={message.metadata} isUser={isUser} />
+                        <div className={`mt-2 text-[0.65rem] ${isUser ? 'text-white/70' : 'text-slate-400'} text-right`}>{formatDateTime(message.created_at, true)}</div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ChatApp = () => {
+            const [messages, setMessages] = useState([]);
+            const [input, setInput] = useState('');
+            const [isSending, setIsSending] = useState(false);
+            const [error, setError] = useState(null);
+            const scrollRef = useRef(null);
+
+            const fetchMessages = useCallback(async () => {
+                try {
+                    const response = await fetch('/api/firecoast/chat?limit=200');
+                    if (!response.ok) {
+                        throw new Error('Failed to load conversation');
+                    }
+                    const data = await response.json();
+                    setMessages(Array.isArray(data.messages) ? data.messages : []);
+                    setError(null);
+                } catch (err) {
+                    console.error(err);
+                    setError('Unable to load your messages.');
+                }
+            }, []);
+
+            useEffect(() => {
+                fetchMessages();
+            }, [fetchMessages]);
+
+            useEffect(() => {
+                const el = scrollRef.current;
+                if (!el) return;
+                el.scrollTop = el.scrollHeight;
+            }, [messages]);
+
+            const sendMessage = useCallback(async () => {
+                const trimmed = input.trim();
+                if (!trimmed || isSending) {
+                    return;
+                }
+                setIsSending(true);
+                setError(null);
+                try {
+                    const response = await fetch('/api/firecoast/chat', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ content: trimmed }),
+                    });
+                    if (!response.ok) {
+                        throw new Error('Chat request failed');
+                    }
+                    const data = await response.json();
+                    const incoming = Array.isArray(data.messages) ? data.messages : [];
+                    setMessages((prev) => [...prev, ...incoming]);
+                    setInput('');
+                } catch (err) {
+                    console.error(err);
+                    setError('Unable to send that message. Please try again.');
+                } finally {
+                    setIsSending(false);
+                }
+            }, [input, isSending]);
+
+            const handleKeyDown = useCallback((event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    sendMessage();
+                }
+            }, [sendMessage]);
+
+            const canSend = input.trim().length > 0 && !isSending;
+
+            return (
+                <div className="flex h-full flex-col">
+                    <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+                        <div>
+                            <h2 className="text-lg font-semibold text-slate-800">Today</h2>
+                            <p className="text-sm text-slate-500">Conversations are stored locally in your FireCoast workspace.</p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={fetchMessages}
+                            className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-100 transition"
+                        >
+                            <span>Refresh</span>
+                            <span className="text-slate-400">↺</span>
+                        </button>
+                    </div>
+                    <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-6 bg-slate-50/60 space-y-4">
+                        {messages.length === 0 ? (
+                            <div className="text-center text-slate-500 text-sm">Start a conversation with .reminder, .event, or mention @firecoast.</div>
+                        ) : (
+                            messages.map((message) => <MessageBubble key={message.id} message={message} />)
+                        )}
+                    </div>
+                    <div className="border-t border-slate-200 bg-white px-6 py-4 space-y-3">
+                        {error && <p className="text-sm text-red-600">{error}</p>}
+                        <div className="flex flex-wrap gap-2">
+                            {QUICK_TEMPLATES.map((template) => (
+                                <button
+                                    key={template.label}
+                                    type="button"
+                                    className="px-3 py-1.5 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 transition"
+                                    onClick={() => setInput(template.value)}
+                                >
+                                    {template.label}
+                                </button>
+                            ))}
+                        </div>
+                        <div className="flex items-end gap-3">
+                            <textarea
+                                className="flex-1 bg-slate-100 rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-700 outline-none focus:border-orange-400 focus:ring-1 focus:ring-orange-300"
+                                rows={3}
+                                value={input}
+                                onChange={(event) => setInput(event.target.value)}
+                                onKeyDown={handleKeyDown}
+                                placeholder="Type a message. Use Shift+Enter for a new line."
+                            />
+                            <button
+                                type="button"
+                                onClick={sendMessage}
+                                disabled={!canSend}
+                                className="inline-flex items-center gap-2 bg-orange-500 text-white font-medium px-4 py-2 rounded-lg shadow-sm hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                            >
+                                <span>Send</span>
+                                <span className="text-lg">↩</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const rootEl = document.getElementById('firecoast-chat-root');
+            if (rootEl) {
+                const root = ReactDOM.createRoot(rootEl);
+                root.render(<ChatApp />);
+            }
+        });
+    </script>
+</body>
+</html>

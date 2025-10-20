@@ -573,6 +573,21 @@ def init_db():
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_record_activity_target ON record_activity_logs(entity_type, entity_id)")
 
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS firecoast_chat_messages (
+            id TEXT PRIMARY KEY NOT NULL,
+            author TEXT NOT NULL,
+            content TEXT NOT NULL,
+            metadata_json TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_firecoast_chat_created_at ON firecoast_chat_messages(created_at)"
+    )
+
     cursor.execute("SELECT id, handle, contact_name, company_name, email FROM contacts")
     for row in cursor.fetchall():
         contact_id = row['id'] if isinstance(row, sqlite3.Row) else row[0]
