@@ -3161,6 +3161,11 @@ def orders_page():
 def passwords_page():
     return render_template('passwords.html')
 
+
+@app.route('/calendar')
+def calendar_page():
+    return render_template('calendar.html')
+
 @app.route('/api/export-data', methods=['GET'])
 def export_data():
     """Create a zip archive of the application's data directory."""

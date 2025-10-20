@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Calendar</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="../assets/css/styles.css">
+    <style>
+        .calendar-grid {
+            display: grid;
+            grid-template-columns: repeat(7, minmax(0, 1fr));
+            gap: 0.5rem;
+        }
+        .calendar-day {
+            transition: all 0.2s ease;
+        }
+        .calendar-day:hover {
+            transform: translateY(-2px);
+        }
+        .day-scroller {
+            max-height: 32rem;
+            overflow-y: auto;
+        }
+        .day-scroller::-webkit-scrollbar {
+            width: 6px;
+        }
+        .day-scroller::-webkit-scrollbar-thumb {
+            background-color: rgba(100, 116, 139, 0.4);
+            border-radius: 9999px;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 min-h-screen font-sans">
+    <nav class="bg-slate-900 text-white shadow">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex h-16 items-center justify-between">
+                <div class="flex items-center space-x-10">
+                    <a href="/dashboard" id="nav-home-link" class="text-lg font-semibold tracking-wide">FireCoast OMS</a>
+                    <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
+                        <a href="/orders" class="hover:text-orange-300 transition">Orders</a>
+                        <a href="/contacts" class="hover:text-orange-300 transition">Contacts</a>
+                        <a href="/analytics" class="hover:text-orange-300 transition">Analytics</a>
+                        <a href="/passwords" class="hover:text-orange-300 transition">Password Manager</a>
+                        <a href="/calendar" class="text-orange-300">Calendar</a>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-3 text-sm font-medium">
+                    <a href="/settings" class="hover:text-orange-300 transition">Settings</a>
+                    <a href="#" id="nav-log-out" class="hover:text-orange-300 transition">Log Out</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const brandLink = document.getElementById('nav-home-link');
+            if (brandLink) {
+                brandLink.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    window.location.href = '/dashboard';
+                });
+            }
+            const logoutLink = document.getElementById('nav-log-out');
+            if (logoutLink) {
+                logoutLink.addEventListener('click', async (event) => {
+                    event.preventDefault();
+                    if (window.fireCoastLogout) {
+                        window.fireCoastLogout();
+                        return;
+                    }
+                    try {
+                        const response = await fetch('/shutdown', { method: 'POST' });
+                        if (response.ok) {
+                            document.body.innerHTML = '<div class="min-h-screen flex items-center justify-center text-slate-700 text-lg">Application has been shut down. You can now close this tab.</div>';
+                        } else {
+                            alert('Failed to log out.');
+                        }
+                    } catch (error) {
+                        console.error('Error logging out:', error);
+                        alert('Error attempting to log out.');
+                    }
+                });
+            }
+        });
+    </script>
+
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+        <header class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6 mb-10">
+            <div class="space-y-2">
+                <p class="text-sm uppercase tracking-[0.3em] text-slate-500">Scheduling</p>
+                <h1 class="text-3xl sm:text-4xl font-bold text-slate-800">Calendar</h1>
+                <p class="text-slate-600 max-w-2xl">Plan production, reviews, and deliveries with a clean calendar experience tailored for the FireCoast operations team.</p>
+            </div>
+            <div class="flex items-center gap-3">
+                <button id="today-button" class="px-4 py-2 rounded-lg border border-slate-200 text-sm font-medium text-slate-700 hover:bg-slate-100">Today</button>
+                <div class="relative">
+                    <button id="month-picker-toggle" class="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-900 text-white text-sm font-medium shadow hover:bg-slate-800">
+                        <span id="current-month-label">October 2025</span>
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                        </svg>
+                    </button>
+                    <div id="month-picker" class="hidden absolute right-0 mt-2 w-72 rounded-xl bg-white shadow-lg border border-slate-200 p-4 z-20">
+                        <div class="flex items-center justify-between mb-3">
+                            <button id="year-previous" class="p-1.5 rounded-full hover:bg-slate-100" aria-label="Previous year">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+                                </svg>
+                            </button>
+                            <span id="picker-year" class="text-sm font-semibold text-slate-700">2025</span>
+                            <button id="year-next" class="p-1.5 rounded-full hover:bg-slate-100" aria-label="Next year">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5L15.75 12 8.25 19.5" />
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="grid grid-cols-3 gap-2" id="picker-months">
+                            <!-- Populated by script -->
+                        </div>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button id="previous-month" class="p-2 rounded-full hover:bg-slate-100" aria-label="Previous month">
+                        <svg class="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+                        </svg>
+                    </button>
+                    <button id="next-month" class="p-2 rounded-full hover:bg-slate-100" aria-label="Next month">
+                        <svg class="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5L15.75 12 8.25 19.5" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <section class="grid lg:grid-cols-3 gap-8">
+            <div class="lg:col-span-2">
+                <div class="bg-white border border-slate-200 rounded-2xl shadow-sm p-6">
+                    <div class="grid grid-cols-7 text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
+                        <span>Sun</span>
+                        <span>Mon</span>
+                        <span>Tue</span>
+                        <span>Wed</span>
+                        <span>Thu</span>
+                        <span>Fri</span>
+                        <span>Sat</span>
+                    </div>
+                    <div id="month-grid" class="calendar-grid"></div>
+                </div>
+            </div>
+            <aside class="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 flex flex-col">
+                <div class="flex items-center justify-between mb-6">
+                    <div>
+                        <p class="text-sm uppercase tracking-[0.3em] text-slate-500">Day View</p>
+                        <h2 id="selected-day-label" class="text-2xl font-semibold text-slate-800">Sunday, October 19</h2>
+                    </div>
+                    <div class="text-right">
+                        <p id="selected-day-range" class="text-sm text-slate-500">All day</p>
+                        <p id="selected-day-count" class="text-xs text-orange-500 font-medium"></p>
+                    </div>
+                </div>
+                <div id="day-events" class="day-scroller space-y-4 flex-1"></div>
+            </aside>
+        </section>
+    </main>
+
+    <button id="add-event-button" class="fixed bottom-8 right-8 w-14 h-14 flex items-center justify-center rounded-full bg-orange-500 text-white text-3xl shadow-lg hover:bg-orange-400">+</button>
+
+    <script>
+        const monthNames = [
+            'January', 'February', 'March', 'April', 'May', 'June',
+            'July', 'August', 'September', 'October', 'November', 'December'
+        ];
+        const weekdayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+        const sampleEvents = {
+            '2025-10-19': [
+                { start: '09:00', end: '09:45', title: 'Production Design Review', location: 'HQ West Studio', tone: 'focus' },
+                { start: '11:30', end: '12:15', title: 'Client Sync — Northshore Outfitters', location: 'Zoom', tone: 'collaboration' },
+                { start: '15:00', end: '16:00', title: 'Carrier Performance Audit', location: 'Ops War Room', tone: 'analysis' }
+            ],
+            '2025-10-21': [
+                { start: '08:30', end: '09:30', title: 'Executive Standup', location: 'HQ Atrium', tone: 'leadership' }
+            ],
+            '2025-10-26': [
+                { start: '13:00', end: '14:30', title: 'Q4 Logistics Planning', location: 'Projector Room', tone: 'planning' }
+            ]
+        };
+
+        const state = {
+            activeMonth: new Date(),
+            selectedDate: new Date(),
+            pickerYear: new Date().getFullYear(),
+            monthPickerOpen: false
+        };
+
+        const today = new Date();
+
+        const monthGrid = document.getElementById('month-grid');
+        const selectedDayLabel = document.getElementById('selected-day-label');
+        const selectedDayRange = document.getElementById('selected-day-range');
+        const selectedDayCount = document.getElementById('selected-day-count');
+        const dayEventsContainer = document.getElementById('day-events');
+        const currentMonthLabel = document.getElementById('current-month-label');
+        const monthPicker = document.getElementById('month-picker');
+        const pickerYearEl = document.getElementById('picker-year');
+        const pickerMonthsContainer = document.getElementById('picker-months');
+        const addEventButton = document.getElementById('add-event-button');
+
+        function cloneDate(date) {
+            return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+        }
+
+        function formatKey(date) {
+            return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+        }
+
+        function compareDates(a, b) {
+            return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+        }
+
+        function firstVisibleDate(date) {
+            const firstOfMonth = new Date(date.getFullYear(), date.getMonth(), 1);
+            const firstDayOfWeek = firstOfMonth.getDay();
+            const firstVisible = cloneDate(firstOfMonth);
+            firstVisible.setDate(firstOfMonth.getDate() - firstDayOfWeek);
+            return firstVisible;
+        }
+
+        function buildMonthGrid() {
+            monthGrid.innerHTML = '';
+            const first = firstVisibleDate(state.activeMonth);
+            const cells = 42; // 6 weeks
+            for (let i = 0; i < cells; i++) {
+                const cellDate = new Date(first.getFullYear(), first.getMonth(), first.getDate() + i);
+                const isCurrentMonth = cellDate.getMonth() === state.activeMonth.getMonth();
+                const isToday = compareDates(cellDate, today);
+                const isSelected = compareDates(cellDate, state.selectedDate);
+                const key = formatKey(cellDate);
+                const hasEvents = Array.isArray(sampleEvents[key]) && sampleEvents[key].length > 0;
+
+                const cell = document.createElement('button');
+                cell.type = 'button';
+                cell.className = [
+                    'calendar-day',
+                    'aspect-[6/5]',
+                    'rounded-xl',
+                    'border',
+                    'flex',
+                    'flex-col',
+                    'items-start',
+                    'p-3',
+                    'text-left',
+                    'focus:outline-none',
+                    'focus:ring-2',
+                    'focus:ring-orange-400',
+                    isCurrentMonth ? 'bg-white border-slate-200' : 'bg-slate-50 border-slate-100 text-slate-400',
+                    isSelected ? 'ring-2 ring-orange-400 border-orange-300 shadow-inner' : '',
+                    isToday ? 'border-orange-500' : ''
+                ].join(' ').trim();
+
+                cell.dataset.date = cellDate.toISOString();
+
+                const dayNumber = document.createElement('span');
+                dayNumber.className = 'text-sm font-semibold';
+                dayNumber.textContent = cellDate.getDate();
+
+                const spacer = document.createElement('div');
+                spacer.className = 'flex-1';
+
+                cell.appendChild(dayNumber);
+                cell.appendChild(spacer);
+
+                if (hasEvents) {
+                    const eventDot = document.createElement('span');
+                    eventDot.className = 'w-1.5 h-1.5 rounded-full bg-orange-500';
+                    cell.appendChild(eventDot);
+                }
+
+                cell.addEventListener('click', () => {
+                    state.selectedDate = cellDate;
+                    buildMonthGrid();
+                    renderDayView();
+                });
+
+                monthGrid.appendChild(cell);
+            }
+            updateMonthLabel();
+        }
+
+        function renderDayView() {
+            const date = state.selectedDate;
+            const key = formatKey(date);
+            const events = sampleEvents[key] || [];
+
+            selectedDayLabel.textContent = `${weekdayNames[date.getDay()]}, ${monthNames[date.getMonth()]} ${date.getDate()}`;
+            selectedDayRange.textContent = events.length ? `${events[0].start} – ${events[events.length - 1].end || events[events.length - 1].start}` : 'All day';
+            selectedDayCount.textContent = events.length ? `${events.length} scheduled ${events.length === 1 ? 'item' : 'items'}` : '';
+
+            dayEventsContainer.innerHTML = '';
+
+            if (!events.length) {
+                const emptyState = document.createElement('div');
+                emptyState.className = 'flex flex-col items-center justify-center text-center text-slate-500 border border-dashed border-slate-200 rounded-xl py-16 px-6';
+                emptyState.innerHTML = `
+                    <svg class="w-12 h-12 mb-4 text-slate-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10m-8 4h6M5 21h14a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2z" />
+                    </svg>
+                    <p class="text-sm font-medium">There are no events</p>
+                    <p class="text-xs text-slate-400 mt-1">Add a new hold, production review, or handoff to populate this day.</p>
+                `;
+                dayEventsContainer.appendChild(emptyState);
+                return;
+            }
+
+            events
+                .slice()
+                .sort((a, b) => (a.start || '').localeCompare(b.start || ''))
+                .forEach((event) => {
+                    const block = document.createElement('div');
+                    block.className = 'rounded-2xl bg-gradient-to-br from-orange-50 to-white border border-orange-100 shadow-sm p-5';
+
+                    const header = document.createElement('div');
+                    header.className = 'flex items-center justify-between mb-3';
+
+                    const title = document.createElement('p');
+                    title.className = 'text-lg font-semibold text-slate-800';
+                    title.textContent = event.title;
+
+                    const time = document.createElement('span');
+                    time.className = 'text-sm font-medium text-orange-600';
+                    time.textContent = event.end ? `${event.start} – ${event.end}` : event.start;
+
+                    header.appendChild(title);
+                    header.appendChild(time);
+
+                    const location = document.createElement('p');
+                    location.className = 'text-sm text-slate-500';
+                    location.textContent = event.location;
+
+                    const tone = document.createElement('span');
+                    tone.className = 'inline-flex items-center text-xs font-medium text-orange-700 bg-orange-100 px-2 py-1 rounded-full mt-3 uppercase tracking-wide';
+                    tone.textContent = event.tone;
+
+                    block.appendChild(header);
+                    block.appendChild(location);
+                    block.appendChild(tone);
+
+                    dayEventsContainer.appendChild(block);
+                });
+        }
+
+        function updateMonthLabel() {
+            currentMonthLabel.textContent = `${monthNames[state.activeMonth.getMonth()]} ${state.activeMonth.getFullYear()}`;
+        }
+
+        function buildMonthPicker() {
+            pickerYearEl.textContent = state.pickerYear;
+            pickerMonthsContainer.innerHTML = '';
+            monthNames.forEach((monthName, index) => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.textContent = monthName.slice(0, 3);
+                button.className = [
+                    'px-3',
+                    'py-2',
+                    'rounded-lg',
+                    'text-sm',
+                    'font-medium',
+                    'hover:bg-slate-100',
+                    (state.activeMonth.getFullYear() === state.pickerYear && state.activeMonth.getMonth() === index)
+                        ? 'bg-slate-900 text-white shadow'
+                        : 'text-slate-600'
+                ].join(' ');
+
+                button.addEventListener('click', () => {
+                    state.activeMonth = new Date(state.pickerYear, index, 1);
+                    if (state.selectedDate.getFullYear() === state.pickerYear && state.selectedDate.getMonth() === index) {
+                        // keep selected date if month matches
+                    } else {
+                        state.selectedDate = new Date(state.pickerYear, index, 1);
+                    }
+                    toggleMonthPicker(false);
+                    buildMonthGrid();
+                    renderDayView();
+                });
+
+                pickerMonthsContainer.appendChild(button);
+            });
+        }
+
+        function toggleMonthPicker(forceState) {
+            const shouldOpen = typeof forceState === 'boolean' ? forceState : !state.monthPickerOpen;
+            state.monthPickerOpen = shouldOpen;
+            monthPicker.classList.toggle('hidden', !shouldOpen);
+            if (shouldOpen) {
+                state.pickerYear = state.activeMonth.getFullYear();
+                buildMonthPicker();
+            }
+        }
+
+        document.getElementById('previous-month').addEventListener('click', () => {
+            const current = state.activeMonth;
+            state.activeMonth = new Date(current.getFullYear(), current.getMonth() - 1, 1);
+            state.selectedDate = new Date(state.activeMonth.getFullYear(), state.activeMonth.getMonth(), 1);
+            buildMonthGrid();
+            renderDayView();
+        });
+
+        document.getElementById('next-month').addEventListener('click', () => {
+            const current = state.activeMonth;
+            state.activeMonth = new Date(current.getFullYear(), current.getMonth() + 1, 1);
+            state.selectedDate = new Date(state.activeMonth.getFullYear(), state.activeMonth.getMonth(), 1);
+            buildMonthGrid();
+            renderDayView();
+        });
+
+        document.getElementById('today-button').addEventListener('click', () => {
+            state.activeMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+            state.selectedDate = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+            buildMonthGrid();
+            renderDayView();
+        });
+
+        document.getElementById('month-picker-toggle').addEventListener('click', () => {
+            toggleMonthPicker();
+        });
+
+        document.getElementById('year-previous').addEventListener('click', () => {
+            state.pickerYear -= 1;
+            buildMonthPicker();
+        });
+
+        document.getElementById('year-next').addEventListener('click', () => {
+            state.pickerYear += 1;
+            buildMonthPicker();
+        });
+
+        document.addEventListener('click', (event) => {
+            if (!monthPicker.contains(event.target) && !document.getElementById('month-picker-toggle').contains(event.target)) {
+                toggleMonthPicker(false);
+            }
+        });
+
+        addEventButton.addEventListener('click', () => {
+            alert('Event creation is coming soon to the FireCoast calendar.');
+        });
+
+        // Initialize calendar state
+        state.activeMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+        state.selectedDate = cloneDate(today);
+        buildMonthGrid();
+        renderDayView();
+    </script>
+</body>
+</html>
