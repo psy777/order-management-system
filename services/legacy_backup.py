@@ -153,7 +153,15 @@ def _ingest_directory(directory: Path) -> LegacyDataset:
         suffix = entry.suffix.lower()
         try:
             if suffix in JSON_EXTENSIONS:
-                _merge_dataset(dataset, _ingest_json_payload(entry.name, entry.read_text()))
+                try:
+                    payload = entry.read_text()
+                except UnicodeDecodeError as exc:
+                    dataset.attachments[relative] = entry.read_bytes()
+                    dataset.notes.append(
+                        f"Preserved {relative} as attachment (invalid text encoding: {exc})"
+                    )
+                    continue
+                _merge_dataset(dataset, _ingest_json_payload(entry.name, payload))
             elif suffix == ".zip":
                 _merge_dataset(dataset, _ingest_zip(entry))
             elif suffix in DATABASE_EXTENSIONS:
@@ -169,6 +177,7 @@ def _ingest_directory(directory: Path) -> LegacyDataset:
                     )
             else:
                 dataset.attachments[relative] = entry.read_bytes()
+                dataset.notes.append(f"Preserved {relative} as attachment")
         except Exception as exc:  # pragma: no cover - defensive logging
             LOGGER.warning("Failed to ingest %s: %s", relative, exc)
             dataset.notes.append(f"Failed to parse {relative}: {exc}")
@@ -194,8 +203,12 @@ def _ingest_zip(archive_path: Path) -> LegacyDataset:
                     )
                 else:
                     dataset.attachments[info.filename] = data
+                    dataset.notes.append(f"Preserved {info.filename} from ZIP as attachment")
             except UnicodeDecodeError:
                 dataset.attachments[info.filename] = data
+                dataset.notes.append(
+                    f"Preserved {info.filename} from ZIP as attachment (invalid text encoding)"
+                )
             except Exception as exc:  # pragma: no cover - defensive logging
                 LOGGER.warning("Failed to ingest %s from ZIP: %s", info.filename, exc)
                 dataset.notes.append(f"Failed to parse {info.filename}: {exc}")
@@ -203,7 +216,16 @@ def _ingest_zip(archive_path: Path) -> LegacyDataset:
 
 
 def _ingest_json_file(path: Path) -> LegacyDataset:
-    return _ingest_json_payload(path.name, path.read_text())
+    try:
+        payload = path.read_text()
+    except UnicodeDecodeError as exc:
+        dataset = LegacyDataset()
+        dataset.attachments[path.name] = path.read_bytes()
+        dataset.notes.append(
+            f"Preserved {path.name} as attachment (invalid text encoding: {exc})"
+        )
+        return dataset
+    return _ingest_json_payload(path.name, payload)
 
 
 def _ingest_json_payload(name: str, payload: str) -> LegacyDataset:
@@ -219,7 +241,7 @@ def _ingest_json_payload(name: str, payload: str) -> LegacyDataset:
 
 
 def _merge_dataset(target: LegacyDataset, other: LegacyDataset) -> None:
-    if not other:
+    if other is None:
         return
     target.settings.update(other.settings)
     if other.timezone:
@@ -299,7 +321,7 @@ def _walk_json_payload(node: Any, dataset: LegacyDataset) -> None:
         for alias in _RECORD_KEYS:
             if alias in lower_keys:
                 value = node[lower_keys[alias]]
-                dataset.records = _normalise_records(value)
+                _merge_record_buckets(dataset.records, _normalise_records(value))
 
         for value in node.values():
             _walk_json_payload(value, dataset)
@@ -354,7 +376,7 @@ def _materialise_dataset(dataset: LegacyDataset, destination: Path) -> None:
 def _write_settings(dataset: LegacyDataset, destination: Path) -> None:
     payload = dict(dataset.settings)
     payload.setdefault("timezone", dataset.timezone or "UTC")
-    (destination / "settings.json").write_text(json.dumps(payload, indent=2, sort_keys=True))
+    (destination / "settings.json").write_text(_safe_json(payload, indent=2))
 
 
 def _write_database(dataset: LegacyDataset, target: Path) -> None:
@@ -490,7 +512,7 @@ def _populate_database(conn: sqlite3.Connection, dataset: LegacyDataset) -> None
                 _normalise_optional(_first_value(order, "title", "name", "display_id")),
                 _normalise_optional(_first_value(order, "created_at", "createdAt", "created")),
                 _normalise_optional(_first_value(order, "updated_at", "updatedAt", "modified")),
-                json.dumps(order, sort_keys=True),
+                _safe_json(order),
             ),
         )
 
@@ -507,7 +529,7 @@ def _populate_database(conn: sqlite3.Connection, dataset: LegacyDataset) -> None
                 _normalise_optional(_first_value(line_item, "item_id", "itemId", "sku")),
                 _coerce_int(_first_value(line_item, "quantity", "qty")),
                 _extract_money(line_item, "price_cents", "price", "unit_price"),
-                json.dumps(line_item, sort_keys=True),
+                _safe_json(line_item),
             ),
         )
 
@@ -525,7 +547,7 @@ def _populate_database(conn: sqlite3.Connection, dataset: LegacyDataset) -> None
                     _first_value(log, "message", "note", "description")
                 ),
                 _normalise_optional(_first_value(log, "created_at", "createdAt")),
-                json.dumps(log, sort_keys=True),
+                _safe_json(log),
             ),
         )
 
@@ -541,7 +563,7 @@ def _populate_database(conn: sqlite3.Connection, dataset: LegacyDataset) -> None
                 _normalise_optional(_first_value(history, "order_id", "orderId")),
                 _normalise_optional(_first_value(history, "status", "state")),
                 _normalise_optional(_first_value(history, "created_at", "createdAt")),
-                json.dumps(history, sort_keys=True),
+                _safe_json(history),
             ),
         )
 
@@ -566,7 +588,7 @@ def _populate_database(conn: sqlite3.Connection, dataset: LegacyDataset) -> None
                 _normalise_optional(_first_value(contact, "contact_name", "contactName", "name")),
                 _normalise_optional(contact.get("email")),
                 _normalise_optional(contact.get("phone")),
-                json.dumps(contact, sort_keys=True),
+                _safe_json(contact),
             ),
         )
 
@@ -583,7 +605,7 @@ def _populate_database(conn: sqlite3.Connection, dataset: LegacyDataset) -> None
                 _normalise_optional(item.get("description")),
                 _extract_money(item, "price_cents", "price", "unit_price"),
                 _coerce_float(item.get("weight_oz") or item.get("weight")),
-                json.dumps(item, sort_keys=True),
+                _safe_json(item),
             ),
         )
 
@@ -597,7 +619,7 @@ def _populate_database(conn: sqlite3.Connection, dataset: LegacyDataset) -> None
             (
                 package_id,
                 _normalise_optional(_first_value(package, "name", "label")),
-                json.dumps(package, sort_keys=True),
+                _safe_json(package),
             ),
         )
 
@@ -615,7 +637,7 @@ def _populate_database(conn: sqlite3.Connection, dataset: LegacyDataset) -> None
                 package_id,
                 item_id,
                 _coerce_int(_first_value(package_item, "quantity", "qty")),
-                json.dumps(package_item, sort_keys=True),
+                _safe_json(package_item),
             ),
         )
 
@@ -632,7 +654,7 @@ def _populate_database(conn: sqlite3.Connection, dataset: LegacyDataset) -> None
                 _normalise_optional(_first_value(mention, "entity_id", "entityId")),
                 _normalise_optional(_first_value(mention, "handle", "mentioned_handle")),
                 _normalise_optional(_first_value(mention, "created_at", "createdAt")),
-                json.dumps(mention, sort_keys=True),
+                _safe_json(mention),
             ),
         )
 
@@ -649,7 +671,7 @@ def _populate_database(conn: sqlite3.Connection, dataset: LegacyDataset) -> None
                 _normalise_optional(_first_value(activity, "entity_id", "entityId")),
                 _normalise_optional(_first_value(activity, "action", "verb", "event")),
                 _normalise_optional(_first_value(activity, "created_at", "createdAt")),
-                json.dumps(activity, sort_keys=True),
+                _safe_json(activity),
             ),
         )
 
@@ -666,7 +688,7 @@ def _populate_database(conn: sqlite3.Connection, dataset: LegacyDataset) -> None
                 _normalise_optional(_first_value(handle, "entity_id", "entityId")),
                 _normalise_optional(_first_value(handle, "display_name", "label", "name")),
                 _normalise_optional(_first_value(handle, "search_blob", "search", "terms")),
-                json.dumps(handle, sort_keys=True),
+                _safe_json(handle),
             ),
         )
 
@@ -681,7 +703,7 @@ def _populate_database(conn: sqlite3.Connection, dataset: LegacyDataset) -> None
                 (
                     entity_type,
                     entity_id,
-                    json.dumps(record, sort_keys=True),
+                    _safe_json(record),
                     _normalise_optional(_first_value(record, "created_at", "createdAt")),
                     _normalise_optional(_first_value(record, "updated_at", "updatedAt")),
                 ),
@@ -695,7 +717,7 @@ def _write_records(dataset: LegacyDataset, destination: Path) -> None:
     records_dir.mkdir(parents=True, exist_ok=True)
     for entity_type, entries in dataset.records.items():
         (records_dir / f"{entity_type}.json").write_text(
-            json.dumps(entries, indent=2, sort_keys=True)
+            _safe_json(entries, indent=2)
         )
 
 
@@ -724,7 +746,7 @@ def _write_report(dataset: LegacyDataset, target: Path) -> None:
             "has_database": dataset.database_blob is not None,
         },
     }
-    target.write_text(json.dumps(report, indent=2, sort_keys=True))
+    target.write_text(_safe_json(report, indent=2))
 
 
 def _write_archive(source_dir: Path, destination: Path) -> None:
@@ -813,6 +835,25 @@ def _safe_attachment_path(name: str) -> Path:
     if not parts:
         parts = [uuid.uuid4().hex]
     return Path(*parts)
+
+
+def _merge_record_buckets(
+    target: Dict[str, List[Dict[str, Any]]], updates: Mapping[str, List[Dict[str, Any]]]
+) -> None:
+    for key, values in updates.items():
+        if not values:
+            continue
+        target.setdefault(key, []).extend(values)
+
+
+def _safe_json(value: Any, indent: Optional[int] = None) -> str:
+    def _stringify_unknown(obj: Any) -> str:
+        try:
+            return str(obj)
+        except Exception:  # pragma: no cover - extremely defensive
+            return repr(obj)
+
+    return json.dumps(value, indent=indent, sort_keys=True, default=_stringify_unknown)
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point
