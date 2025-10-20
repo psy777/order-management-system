@@ -1,3 +1,4 @@
+import io
 import os
 import uuid
 import webbrowser
@@ -7,9 +8,11 @@ import sqlite3
 import sys
 import smtplib
 import re
+import tempfile
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
+from pathlib import Path
 from werkzeug.utils import secure_filename
 from datetime import datetime, timezone, timedelta
 from dateutil.parser import parse as dateutil_parse
@@ -41,6 +44,7 @@ from database import (
 )
 from data_paths import DATA_ROOT, ensure_data_root
 from services.analytics import get_analytics_engine
+from services import build_legacy_backup
 from services.backup import BackupError, create_backup_archive, restore_backup_from_stream
 from services.records import (
     RecordValidationError,
@@ -3783,6 +3787,42 @@ def import_data():
         app.logger.error(f"Error restoring data: {exc}")
         app.logger.error(traceback.format_exc())
         return jsonify({"status": "error", "message": "An error occurred during the restore process. The original data has been restored."}), 500
+
+@app.route('/api/legacy-convert', methods=['POST'])
+def convert_legacy_backup():
+    """Convert a legacy backup artifact into a modern FireCoast archive."""
+    upload = request.files.get('legacy_file')
+    if upload is None:
+        return jsonify({"status": "error", "message": "No legacy file was provided."}), 400
+
+    if upload.filename == '':
+        return jsonify({"status": "error", "message": "Select a legacy export to convert."}), 400
+
+    safe_name = secure_filename(upload.filename) or 'legacy_payload'
+
+    try:
+        with tempfile.TemporaryDirectory(prefix='firecoast_legacy_') as tmp_dir:
+            working_dir = Path(tmp_dir)
+            source_path = working_dir / safe_name
+            upload.save(source_path)
+
+            archive_path = build_legacy_backup(source_path, destination_dir=working_dir)
+            buffer = io.BytesIO(archive_path.read_bytes())
+            buffer.seek(0)
+
+        return send_file(
+            buffer,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=archive_path.name,
+        )
+    except FileNotFoundError:
+        return jsonify({"status": "error", "message": "The uploaded file could not be processed."}), 400
+    except Exception as exc:  # pragma: no cover - defensive logging
+        app.logger.error("Legacy conversion failed: %s", exc)
+        app.logger.error(traceback.format_exc())
+        return jsonify({"status": "error", "message": "Failed to convert the legacy backup."}), 500
+
 
 @app.route('/order-logs/<string:order_id>')
 def order_logs_page(order_id):

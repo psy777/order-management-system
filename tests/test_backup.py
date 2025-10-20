@@ -128,3 +128,37 @@ def test_import_endpoint_restores_data(temp_data_dir, monkeypatch, reset_backup_
     assert (temp_data_dir / 'orders_manager.db').read_text() == 'db'
 
     archive_path.unlink()
+
+
+def test_legacy_convert_endpoint_returns_converted_archive():
+    client = firecoast_app.app.test_client()
+
+    legacy_payload = {
+        'settings': {'timezone': 'America/Los_Angeles'},
+        'orders': [],
+    }
+    data = io.BytesIO(json.dumps(legacy_payload).encode('utf-8'))
+    data.seek(0)
+
+    response = client.post(
+        '/api/legacy-convert',
+        data={'legacy_file': (data, 'legacy.json')},
+        content_type='multipart/form-data',
+    )
+
+    assert response.status_code == 200
+    assert response.mimetype == 'application/zip'
+
+    with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+        names = set(archive.namelist())
+
+    assert 'orders_manager.db' in names
+    assert 'settings.json' in names
+    assert 'legacy_import_report.json' in names
+
+
+def test_legacy_convert_endpoint_requires_file():
+    client = firecoast_app.app.test_client()
+
+    response = client.post('/api/legacy-convert', data={}, content_type='multipart/form-data')
+    assert response.status_code == 400
