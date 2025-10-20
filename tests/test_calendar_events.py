@@ -1,3 +1,4 @@
+import json
 import pathlib
 import sqlite3
 import sys
@@ -26,6 +27,7 @@ class CalendarEventNormalizationTests(unittest.TestCase):
                 entity_id TEXT,
                 display_name TEXT,
                 search_blob TEXT,
+                metadata_json TEXT,
                 created_at TEXT,
                 updated_at TEXT
             )
@@ -97,6 +99,7 @@ class CalendarEventRecordServiceTests(unittest.TestCase):
                 entity_id TEXT NOT NULL,
                 display_name TEXT,
                 search_blob TEXT,
+                metadata_json TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
@@ -156,6 +159,18 @@ class CalendarEventRecordServiceTests(unittest.TestCase):
         handle_rows = list(self.conn.execute("SELECT handle, entity_type FROM record_handles"))
         handles = {(row['handle'], row['entity_type']) for row in handle_rows}
         self.assertIn((normalized['handle'], 'calendar_event'), handles)
+
+        metadata_row = self.conn.execute(
+            "SELECT metadata_json FROM record_handles WHERE handle = ?",
+            (normalized['handle'],),
+        ).fetchone()
+        self.assertIsNotNone(metadata_row)
+        metadata = json.loads(metadata_row['metadata_json'])
+        self.assertEqual(metadata['startAt'], normalized['start_at'])
+        self.assertEqual(metadata['endAt'], normalized['end_at'])
+        self.assertTrue(metadata['allDay'] is False)
+        self.assertEqual(metadata['timezone'], 'UTC')
+        self.assertIn('notesPreview', metadata)
 
         mention_rows = list(
             self.conn.execute(

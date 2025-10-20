@@ -1006,6 +1006,12 @@ def update_or_create_contact(cursor, contact_info_payload):
         service = get_record_service()
         display_value = contact_name or company_name or ensured_handle
         search_blob = ' '.join(filter(None, [contact_name, company_name, email, ensured_handle])).lower()
+        metadata = {
+            'contactName': contact_name or '',
+            'companyName': company_name or '',
+            'email': email or '',
+            'phone': phone or '',
+        }
         service.register_handle(
             cursor.connection,
             'contact',
@@ -1013,6 +1019,7 @@ def update_or_create_contact(cursor, contact_info_payload):
             ensured_handle,
             display_name=display_value,
             search_blob=search_blob,
+            metadata=metadata,
         )
 
     final_notes = notes
@@ -1124,15 +1131,22 @@ def update_contact_by_id(cursor, contact_id, contact_data_payload):
         if ensured_handle:
             service = get_record_service()
             cursor.execute(
-                "SELECT contact_name, company_name, email FROM contacts WHERE id = ?",
+                "SELECT contact_name, company_name, email, phone FROM contacts WHERE id = ?",
                 (contact_id,),
             )
             display_row = cursor.fetchone()
             contact_name_val = display_row['contact_name'] if display_row else None
             company_name_val = display_row['company_name'] if display_row else None
             email_val = display_row['email'] if display_row else None
+            phone_val = display_row['phone'] if display_row else None
             display_value = (contact_name_val or company_name_val or ensured_handle)
             search_blob = ' '.join(filter(None, [contact_name_val, company_name_val, email_val, ensured_handle])).lower()
+            metadata = {
+                'contactName': contact_name_val or '',
+                'companyName': company_name_val or '',
+                'email': email_val or '',
+                'phone': phone_val or '',
+            }
             service.register_handle(
                 cursor.connection,
                 'contact',
@@ -1140,6 +1154,7 @@ def update_contact_by_id(cursor, contact_id, contact_data_payload):
                 ensured_handle,
                 display_name=display_value,
                 search_blob=search_blob,
+                metadata=metadata,
             )
 
         cursor.execute(

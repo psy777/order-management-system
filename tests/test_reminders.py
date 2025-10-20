@@ -1,4 +1,4 @@
-import sqlite3
+import json
 import pathlib
 import sqlite3
 import sys
@@ -27,6 +27,7 @@ class ReminderNormalizationTests(unittest.TestCase):
                 entity_id TEXT,
                 display_name TEXT,
                 search_blob TEXT,
+                metadata_json TEXT,
                 created_at TEXT,
                 updated_at TEXT
             )
@@ -125,6 +126,7 @@ class ReminderRecordServiceTests(unittest.TestCase):
                 entity_id TEXT NOT NULL,
                 display_name TEXT,
                 search_blob TEXT,
+                metadata_json TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
@@ -183,6 +185,17 @@ class ReminderRecordServiceTests(unittest.TestCase):
         handle_rows = list(self.conn.execute("SELECT handle, entity_type FROM record_handles"))
         handles = {(row['handle'], row['entity_type']) for row in handle_rows}
         self.assertIn((normalized['handle'], 'reminder'), handles)
+        metadata_row = self.conn.execute(
+            "SELECT metadata_json FROM record_handles WHERE handle = ?",
+            (normalized['handle'],),
+        ).fetchone()
+        self.assertIsNotNone(metadata_row)
+        metadata = json.loads(metadata_row['metadata_json'])
+        self.assertEqual(metadata['dueAt'], normalized['due_at'])
+        self.assertTrue(metadata['dueHasTime'])
+        self.assertEqual(metadata['timezone'], 'UTC')
+        self.assertFalse(metadata['completed'])
+        self.assertIn('notesPreview', metadata)
         mention_rows = list(
             self.conn.execute(
                 "SELECT mentioned_handle, context_entity_type FROM record_mentions WHERE context_entity_type = 'reminder'"

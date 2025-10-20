@@ -71,6 +71,7 @@ class RecordServiceIntegrationTests(unittest.TestCase):
                 entity_id TEXT NOT NULL,
                 display_name TEXT,
                 search_blob TEXT,
+                metadata_json TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
@@ -206,6 +207,22 @@ class RecordServiceIntegrationTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]['mentioned_entity_type'], 'order')
         self.assertEqual(rows[0]['mentioned_handle'], 'order-1001')
+
+    def test_list_handles_includes_metadata(self):
+        metadata = {'status': 'active', 'priority': 'high'}
+        self.service.register_handle(
+            self.conn,
+            'order',
+            'order-42',
+            'order-42',
+            display_name='PO-42',
+            search_blob='po 42',
+            metadata=metadata,
+        )
+        handles = self.service.list_handles(self.conn)
+        self.assertEqual(len(handles), 1)
+        self.assertIn('metadata', handles[0])
+        self.assertEqual(handles[0]['metadata']['status'], 'active')
 
     def test_validation_errors_are_raised_for_missing_fields(self):
         with self.assertRaises(RecordValidationError):

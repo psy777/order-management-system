@@ -490,7 +490,16 @@ class RecordService:
             return
         display_name = schema.resolve_display_value(payload)
         search_blob = schema.build_search_blob(payload)
-        self.register_handle(conn, schema.entity_type, payload["id"], handle_value, display_name, search_blob)
+        metadata = self._build_handle_metadata(schema, payload)
+        self.register_handle(
+            conn,
+            schema.entity_type,
+            payload["id"],
+            handle_value,
+            display_name,
+            search_blob,
+            metadata=metadata,
+        )
 
     def _sync_mentions_for_record(
         self,
@@ -516,6 +525,76 @@ class RecordService:
             return
         sync_record_mentions(conn, unique_handles, schema.entity_type, str(payload["id"]), snippet_source or "")
 
+    def _build_handle_metadata(
+        self,
+        schema: RecordSchema,
+        payload: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        builder_name = f"_build_{schema.entity_type}_handle_metadata"
+        builder = getattr(self, builder_name, None)
+        if callable(builder):
+            try:
+                metadata = builder(payload)
+            except Exception:  # pragma: no cover - defensive guard
+                metadata = None
+            if metadata:
+                return metadata
+        return None
+
+    @staticmethod
+    def _clean_handle_metadata(metadata: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if not metadata:
+            return None
+        cleaned: Dict[str, Any] = {}
+        for key, value in metadata.items():
+            if value is None:
+                continue
+            if isinstance(value, str):
+                trimmed = value.strip()
+                if not trimmed:
+                    continue
+                cleaned[key] = trimmed
+            else:
+                cleaned[key] = value
+        return cleaned or None
+
+    @staticmethod
+    def _build_notes_preview(text: Optional[str], *, limit: int = 160) -> Optional[str]:
+        if not text:
+            return None
+        snippet = str(text).strip()
+        if not snippet:
+            return None
+        if len(snippet) > limit:
+            snippet = snippet[: limit - 1].rstrip() + "…"
+        return snippet
+
+    def _build_calendar_event_handle_metadata(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        metadata: Dict[str, Any] = {
+            "startAt": payload.get("start_at"),
+            "endAt": payload.get("end_at"),
+            "allDay": bool(payload.get("all_day")),
+            "timezone": payload.get("timezone"),
+            "location": payload.get("location"),
+        }
+        notes_preview = self._build_notes_preview(payload.get("notes"))
+        if notes_preview:
+            metadata["notesPreview"] = notes_preview
+        return self._clean_handle_metadata(metadata)
+
+    def _build_reminder_handle_metadata(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        metadata: Dict[str, Any] = {
+            "dueAt": payload.get("due_at"),
+            "dueHasTime": bool(payload.get("due_has_time")),
+            "timezone": payload.get("timezone"),
+            "completed": bool(payload.get("completed")),
+            "completedAt": payload.get("completed_at"),
+        }
+        notes_preview = self._build_notes_preview(payload.get("notes"))
+        if notes_preview:
+            metadata["notesPreview"] = notes_preview
+        return self._clean_handle_metadata(metadata)
+
     def register_handle(
         self,
         conn: sqlite3.Connection,
@@ -524,28 +603,38 @@ class RecordService:
         handle: str,
         display_name: Optional[str] = None,
         search_blob: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         if not handle:
             return
         normalised_handle = handle.lower()
         display_value = (display_name or handle).strip()
         search_value = (search_blob or display_value).lower()
+        metadata_value = self._clean_handle_metadata(metadata)
         conn.execute(
             "DELETE FROM record_handles WHERE entity_type = ? AND entity_id = ?",
             (entity_type, str(entity_id)),
         )
         conn.execute(
             """
-            INSERT INTO record_handles (handle, entity_type, entity_id, display_name, search_blob)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO record_handles (handle, entity_type, entity_id, display_name, search_blob, metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(handle) DO UPDATE SET
                 entity_type=excluded.entity_type,
                 entity_id=excluded.entity_id,
                 display_name=excluded.display_name,
                 search_blob=excluded.search_blob,
+                metadata_json=excluded.metadata_json,
                 updated_at=CURRENT_TIMESTAMP
             """,
-            (normalised_handle, entity_type, str(entity_id), display_value, search_value),
+            (
+                normalised_handle,
+                entity_type,
+                str(entity_id),
+                display_value,
+                search_value,
+                json.dumps(metadata_value) if metadata_value is not None else None,
+            ),
         )
 
     def list_handles(
@@ -554,7 +643,7 @@ class RecordService:
         entity_types: Optional[Sequence[str]] = None,
         search: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        sql = "SELECT handle, entity_type, entity_id, display_name FROM record_handles"
+        sql = "SELECT handle, entity_type, entity_id, display_name, metadata_json FROM record_handles"
         conditions: List[str] = []
         params: List[Any] = []
         if entity_types:
@@ -570,12 +659,20 @@ class RecordService:
         cursor = conn.execute(sql, params)
         results = []
         for row in cursor.fetchall():
+            metadata_payload = row["metadata_json"]
+            metadata_value = None
+            if metadata_payload:
+                try:
+                    metadata_value = json.loads(metadata_payload)
+                except (TypeError, json.JSONDecodeError):  # pragma: no cover - defensive
+                    metadata_value = None
             results.append(
                 {
                     "handle": row["handle"],
                     "entityType": row["entity_type"],
                     "entityId": row["entity_id"],
                     "displayName": row["display_name"],
+                    "metadata": metadata_value,
                 }
             )
         return results
@@ -585,16 +682,24 @@ class RecordService:
             return {}
         placeholders = ",".join(["?"] * len(handles))
         cursor = conn.execute(
-            f"SELECT handle, entity_type, entity_id, display_name FROM record_handles WHERE handle IN ({placeholders})",
+            f"SELECT handle, entity_type, entity_id, display_name, metadata_json FROM record_handles WHERE handle IN ({placeholders})",
             [handle.lower() for handle in handles],
         )
         mapping: Dict[str, Dict[str, Any]] = {}
         for row in cursor.fetchall():
+            metadata_payload = row["metadata_json"]
+            metadata_value = None
+            if metadata_payload:
+                try:
+                    metadata_value = json.loads(metadata_payload)
+                except (TypeError, json.JSONDecodeError):  # pragma: no cover - defensive
+                    metadata_value = None
             mapping[row["handle"]] = {
                 "handle": row["handle"],
                 "entity_type": row["entity_type"],
                 "entity_id": row["entity_id"],
                 "display_name": row["display_name"],
+                "metadata": metadata_value,
             }
         return mapping
 

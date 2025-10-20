@@ -3,7 +3,7 @@ const { useCallback, useEffect, useMemo, useRef, useState } = React;
 const MENTION_REGEX = /(^|[^a-z0-9_.-])@([a-z0-9_.-]+)/gi;
 const ZERO_WIDTH_SPACE = String.fromCharCode(8203);
 
-const MENU_DIMENSIONS = { width: 280, height: 220 };
+const MENU_DIMENSIONS = { width: 280, height: 300 };
 
 let caretStylesRegistered = false;
 const ensureCaretStyles = () => {
@@ -87,11 +87,203 @@ const buildHandlesMap = handles => {
     return map;
 };
 
-const getEntityLabel = metadata => {
-    if (!metadata || !metadata.entityType) {
+const ENTITY_LABEL_OVERRIDES = {
+    calendar_event: 'Event',
+    reminder: 'Task',
+};
+
+const toTitleCase = value => {
+    if (!value) {
         return '';
     }
-    return metadata.entityType.replace(/_/g, ' ');
+    return value.replace(/\b\w/g, char => char.toUpperCase());
+};
+
+const getEntityLabel = metadata => {
+    const entityType = metadata && metadata.entityType ? metadata.entityType.toLowerCase() : '';
+    if (!entityType) {
+        return '';
+    }
+    if (ENTITY_LABEL_OVERRIDES[entityType]) {
+        return ENTITY_LABEL_OVERRIDES[entityType];
+    }
+    const label = entityType.replace(/_/g, ' ');
+    return toTitleCase(label);
+};
+
+const safeFormatDate = (date, options) => {
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
+        return null;
+    }
+    try {
+        return new Intl.DateTimeFormat(undefined, options).format(date);
+    } catch (error) {
+        return null;
+    }
+};
+
+const parseIsoDate = value => {
+    if (!value) {
+        return null;
+    }
+    const date = new Date(value);
+    if (!Number.isNaN(date.getTime())) {
+        return date;
+    }
+    const fallback = new Date(`${value}T00:00:00Z`);
+    if (!Number.isNaN(fallback.getTime())) {
+        return fallback;
+    }
+    return null;
+};
+
+const formatDateValue = (value, { includeTime } = {}) => {
+    if (!value) {
+        return null;
+    }
+    const date = parseIsoDate(value);
+    if (!date) {
+        return value;
+    }
+    const useTime = typeof includeTime === 'boolean' ? includeTime : (typeof value === 'string' && value.includes('T'));
+    const formatted = safeFormatDate(date, useTime ? { dateStyle: 'medium', timeStyle: 'short' } : { dateStyle: 'medium' });
+    return formatted || value;
+};
+
+const summariseEventTiming = metadata => {
+    if (!metadata) {
+        return null;
+    }
+    const start = parseIsoDate(metadata.startAt);
+    const end = parseIsoDate(metadata.endAt);
+    const allDay = Boolean(metadata.allDay);
+    if (!start && !end) {
+        return null;
+    }
+    if (allDay) {
+        if (start && end && start.toDateString() !== end.toDateString()) {
+            const startLabel = formatDateValue(metadata.startAt, { includeTime: false });
+            const endLabel = formatDateValue(metadata.endAt, { includeTime: false });
+            if (startLabel && endLabel) {
+                return `${startLabel} – ${endLabel}`;
+            }
+        }
+        return formatDateValue(metadata.startAt || metadata.endAt, { includeTime: false });
+    }
+    if (start && end) {
+        const sameDay = start.toDateString() === end.toDateString();
+        if (sameDay) {
+            const dateLabel = formatDateValue(metadata.startAt, { includeTime: false });
+            const startTime = safeFormatDate(start, { timeStyle: 'short' });
+            const endTime = safeFormatDate(end, { timeStyle: 'short' });
+            if (dateLabel && startTime && endTime) {
+                return `${dateLabel} • ${startTime} – ${endTime}`;
+            }
+        }
+        const startLabel = formatDateValue(metadata.startAt, { includeTime: true });
+        const endLabel = formatDateValue(metadata.endAt, { includeTime: true });
+        if (startLabel && endLabel) {
+            return `${startLabel} – ${endLabel}`;
+        }
+    }
+    const fallback = metadata.startAt || metadata.endAt;
+    return formatDateValue(fallback, { includeTime: true }) || fallback || null;
+};
+
+const summariseReminderDue = metadata => {
+    if (!metadata) {
+        return null;
+    }
+    if (!metadata.dueAt) {
+        return 'No due date';
+    }
+    return formatDateValue(metadata.dueAt, { includeTime: Boolean(metadata.dueHasTime) }) || metadata.dueAt;
+};
+
+const renderMetaRow = (key, label, value) => {
+    if (value === null || value === undefined || value === '') {
+        return null;
+    }
+    return (
+        <div key={key} className="text-xs text-slate-600">
+            <span className="mr-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{label}:</span>
+            <span className="font-medium text-slate-700">{value}</span>
+        </div>
+    );
+};
+
+const renderNotesPreview = (key, text) => {
+    if (!text) {
+        return null;
+    }
+    return (
+        <div key={key} className="rounded-md bg-slate-50 px-2 py-1 text-[11px] italic text-slate-500">
+            “{text}”
+        </div>
+    );
+};
+
+const renderMetadataDetails = metadataEntry => {
+    if (!metadataEntry || !metadataEntry.metadata) {
+        return null;
+    }
+    const metadata = metadataEntry.metadata;
+    const entityType = (metadataEntry.entityType || '').toLowerCase();
+    const rows = [];
+    if (entityType === 'contact') {
+        const nameParts = [];
+        const contactName = metadata.contactName || '';
+        const companyName = metadata.companyName || '';
+        if (contactName) {
+            nameParts.push(contactName);
+        }
+        if (companyName && companyName.toLowerCase() !== contactName.toLowerCase()) {
+            nameParts.push(companyName);
+        }
+        if (nameParts.length) {
+            rows.push(
+                <div key="contactName" className="text-sm font-semibold text-slate-700">
+                    {nameParts.join(' • ')}
+                </div>
+            );
+        }
+        rows.push(renderMetaRow('contactEmail', 'Email', metadata.email));
+        rows.push(renderMetaRow('contactPhone', 'Phone', metadata.phone));
+    } else if (entityType === 'order') {
+        rows.push(renderMetaRow('orderDisplayId', 'Order ID', metadata.displayId));
+        rows.push(renderMetaRow('orderStatus', 'Status', metadata.status));
+        rows.push(renderMetaRow('orderDate', 'Order date', formatDateValue(metadata.orderDate)));
+        rows.push(renderMetaRow('orderShipDate', 'Ship date', formatDateValue(metadata.estimatedShippingDate)));
+        rows.push(renderMetaRow('orderPriority', 'Priority', metadata.priorityLevel));
+        rows.push(renderMetaRow('orderChannel', 'Channel', metadata.fulfillmentChannel));
+        rows.push(renderMetaRow('orderReference', 'Customer ref', metadata.customerReference));
+    } else if (entityType === 'calendar_event') {
+        rows.push(renderMetaRow('eventWhen', 'When', summariseEventTiming(metadata)));
+        rows.push(renderMetaRow('eventTimezone', 'Time zone', metadata.timezone));
+        rows.push(renderMetaRow('eventLocation', 'Location', metadata.location));
+        rows.push(renderNotesPreview('eventNotes', metadata.notesPreview));
+    } else if (entityType === 'reminder') {
+        rows.push(renderMetaRow('reminderDue', 'Due', summariseReminderDue(metadata)));
+        rows.push(renderMetaRow('reminderTimezone', 'Time zone', metadata.timezone));
+        const statusLabel = metadata.completed ? 'Completed' : 'Active';
+        const completedAtLabel = metadata.completedAt
+            ? formatDateValue(metadata.completedAt, { includeTime: true })
+            : null;
+        const statusDisplay = completedAtLabel && metadata.completed
+            ? `${statusLabel} on ${completedAtLabel}`
+            : statusLabel;
+        rows.push(renderMetaRow('reminderStatus', 'Status', statusDisplay));
+        rows.push(renderNotesPreview('reminderNotes', metadata.notesPreview));
+    }
+    const filtered = rows.filter(Boolean);
+    if (!filtered.length) {
+        return null;
+    }
+    return (
+        <div className="mt-3 space-y-2 border-t border-slate-100 pt-3 text-xs text-slate-600">
+            {filtered}
+        </div>
+    );
 };
 
 const getRecordUrl = metadata => {
@@ -406,6 +598,7 @@ function useMentionContextMenu({ handlesMap, refresh, containerRef }) {
                     </span>
                 )}
             </div>
+            {renderMetadataDetails(contextMetadata)}
             <div className="mt-3 flex flex-col gap-1 text-sm">
                 <button
                     type="button"

@@ -74,7 +74,12 @@ def ensure_order_record_handle(
         return None
 
     cursor.execute(
-        "SELECT display_id, title FROM orders WHERE order_id = ?",
+        """
+        SELECT display_id, title, status, order_date, priority_level, fulfillment_channel,
+               customer_reference, estimated_shipping_date
+        FROM orders
+        WHERE order_id = ?
+        """,
         (order_id,),
     )
     row = cursor.fetchone()
@@ -82,12 +87,30 @@ def ensure_order_record_handle(
         if isinstance(row, sqlite3.Row):
             display_value = row['display_id']
             title_value = row['title']
+            status_value = row['status']
+            order_date_value = row['order_date']
+            priority_value = row['priority_level']
+            channel_value = row['fulfillment_channel']
+            customer_ref_value = row['customer_reference']
+            ship_date_value = row['estimated_shipping_date']
         else:
             display_value = row[0]
             title_value = row[1]
+            status_value = row[2] if len(row) > 2 else None
+            order_date_value = row[3] if len(row) > 3 else None
+            priority_value = row[4] if len(row) > 4 else None
+            channel_value = row[5] if len(row) > 5 else None
+            customer_ref_value = row[6] if len(row) > 6 else None
+            ship_date_value = row[7] if len(row) > 7 else None
     else:
         display_value = None
         title_value = None
+        status_value = None
+        order_date_value = None
+        priority_value = None
+        channel_value = None
+        customer_ref_value = None
+        ship_date_value = None
 
     display_value = display_id or display_value or ""
     title_value = title or title_value or ""
@@ -127,6 +150,15 @@ def ensure_order_record_handle(
     ).lower()
 
     service = get_record_service()
+    metadata = {
+        'displayId': display_value,
+        'status': status_value,
+        'orderDate': order_date_value,
+        'priorityLevel': priority_value,
+        'fulfillmentChannel': channel_value,
+        'customerReference': customer_ref_value,
+        'estimatedShippingDate': ship_date_value,
+    }
     service.register_handle(
         cursor.connection,
         'order',
@@ -134,6 +166,7 @@ def ensure_order_record_handle(
         candidate,
         display_name=display_label,
         search_blob=search_terms,
+        metadata=metadata,
     )
     return candidate
 
@@ -539,11 +572,17 @@ def init_db():
             entity_id TEXT NOT NULL,
             display_name TEXT,
             search_blob TEXT,
+            metadata_json TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
     """)
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_record_handles_entity ON record_handles(entity_type, entity_id)")
+
+    cursor.execute("PRAGMA table_info(record_handles)")
+    handle_columns = {row[1] for row in cursor.fetchall()}
+    if 'metadata_json' not in handle_columns:
+        cursor.execute("ALTER TABLE record_handles ADD COLUMN metadata_json TEXT")
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS record_mentions (
