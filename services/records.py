@@ -227,6 +227,7 @@ class RecordService:
         self._load_registered_schemas(conn)
         self._register_builtin_contact_schema()
         self._ensure_default_note_schema(conn)
+        self._ensure_calendar_event_schema(conn)
 
     def _load_registered_schemas(self, conn: sqlite3.Connection) -> None:
         cursor = conn.execute("SELECT entity_type, schema_json FROM record_schemas")
@@ -279,6 +280,28 @@ class RecordService:
             metadata={"example": True},
         )
         self.register_schema(conn, note_schema)
+
+    def _ensure_calendar_event_schema(self, conn: sqlite3.Connection) -> None:
+        if self.registry.has("calendar_event"):
+            return
+        calendar_schema = RecordSchema(
+            entity_type="calendar_event",
+            fields={
+                "title": FieldDefinition("title", field_type="string", required=True),
+                "handle": FieldDefinition("handle", field_type="string", required=True),
+                "start_at": FieldDefinition("start_at", field_type="string", required=True),
+                "end_at": FieldDefinition("end_at", field_type="string"),
+                "all_day": FieldDefinition("all_day", field_type="boolean", default=False),
+                "location": FieldDefinition("location", field_type="string"),
+                "notes": FieldDefinition("notes", field_type="text", mention=True),
+                "timezone": FieldDefinition("timezone", field_type="string", default="UTC"),
+            },
+            handle_field="handle",
+            display_field="title",
+            description="Calendar events with scheduling metadata and mention-enabled notes.",
+            storage="records",
+        )
+        self.register_schema(conn, calendar_schema)
 
     def register_schema(self, conn: sqlite3.Connection, schema_payload: Any) -> RecordSchema:
         schema = schema_payload if isinstance(schema_payload, RecordSchema) else RecordSchema.from_dict(schema_payload)
@@ -390,6 +413,43 @@ class RecordService:
             payload["id"] = row["entity_id"]
             results.append(payload)
         return results
+
+    def delete_record(
+        self,
+        conn: sqlite3.Connection,
+        entity_type: str,
+        entity_id: str,
+    ) -> None:
+        schema = self.registry.get(entity_type)
+        if schema.storage != "records":
+            raise ValueError(f"Record type '{entity_type}' is externally managed and cannot be removed via API")
+        cursor = conn.execute(
+            "SELECT data FROM records WHERE entity_type = ? AND entity_id = ?",
+            (entity_type, entity_id),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise KeyError(f"Record {entity_type}:{entity_id} not found")
+        conn.execute(
+            "DELETE FROM records WHERE entity_type = ? AND entity_id = ?",
+            (entity_type, entity_id),
+        )
+        conn.execute(
+            "DELETE FROM record_handles WHERE entity_type = ? AND entity_id = ?",
+            (entity_type, entity_id),
+        )
+        conn.execute(
+            "DELETE FROM record_mentions WHERE context_entity_type = ? AND context_entity_id = ?",
+            (entity_type, entity_id),
+        )
+        conn.execute(
+            "DELETE FROM record_mentions WHERE mentioned_entity_type = ? AND mentioned_entity_id = ?",
+            (entity_type, entity_id),
+        )
+        conn.execute(
+            "DELETE FROM record_activity_logs WHERE entity_type = ? AND entity_id = ?",
+            (entity_type, entity_id),
+        )
 
     # ------------------------------------------------------------------
     # Mentions & handles
