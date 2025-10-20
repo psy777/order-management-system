@@ -20,6 +20,7 @@ import csv
 import shutil
 import zipfile
 import pytz
+from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request, send_from_directory, redirect, flash, url_for
@@ -104,6 +105,7 @@ def read_password_entries():
 def write_password_entries(entries):
     write_json_file(PASSWORDS_FILE, {"entries": entries})
 PHONE_CLEAN_RE = re.compile(r"\D+")
+CALENDAR_HANDLE_SANITIZE_RE = re.compile(r"[^a-z0-9.-]+")
 
 
 def _normalize_phone_digits(value):
@@ -2309,6 +2311,168 @@ def api_create_contact():
     except Exception as e_g: conn.rollback(); conn.close(); app.logger.error(f"Global err create contact:{e_g}"); return jsonify({"message":"Unexpected error."}),500
 
 
+def _sanitize_calendar_handle_text(raw: str) -> str:
+    if not raw:
+        return ""
+    normalised = CALENDAR_HANDLE_SANITIZE_RE.sub('-', raw.lower()).strip('-')
+    return normalised[:64]
+
+
+def _suggest_calendar_handle(title: str, start_dt: Optional[datetime]) -> str:
+    base = _sanitize_calendar_handle_text(title)
+    date_fragment = start_dt.strftime('%Y%m%d') if start_dt else ''
+    if base and date_fragment:
+        candidate = f"{base[:40]}-{date_fragment}"
+    elif base:
+        candidate = base[:48]
+    elif date_fragment:
+        candidate = f"event-{date_fragment}"
+    else:
+        candidate = f"event-{uuid.uuid4().hex[:8]}"
+    return candidate or f"event-{uuid.uuid4().hex[:8]}"
+
+
+def _ensure_unique_calendar_handle(
+    conn: sqlite3.Connection,
+    preferred_handle: str,
+    *,
+    existing_id: Optional[str] = None,
+) -> str:
+    base = _sanitize_calendar_handle_text(preferred_handle)
+    if not base:
+        base = f"event-{uuid.uuid4().hex[:8]}"
+    candidate = base
+    suffix = 2
+    while True:
+        row = conn.execute(
+            "SELECT entity_type, entity_id FROM record_handles WHERE handle = ?",
+            (candidate,),
+        ).fetchone()
+        if not row:
+            return candidate
+        entity_type = row["entity_type"] if isinstance(row, sqlite3.Row) else row[0]
+        entity_id = row["entity_id"] if isinstance(row, sqlite3.Row) else row[1]
+        if entity_type == 'calendar_event' and existing_id is not None and str(entity_id) == str(existing_id):
+            return candidate
+        candidate = f"{base[:48]}-{suffix}"
+        suffix += 1
+
+
+def _coerce_calendar_datetime(value: Any, field_name: str) -> datetime:
+    if value in (None, ""):
+        raise ValueError(f"Field '{field_name}' is required")
+    try:
+        parsed = dateutil_parse(str(value))
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"Invalid datetime for '{field_name}': {value}") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _normalize_calendar_event_payload(
+    conn: sqlite3.Connection,
+    payload: Dict[str, Any],
+    *,
+    existing_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("Payload must be an object")
+    title = (payload.get('title') or '').strip()
+    if not title:
+        raise ValueError("Title is required")
+    start_dt = _coerce_calendar_datetime(payload.get('start_at'), 'start_at')
+    end_value = payload.get('end_at')
+    end_dt = None
+    if end_value not in (None, ""):
+        end_dt = _coerce_calendar_datetime(end_value, 'end_at')
+    if end_dt and end_dt < start_dt:
+        raise ValueError("Event end time must be after the start time")
+    all_day = bool(payload.get('all_day'))
+    timezone_value = (payload.get('timezone') or 'UTC').strip() or 'UTC'
+    location_value = (payload.get('location') or '').strip()
+    notes_value = payload.get('notes')
+    if notes_value is None:
+        notes_value = ''
+    else:
+        notes_value = str(notes_value)
+    incoming_handle = payload.get('handle') or ''
+    candidate_handle = incoming_handle.strip()
+    if not candidate_handle:
+        candidate_handle = _suggest_calendar_handle(title, start_dt)
+    normalized_handle = _ensure_unique_calendar_handle(
+        conn,
+        candidate_handle,
+        existing_id=existing_id,
+    )
+    end_dt = end_dt or start_dt
+    return {
+        'title': title,
+        'handle': normalized_handle,
+        'start_at': start_dt.isoformat(),
+        'end_at': end_dt.isoformat(),
+        'all_day': all_day,
+        'location': location_value,
+        'notes': notes_value,
+        'timezone': timezone_value,
+    }
+
+
+def _parse_calendar_range_boundary(value: Optional[str], *, end: bool = False) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        parsed = dateutil_parse(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    has_time_component = 'T' in value or 't' in value
+    if not has_time_component:
+        if end:
+            parsed = parsed.replace(hour=23, minute=59, second=59, microsecond=999000)
+        else:
+            parsed = parsed.replace(hour=0, minute=0, second=0, microsecond=0)
+    return parsed.astimezone(timezone.utc)
+
+
+def _event_overlaps_range(
+    event_payload: Dict[str, Any],
+    start_dt: Optional[datetime],
+    end_dt: Optional[datetime],
+) -> bool:
+    try:
+        event_start = dateutil_parse(event_payload.get('start_at'))
+        event_end_raw = event_payload.get('end_at') or event_payload.get('start_at')
+        event_end = dateutil_parse(event_end_raw)
+    except (TypeError, ValueError):
+        return False
+    if event_start.tzinfo is None:
+        event_start = event_start.replace(tzinfo=timezone.utc)
+    else:
+        event_start = event_start.astimezone(timezone.utc)
+    if event_end.tzinfo is None:
+        event_end = event_end.replace(tzinfo=timezone.utc)
+    else:
+        event_end = event_end.astimezone(timezone.utc)
+    if event_end < event_start:
+        event_end = event_start
+    if start_dt and event_end < start_dt:
+        return False
+    if end_dt and event_start > end_dt:
+        return False
+    return True
+
+
+def _serialize_calendar_event(data: Dict[str, Any]) -> Dict[str, Any]:
+    payload = dict(data)
+    payload['all_day'] = bool(payload.get('all_day'))
+    payload['location'] = (payload.get('location') or '').strip()
+    payload['notes'] = payload.get('notes') or ''
+    payload['timezone'] = (payload.get('timezone') or 'UTC').strip() or 'UTC'
+    return payload
+
+
 @app.route('/api/records/handles', methods=['GET'])
 def api_record_handles():
     service = get_record_service()
@@ -2410,6 +2574,75 @@ def api_record_activity(entity_type, entity_id):
         return jsonify({'activity': activity})
     finally:
         conn.close()
+
+
+@app.route('/api/calendar/events', methods=['GET', 'POST'])
+def api_calendar_events():
+    service = get_record_service()
+    conn = get_db_connection()
+    try:
+        if request.method == 'GET':
+            start_param = request.args.get('start') or request.args.get('range_start')
+            end_param = request.args.get('end') or request.args.get('range_end')
+            range_start = _parse_calendar_range_boundary(start_param) if start_param else None
+            range_end = _parse_calendar_range_boundary(end_param, end=True) if end_param else None
+            records = service.list_records(conn, 'calendar_event')
+            events: List[Dict[str, Any]] = []
+            for record in records:
+                normalized = _serialize_calendar_event(record)
+                if _event_overlaps_range(normalized, range_start, range_end):
+                    events.append(normalized)
+            events.sort(key=lambda payload: payload.get('start_at') or '')
+            return jsonify({'events': events})
+        payload = request.get_json(force=True, silent=True) or {}
+        actor = payload.pop('actor', None)
+        event_payload = _normalize_calendar_event_payload(conn, payload)
+        created = service.create_record(conn, 'calendar_event', event_payload, actor=actor)
+        conn.commit()
+        return jsonify({'event': _serialize_calendar_event(created['data'])}), 201
+    except RecordValidationError as err:
+        conn.rollback()
+        return jsonify({'message': 'Validation failed', 'errors': err.errors}), 400
+    except ValueError as exc:
+        conn.rollback()
+        return jsonify({'message': str(exc)}), 400
+    finally:
+        conn.close()
+
+
+@app.route('/api/calendar/events/<string:event_id>', methods=['GET', 'PUT', 'DELETE'])
+def api_calendar_event_detail(event_id):
+    service = get_record_service()
+    conn = get_db_connection()
+    try:
+        if request.method == 'GET':
+            record = service.get_record(conn, 'calendar_event', event_id)
+            if not record:
+                return jsonify({'message': 'Event not found'}), 404
+            return jsonify({'event': _serialize_calendar_event(record)})
+        if request.method == 'DELETE':
+            try:
+                service.delete_record(conn, 'calendar_event', event_id)
+            except KeyError:
+                conn.rollback()
+                return jsonify({'message': 'Event not found'}), 404
+            conn.commit()
+            return jsonify({'message': 'Event deleted'})
+        payload = request.get_json(force=True, silent=True) or {}
+        actor = payload.pop('actor', None)
+        event_payload = _normalize_calendar_event_payload(conn, payload, existing_id=event_id)
+        updated = service.update_record(conn, 'calendar_event', event_id, event_payload, actor=actor)
+        conn.commit()
+        return jsonify({'event': _serialize_calendar_event(updated['data'])})
+    except RecordValidationError as err:
+        conn.rollback()
+        return jsonify({'message': 'Validation failed', 'errors': err.errors}), 400
+    except ValueError as exc:
+        conn.rollback()
+        return jsonify({'message': str(exc)}), 400
+    finally:
+        conn.close()
+
 
 @app.route('/api/contacts/<string:contact_id>', methods=['DELETE'])
 def delete_contact(contact_id):
@@ -3160,6 +3393,11 @@ def orders_page():
 @app.route('/passwords')
 def passwords_page():
     return render_template('passwords.html')
+
+
+@app.route('/calendar')
+def calendar_page():
+    return render_template('calendar.html')
 
 @app.route('/api/export-data', methods=['GET'])
 def export_data():
