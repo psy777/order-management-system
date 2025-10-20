@@ -11,25 +11,25 @@
     <link rel="icon" href="/favicon.ico" type="image/x-icon">
     <link rel="stylesheet" href="/assets/css/styles.css">
 </head>
-<body class="bg-slate-50 min-h-screen font-sans">
-    <nav class="bg-slate-900 text-white shadow">
+<body class="bg-[#313338] min-h-screen font-sans text-[#f2f3f5]">
+    <nav class="bg-[#1e1f22] text-[#f2f3f5] shadow">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex h-16 items-center justify-between">
                 <div class="flex items-center space-x-10">
-                    <a href="/dashboard" id="nav-home-link" class="text-lg font-semibold tracking-wide">FireCoast OMS</a>
-                    <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
-                        <a href="/orders" class="hover:text-orange-300 transition">Orders</a>
-                        <a href="/contacts" class="hover:text-orange-300 transition">Contacts</a>
-                        <a href="/analytics" class="hover:text-orange-300 transition">Analytics</a>
-                        <a href="/passwords" class="hover:text-orange-300 transition">Password Manager</a>
-                        <a href="/reminders" class="hover:text-orange-300 transition">Reminders</a>
-                        <a href="/calendar" class="hover:text-orange-300 transition">Calendar</a>
-                        <a href="/firecoast" class="text-orange-300">FireCoast Chat</a>
+                    <a href="/dashboard" id="nav-home-link" class="text-lg font-semibold tracking-wide text-white">FireCoast OMS</a>
+                    <div class="hidden md:flex items-center space-x-6 text-sm font-medium text-[#b5bac1]">
+                        <a href="/orders" class="hover:text-white transition">Orders</a>
+                        <a href="/contacts" class="hover:text-white transition">Contacts</a>
+                        <a href="/analytics" class="hover:text-white transition">Analytics</a>
+                        <a href="/passwords" class="hover:text-white transition">Password Manager</a>
+                        <a href="/reminders" class="hover:text-white transition">Reminders</a>
+                        <a href="/calendar" class="hover:text-white transition">Calendar</a>
+                        <a href="/firecoast" class="text-white">FireCoast Chat</a>
                     </div>
                 </div>
                 <div class="flex items-center space-x-3 text-sm font-medium">
-                    <a href="/settings" class="hover:text-orange-300 transition">Settings</a>
-                    <a href="#" id="nav-log-out" class="hover:text-orange-300 transition">Log Out</a>
+                    <a href="/settings" class="text-[#b5bac1] hover:text-white transition">Settings</a>
+                    <a href="#" id="nav-log-out" class="text-[#b5bac1] hover:text-white transition">Log Out</a>
                 </div>
             </div>
         </div>
@@ -67,20 +67,20 @@
         });
     </script>
 
-    <main class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8">
+    <main class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8">
         <header class="space-y-3">
-            <p class="text-sm uppercase tracking-[0.3em] text-slate-500">FireCoast Assistant</p>
-            <h1 class="text-3xl sm:text-4xl font-bold text-slate-800">Direct Messages</h1>
-            <p class="text-slate-600 max-w-2xl">
-                Jot down notes, spin up reminders and calendar events, or ask <span class="font-semibold text-orange-600">@firecoast</span> to surface passwords and run analytics reports without leaving the console.
+            <p class="text-sm uppercase tracking-[0.3em] text-[#949ba4]">FireCoast Assistant</p>
+            <h1 class="text-3xl sm:text-4xl font-bold text-white">Direct Messages</h1>
+            <p class="text-[#b5bac1] max-w-2xl">
+                Keep private notes, queue reminders and events, and chat with <span class="font-semibold text-white">@firecoast</span> just like a personal Discord DM.
             </p>
         </header>
-        <section class="bg-white border border-slate-200 rounded-2xl shadow-sm">
-            <div id="firecoast-chat-root" class="flex h-[640px] flex-col"></div>
+        <section class="rounded-3xl border border-white/10 shadow-xl shadow-black/20 bg-gradient-to-br from-[#2b2d31] via-[#313338] to-[#232428]">
+            <div id="firecoast-chat-root" class="flex h-[720px] flex-col"></div>
         </section>
     </main>
 
-    <script type="text/babel">
+    <script type="text/babel" data-presets="env,react">
         const { useCallback, useEffect, useRef, useState } = React;
 
         const QUICK_TEMPLATES = [
@@ -134,17 +134,19 @@
             if (!metadata || !metadata.action) {
                 return null;
             }
-            const baseClasses = isUser ? 'bg-white/15 text-white' : 'bg-slate-100/80 border border-slate-200 text-slate-700';
-            const titleClasses = isUser ? 'text-white/80' : 'text-slate-500';
+            const baseClasses = isUser
+                ? 'bg-[#5865f2]/30 border border-[#5865f2]/40 text-[#f2f3f5]'
+                : 'bg-[#1e1f22]/90 border border-white/5 text-[#dbdee1]';
+            const titleClasses = isUser ? 'text-[#c7cdfd]' : 'text-[#aeb0b7]';
 
             if (metadata.action === 'calendar_event_created') {
                 const event = metadata.event || {};
                 return (
                     <div className={`mt-3 rounded-xl px-3 py-2 ${baseClasses}`}>
                         <div className={`text-xs font-semibold uppercase ${titleClasses}`}>Calendar event created</div>
-                        <div className={`mt-1 text-sm font-medium ${isUser ? 'text-white' : 'text-slate-800'}`}>{event.title || 'Event'}</div>
-                        <div className={`text-sm ${isUser ? 'text-white/80' : 'text-slate-600'}`}>{formatEventWindow(event)}</div>
-                        <a href="/calendar" className={`mt-2 inline-flex items-center gap-1 text-xs font-medium ${isUser ? 'text-white/80 hover:text-white' : 'text-orange-600 hover:text-orange-500'}`}>Open calendar →</a>
+                        <div className={`mt-1 text-sm font-medium ${isUser ? 'text-white' : 'text-[#f2f3f5]'}`}>{event.title || 'Event'}</div>
+                        <div className={`text-sm ${isUser ? 'text-white/80' : 'text-[#b5bac1]'}`}>{formatEventWindow(event)}</div>
+                        <a href="/calendar" className={`mt-2 inline-flex items-center gap-1 text-xs font-medium ${isUser ? 'text-white/80 hover:text-white' : 'text-[#00a3ff] hover:text-[#66c6ff]'}`}>Open calendar →</a>
                     </div>
                 );
             }
@@ -155,9 +157,9 @@
                 return (
                     <div className={`mt-3 rounded-xl px-3 py-2 ${baseClasses}`}>
                         <div className={`text-xs font-semibold uppercase ${titleClasses}`}>Reminder created</div>
-                        <div className={`mt-1 text-sm font-medium ${isUser ? 'text-white' : 'text-slate-800'}`}>{reminder.title || 'Reminder'}</div>
-                        <div className={`text-sm ${isUser ? 'text-white/80' : 'text-slate-600'}`}>{dueText}</div>
-                        <a href="/reminders" className={`mt-2 inline-flex items-center gap-1 text-xs font-medium ${isUser ? 'text-white/80 hover:text-white' : 'text-orange-600 hover:text-orange-500'}`}>View reminders →</a>
+                        <div className={`mt-1 text-sm font-medium ${isUser ? 'text-white' : 'text-[#f2f3f5]'}`}>{reminder.title || 'Reminder'}</div>
+                        <div className={`text-sm ${isUser ? 'text-white/80' : 'text-[#b5bac1]'}`}>{dueText}</div>
+                        <a href="/reminders" className={`mt-2 inline-flex items-center gap-1 text-xs font-medium ${isUser ? 'text-white/80 hover:text-white' : 'text-[#00a3ff] hover:text-[#66c6ff]'}`}>View reminders →</a>
                     </div>
                 );
             }
@@ -172,17 +174,17 @@
                         <div className={`text-xs font-semibold uppercase ${titleClasses}`}>Saved passwords</div>
                         <div className="mt-2 space-y-1 text-sm">
                             {matches.slice(0, 5).map((entry) => (
-                                <div key={entry.id || `${entry.service}-${entry.username}`} className={isUser ? 'text-white/80' : 'text-slate-700'}>
+                                <div key={entry.id || `${entry.service}-${entry.username}`} className={isUser ? 'text-white/80' : 'text-[#dbdee1]'}>
                                     <span className="font-medium">{entry.service || 'Service'}</span>
-                                    <span className="ml-2 text-xs uppercase tracking-wide align-middle px-2 py-0.5 rounded-full bg-orange-100 text-orange-700">{entry.username || 'no user'}</span>
-                                    <div className={`text-xs mt-1 ${isUser ? 'text-white/80' : 'text-slate-500'}`}>{entry.password ? `Password: ${entry.password}` : 'No password saved'}</div>
+                                    <span className="ml-2 text-xs uppercase tracking-wide align-middle px-2 py-0.5 rounded-full bg-[#3f4147] text-[#f2f3f5]">{entry.username || 'no user'}</span>
+                                    <div className={`text-xs mt-1 ${isUser ? 'text-white/80' : 'text-[#b5bac1]'}`}>{entry.password ? `Password: ${entry.password}` : 'No password saved'}</div>
                                 </div>
                             ))}
                             {matches.length > 5 && (
-                                <div className={`text-xs ${isUser ? 'text-white/70' : 'text-slate-500'}`}>…and {matches.length - 5} more saved credentials.</div>
+                                <div className={`text-xs ${isUser ? 'text-white/70' : 'text-[#aeb0b7]'}`}>…and {matches.length - 5} more saved credentials.</div>
                             )}
                         </div>
-                        <a href="/passwords" className={`mt-2 inline-flex items-center gap-1 text-xs font-medium ${isUser ? 'text-white/80 hover:text-white' : 'text-orange-600 hover:text-orange-500'}`}>Open password vault →</a>
+                        <a href="/passwords" className={`mt-2 inline-flex items-center gap-1 text-xs font-medium ${isUser ? 'text-white/80 hover:text-white' : 'text-[#00a3ff] hover:text-[#66c6ff]'}`}>Open password vault →</a>
                     </div>
                 );
             }
@@ -193,13 +195,13 @@
                 return (
                     <div className={`mt-3 rounded-xl px-3 py-2 ${baseClasses}`}>
                         <div className={`text-xs font-semibold uppercase ${titleClasses}`}>Report generated</div>
-                        <div className={`mt-1 text-sm font-medium ${isUser ? 'text-white' : 'text-slate-800'}`}>{report.name || report.id || 'Analytics report'}</div>
-                        <ul className={`mt-2 space-y-1 text-sm ${isUser ? 'text-white/80' : 'text-slate-700'}`}>
+                        <div className={`mt-1 text-sm font-medium ${isUser ? 'text-white' : 'text-[#f2f3f5]'}`}>{report.name || report.id || 'Analytics report'}</div>
+                        <ul className={`mt-2 space-y-1 text-sm ${isUser ? 'text-white/80' : 'text-[#dbdee1]'}`}>
                             {summary.map((entry) => (
                                 <li key={entry.id || entry.label}>{entry.label || entry.id}: <span className="font-semibold">{entry.display || entry.value}</span></li>
                             ))}
                         </ul>
-                        <a href="/analytics" className={`mt-2 inline-flex items-center gap-1 text-xs font-medium ${isUser ? 'text-white/80 hover:text-white' : 'text-orange-600 hover:text-orange-500'}`}>Open analytics →</a>
+                        <a href="/analytics" className={`mt-2 inline-flex items-center gap-1 text-xs font-medium ${isUser ? 'text-white/80 hover:text-white' : 'text-[#00a3ff] hover:text-[#66c6ff]'}`}>Open analytics →</a>
                     </div>
                 );
             }
@@ -209,7 +211,7 @@
                 return (
                     <div className={`mt-3 rounded-xl px-3 py-2 ${baseClasses}`}>
                         <div className={`text-xs font-semibold uppercase ${titleClasses}`}>Available reports</div>
-                        <ul className={`mt-2 space-y-1 text-sm ${isUser ? 'text-white/80' : 'text-slate-700'}`}>
+                        <ul className={`mt-2 space-y-1 text-sm ${isUser ? 'text-white/80' : 'text-[#dbdee1]'}`}>
                             {reports.map((report) => (
                                 <li key={report.id}><span className="font-medium">{report.id}</span> — {report.name}</li>
                             ))}
@@ -220,9 +222,9 @@
 
             if (metadata.action === 'error') {
                 return (
-                    <div className={`mt-3 rounded-xl px-3 py-2 ${isUser ? 'bg-white/15 text-white' : 'bg-red-50 border border-red-200 text-red-700'}`}>
-                        <div className={`text-xs font-semibold uppercase ${isUser ? 'text-white/80' : 'text-red-600'}`}>Something went wrong</div>
-                        <div className={`text-sm ${isUser ? 'text-white' : 'text-red-700'}`}>{metadata.reason || 'Unable to process the request.'}</div>
+                    <div className={`mt-3 rounded-xl px-3 py-2 ${isUser ? 'bg-[#db4b4b]/20 text-white' : 'bg-[#4e2727] border border-[#f47070]/50 text-[#f47070]'}`}>
+                        <div className={`text-xs font-semibold uppercase ${isUser ? 'text-white/80' : 'text-[#f47070]'}`}>Something went wrong</div>
+                        <div className={`text-sm ${isUser ? 'text-white' : 'text-[#f2f3f5]'}`}>{metadata.reason || 'Unable to process the request.'}</div>
                     </div>
                 );
             }
@@ -232,21 +234,32 @@
 
         const MessageBubble = ({ message }) => {
             const isUser = (message.author || '').toLowerCase() === 'user';
+            const containerClasses = isUser
+                ? 'flex flex-row-reverse items-start gap-3'
+                : 'flex items-start gap-3';
             const bubbleClasses = isUser
-                ? 'bg-orange-500 text-white'
-                : 'bg-white text-slate-800 border border-slate-200';
-            const alignment = isUser ? 'justify-end' : 'justify-start';
+                ? 'bg-[#5865f2]/30 border border-[#5865f2]/40 text-[#f2f3f5]'
+                : 'bg-[#1e1f22] border border-white/5 text-[#dbdee1]';
+            const avatarClasses = isUser
+                ? 'bg-[#5865f2] text-white'
+                : 'bg-[#404249] text-[#f2f3f5]';
             const label = isUser ? 'You' : '@firecoast';
+            const timestamp = formatDateTime(message.created_at, true);
 
             return (
-                <div className={`flex ${alignment}`}>
-                    <div className={`max-w-xl w-full sm:w-auto rounded-2xl px-4 py-3 shadow-sm ${bubbleClasses}`}>
-                        <div className={`text-xs uppercase tracking-wide mb-1 ${isUser ? 'text-white/70' : 'text-slate-500'}`}>{label}</div>
-                        <div className={`whitespace-pre-wrap leading-relaxed ${isUser ? 'text-white' : 'text-slate-800'}`}>
+                <div className={containerClasses}>
+                    <div className={`mt-1 flex h-10 w-10 shrink-0 select-none items-center justify-center rounded-full text-sm font-semibold uppercase ${avatarClasses}`}>
+                        {isUser ? 'Y' : 'F'}
+                    </div>
+                    <div className={`max-w-2xl rounded-2xl px-4 py-3 shadow-md shadow-black/20 ${bubbleClasses}`}>
+                        <div className={`mb-1 flex items-baseline justify-between gap-4 text-xs uppercase tracking-wide ${isUser ? 'text-[#c7cdfd]' : 'text-[#aeb0b7]'}`}>
+                            <span>{label}</span>
+                            <span className="text-[0.65rem] normal-case">{timestamp}</span>
+                        </div>
+                        <div className="whitespace-pre-wrap leading-relaxed">
                             {message.content || ''}
                         </div>
                         <MetadataPanel metadata={message.metadata} isUser={isUser} />
-                        <div className={`mt-2 text-[0.65rem] ${isUser ? 'text-white/70' : 'text-slate-400'} text-right`}>{formatDateTime(message.created_at, true)}</div>
                     </div>
                 </div>
             );
@@ -257,9 +270,14 @@
             const [input, setInput] = useState('');
             const [isSending, setIsSending] = useState(false);
             const [error, setError] = useState(null);
+            const [isLoading, setIsLoading] = useState(true);
             const scrollRef = useRef(null);
 
-            const fetchMessages = useCallback(async () => {
+            const fetchMessages = useCallback(async (options = {}) => {
+                const silent = Boolean(options.silent);
+                if (!silent) {
+                    setIsLoading(true);
+                }
                 try {
                     const response = await fetch('/api/firecoast/chat?limit=200');
                     if (!response.ok) {
@@ -270,12 +288,24 @@
                     setError(null);
                 } catch (err) {
                     console.error(err);
-                    setError('Unable to load your messages.');
+                    if (!silent) {
+                        setError('Unable to load your messages.');
+                    }
+                }
+                if (!silent) {
+                    setIsLoading(false);
                 }
             }, []);
 
             useEffect(() => {
                 fetchMessages();
+            }, [fetchMessages]);
+
+            useEffect(() => {
+                const interval = setInterval(() => {
+                    fetchMessages({ silent: true });
+                }, 25000);
+                return () => clearInterval(interval);
             }, [fetchMessages]);
 
             useEffect(() => {
@@ -323,35 +353,44 @@
 
             return (
                 <div className="flex h-full flex-col">
-                    <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
-                        <div>
-                            <h2 className="text-lg font-semibold text-slate-800">Today</h2>
-                            <p className="text-sm text-slate-500">Conversations are stored locally in your FireCoast workspace.</p>
+                    <div className="flex items-center justify-between border-b border-white/10 px-8 py-5">
+                        <div className="space-y-1">
+                            <div className="flex items-center gap-2 text-white">
+                                <span className="rounded-full bg-[#5865f2] px-3 py-1 text-xs uppercase tracking-wide">@firecoast</span>
+                                <span className="text-xs font-medium text-[#b5bac1]">always on</span>
+                            </div>
+                            <h2 className="text-2xl font-semibold text-white">Personal Console</h2>
+                            <p className="text-sm text-[#b5bac1]">Messages stay private to you. Ask for passwords, spin up reminders, or jot quick thoughts.</p>
                         </div>
                         <button
                             type="button"
                             onClick={fetchMessages}
-                            className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-100 transition"
+                            className="inline-flex items-center gap-2 rounded-xl border border-white/10 px-4 py-2 text-sm font-medium text-[#b5bac1] hover:border-white/30 hover:text-white transition"
                         >
                             <span>Refresh</span>
-                            <span className="text-slate-400">↺</span>
+                            <span className="text-lg">↺</span>
                         </button>
                     </div>
-                    <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-6 bg-slate-50/60 space-y-4">
-                        {messages.length === 0 ? (
-                            <div className="text-center text-slate-500 text-sm">Start a conversation with .reminder, .event, or mention @firecoast.</div>
+                    <div ref={scrollRef} className="flex-1 overflow-y-auto px-8 py-6 space-y-4 bg-[#313338]/40 backdrop-blur">
+                        {isLoading ? (
+                            <div className="flex h-full items-center justify-center text-sm text-[#b5bac1]">Loading your conversation…</div>
+                        ) : messages.length === 0 ? (
+                            <div className="flex h-full flex-col items-center justify-center gap-4 text-center text-sm text-[#b5bac1]">
+                                <div className="rounded-full bg-[#404249] px-4 py-2 text-xs uppercase tracking-[0.3em] text-[#f2f3f5]">Start chatting</div>
+                                <p>Send yourself notes and tasks. Try <code className="rounded bg-[#1e1f22] px-2 py-1 text-xs">.reminder Send invoices | tomorrow 9am</code> to see it in action.</p>
+                            </div>
                         ) : (
                             messages.map((message) => <MessageBubble key={message.id} message={message} />)
                         )}
                     </div>
-                    <div className="border-t border-slate-200 bg-white px-6 py-4 space-y-3">
-                        {error && <p className="text-sm text-red-600">{error}</p>}
+                    <div className="space-y-4 border-t border-white/10 bg-[#2b2d31] px-8 py-6">
+                        {error && <p className="text-sm text-[#f47070]">{error}</p>}
                         <div className="flex flex-wrap gap-2">
                             {QUICK_TEMPLATES.map((template) => (
                                 <button
                                     key={template.label}
                                     type="button"
-                                    className="px-3 py-1.5 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 transition"
+                                    className="rounded-full border border-white/10 px-4 py-1.5 text-sm text-[#b5bac1] transition hover:border-[#5865f2] hover:text-white"
                                     onClick={() => setInput(template.value)}
                                 >
                                     {template.label}
@@ -360,7 +399,7 @@
                         </div>
                         <div className="flex items-end gap-3">
                             <textarea
-                                className="flex-1 bg-slate-100 rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-700 outline-none focus:border-orange-400 focus:ring-1 focus:ring-orange-300"
+                                className="flex-1 resize-none rounded-2xl border border-white/10 bg-[#1e1f22] px-4 py-3 text-sm text-[#f2f3f5] outline-none transition focus:border-[#5865f2] focus:ring-1 focus:ring-[#5865f2]/60"
                                 rows={3}
                                 value={input}
                                 onChange={(event) => setInput(event.target.value)}
@@ -371,7 +410,7 @@
                                 type="button"
                                 onClick={sendMessage}
                                 disabled={!canSend}
-                                className="inline-flex items-center gap-2 bg-orange-500 text-white font-medium px-4 py-2 rounded-lg shadow-sm hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                                className="inline-flex items-center gap-2 rounded-2xl bg-[#5865f2] px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-[#000]/30 transition hover:bg-[#4752c4] disabled:cursor-not-allowed disabled:opacity-40"
                             >
                                 <span>Send</span>
                                 <span className="text-lg">↩</span>
