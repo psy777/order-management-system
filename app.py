@@ -2473,6 +2473,186 @@ def _serialize_calendar_event(data: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+def _normalize_timezone_value(value: Any, default: str = 'UTC') -> str:
+    text = (value or '').strip()
+    if not text:
+        return default
+    try:
+        pytz.timezone(text)
+    except Exception:
+        return default
+    return text
+
+
+def _sanitize_reminder_handle_text(raw: str) -> str:
+    if not raw:
+        return ""
+    normalised = CALENDAR_HANDLE_SANITIZE_RE.sub('-', raw.lower()).strip('-')
+    return normalised[:64]
+
+
+def _suggest_reminder_handle(title: str, due_dt: Optional[datetime]) -> str:
+    base = _sanitize_reminder_handle_text(title)
+    date_fragment = due_dt.strftime('%Y%m%d') if due_dt else ''
+    if base and date_fragment:
+        candidate = f"{base[:40]}-{date_fragment}"
+    elif base:
+        candidate = base[:48]
+    elif date_fragment:
+        candidate = f"reminder-{date_fragment}"
+    else:
+        candidate = f"reminder-{uuid.uuid4().hex[:8]}"
+    return candidate or f"reminder-{uuid.uuid4().hex[:8]}"
+
+
+def _ensure_unique_reminder_handle(
+    conn: sqlite3.Connection,
+    preferred_handle: str,
+    *,
+    existing_id: Optional[str] = None,
+) -> str:
+    base = _sanitize_reminder_handle_text(preferred_handle)
+    if not base:
+        base = f"reminder-{uuid.uuid4().hex[:8]}"
+    candidate = base
+    suffix = 2
+    while True:
+        row = conn.execute(
+            "SELECT entity_type, entity_id FROM record_handles WHERE handle = ?",
+            (candidate,),
+        ).fetchone()
+        if not row:
+            return candidate
+        entity_type = row["entity_type"] if isinstance(row, sqlite3.Row) else row[0]
+        entity_id = row["entity_id"] if isinstance(row, sqlite3.Row) else row[1]
+        if entity_type == 'reminder' and existing_id is not None and str(entity_id) == str(existing_id):
+            return candidate
+        candidate = f"{base[:48]}-{suffix}"
+        suffix += 1
+
+
+def _coerce_optional_reminder_datetime(
+    value: Any,
+    timezone_name: str,
+    field_name: str,
+) -> Optional[datetime]:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = dateutil_parse(str(value))
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"Invalid datetime for '{field_name}': {value}") from exc
+    if parsed.tzinfo is None:
+        try:
+            tz = pytz.timezone(timezone_name)
+            parsed = tz.localize(parsed)
+        except Exception:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _normalize_reminder_payload(
+    conn: sqlite3.Connection,
+    payload: Dict[str, Any],
+    *,
+    existing_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("Payload must be an object")
+    title = (payload.get('title') or '').strip()
+    if not title:
+        raise ValueError("Title is required")
+    timezone_value = _normalize_timezone_value(payload.get('timezone'))
+    due_source = payload.get('due_at')
+    due_dt = _coerce_optional_reminder_datetime(due_source, timezone_value, 'due_at')
+    notes_value = payload.get('notes')
+    notes_text = '' if notes_value is None else str(notes_value)
+    completed = bool(payload.get('completed'))
+    due_has_time_flag = payload.get('due_has_time')
+    due_has_time = bool(due_has_time_flag) if due_dt else False
+    if due_dt and due_has_time_flag is None:
+        try:
+            tz = pytz.timezone(timezone_value)
+            local_dt = due_dt.astimezone(tz)
+            if any((local_dt.hour, local_dt.minute, local_dt.second, local_dt.microsecond)):
+                due_has_time = True
+        except Exception:
+            if isinstance(due_source, str) and 'T' in due_source:
+                time_fragment = due_source.split('T', 1)[1]
+                if not time_fragment.startswith('00:00'):
+                    due_has_time = True
+    completed_at_value = payload.get('completed_at')
+    completed_dt = None
+    if completed:
+        completed_dt = _coerce_optional_reminder_datetime(
+            completed_at_value, timezone_value, 'completed_at'
+        )
+        if completed_dt is None:
+            completed_dt = datetime.now(timezone.utc)
+    normalized_completed_at = completed_dt.isoformat() if completed_dt else None
+    incoming_handle = (payload.get('handle') or '').strip()
+    candidate_handle = incoming_handle or _suggest_reminder_handle(title, due_dt)
+    normalized_handle = _ensure_unique_reminder_handle(
+        conn,
+        candidate_handle,
+        existing_id=existing_id,
+    )
+    return {
+        'title': title,
+        'handle': normalized_handle,
+        'notes': notes_text,
+        'due_at': due_dt.isoformat() if due_dt else None,
+        'due_has_time': bool(due_has_time),
+        'timezone': timezone_value,
+        'completed': completed,
+        'completed_at': normalized_completed_at,
+    }
+
+
+def _reminder_overlaps_range(
+    reminder_payload: Dict[str, Any],
+    start_dt: Optional[datetime],
+    end_dt: Optional[datetime],
+    *,
+    include_without_due: bool = True,
+) -> bool:
+    due_value = reminder_payload.get('due_at')
+    if not due_value:
+        return include_without_due
+    try:
+        due_dt = dateutil_parse(due_value)
+    except (TypeError, ValueError):
+        return False
+    if due_dt.tzinfo is None:
+        due_dt = due_dt.replace(tzinfo=timezone.utc)
+    else:
+        due_dt = due_dt.astimezone(timezone.utc)
+    if start_dt and due_dt < start_dt:
+        return False
+    if end_dt and due_dt > end_dt:
+        return False
+    return True
+
+
+def _serialize_reminder(data: Dict[str, Any]) -> Dict[str, Any]:
+    payload = dict(data)
+    payload['notes'] = payload.get('notes') or ''
+    payload['due_at'] = payload.get('due_at') or None
+    payload['due_has_time'] = bool(payload.get('due_has_time')) and bool(payload['due_at'])
+    payload['timezone'] = (payload.get('timezone') or 'UTC').strip() or 'UTC'
+    payload['completed'] = bool(payload.get('completed'))
+    payload['completed_at'] = payload.get('completed_at') or None
+    payload['handle'] = (payload.get('handle') or '').strip()
+    return payload
+
+
+def _reminder_sort_key(reminder: Dict[str, Any]):
+    due_value = reminder.get('due_at') or ''
+    has_no_due = 1 if not reminder.get('due_at') else 0
+    title_value = (reminder.get('title') or '').lower()
+    return (has_no_due, due_value, title_value)
+
+
 @app.route('/api/records/handles', methods=['GET'])
 def api_record_handles():
     service = get_record_service()
@@ -2634,6 +2814,94 @@ def api_calendar_event_detail(event_id):
         updated = service.update_record(conn, 'calendar_event', event_id, event_payload, actor=actor)
         conn.commit()
         return jsonify({'event': _serialize_calendar_event(updated['data'])})
+    except RecordValidationError as err:
+        conn.rollback()
+        return jsonify({'message': 'Validation failed', 'errors': err.errors}), 400
+    except ValueError as exc:
+        conn.rollback()
+        return jsonify({'message': str(exc)}), 400
+    finally:
+        conn.close()
+
+
+def _parse_truthy_param(value: Optional[str]) -> bool:
+    if value is None:
+        return False
+    return str(value).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+@app.route('/api/reminders', methods=['GET', 'POST'])
+def api_reminders():
+    service = get_record_service()
+    conn = get_db_connection()
+    try:
+        if request.method == 'GET':
+            status_param = (request.args.get('status') or 'active').strip().lower()
+            if status_param not in {'active', 'completed', 'all'}:
+                status_param = 'active'
+            start_param = request.args.get('start') or request.args.get('range_start')
+            end_param = request.args.get('end') or request.args.get('range_end')
+            range_start = _parse_calendar_range_boundary(start_param) if start_param else None
+            range_end = _parse_calendar_range_boundary(end_param, end=True) if end_param else None
+            scheduled_only = _parse_truthy_param(request.args.get('scheduled_only') or request.args.get('scheduledOnly'))
+            records = service.list_records(conn, 'reminder')
+            reminders: List[Dict[str, Any]] = []
+            for record in records:
+                serialized = _serialize_reminder(record)
+                if status_param == 'active' and serialized['completed']:
+                    continue
+                if status_param == 'completed' and not serialized['completed']:
+                    continue
+                if not _reminder_overlaps_range(
+                    serialized,
+                    range_start,
+                    range_end,
+                    include_without_due=not scheduled_only,
+                ):
+                    continue
+                reminders.append(serialized)
+            reminders.sort(key=_reminder_sort_key)
+            return jsonify({'reminders': reminders})
+        payload = request.get_json(force=True, silent=True) or {}
+        actor = payload.pop('actor', None)
+        reminder_payload = _normalize_reminder_payload(conn, payload)
+        created = service.create_record(conn, 'reminder', reminder_payload, actor=actor)
+        conn.commit()
+        return jsonify({'reminder': _serialize_reminder(created['data'])}), 201
+    except RecordValidationError as err:
+        conn.rollback()
+        return jsonify({'message': 'Validation failed', 'errors': err.errors}), 400
+    except ValueError as exc:
+        conn.rollback()
+        return jsonify({'message': str(exc)}), 400
+    finally:
+        conn.close()
+
+
+@app.route('/api/reminders/<string:reminder_id>', methods=['GET', 'PUT', 'DELETE'])
+def api_reminder_detail(reminder_id):
+    service = get_record_service()
+    conn = get_db_connection()
+    try:
+        if request.method == 'GET':
+            record = service.get_record(conn, 'reminder', reminder_id)
+            if not record:
+                return jsonify({'message': 'Reminder not found'}), 404
+            return jsonify({'reminder': _serialize_reminder(record)})
+        if request.method == 'DELETE':
+            try:
+                service.delete_record(conn, 'reminder', reminder_id)
+            except KeyError:
+                conn.rollback()
+                return jsonify({'message': 'Reminder not found'}), 404
+            conn.commit()
+            return jsonify({'message': 'Reminder deleted'})
+        payload = request.get_json(force=True, silent=True) or {}
+        actor = payload.pop('actor', None)
+        reminder_payload = _normalize_reminder_payload(conn, payload, existing_id=reminder_id)
+        updated = service.update_record(conn, 'reminder', reminder_id, reminder_payload, actor=actor)
+        conn.commit()
+        return jsonify({'reminder': _serialize_reminder(updated['data'])})
     except RecordValidationError as err:
         conn.rollback()
         return jsonify({'message': 'Validation failed', 'errors': err.errors}), 400
@@ -3393,6 +3661,11 @@ def orders_page():
 @app.route('/passwords')
 def passwords_page():
     return render_template('passwords.html')
+
+
+@app.route('/reminders')
+def reminders_page():
+    return render_template('reminders.html')
 
 
 @app.route('/calendar')

@@ -228,6 +228,7 @@ class RecordService:
         self._register_builtin_contact_schema()
         self._ensure_default_note_schema(conn)
         self._ensure_calendar_event_schema(conn)
+        self._ensure_reminder_schema(conn)
 
     def _load_registered_schemas(self, conn: sqlite3.Connection) -> None:
         cursor = conn.execute("SELECT entity_type, schema_json FROM record_schemas")
@@ -302,6 +303,28 @@ class RecordService:
             storage="records",
         )
         self.register_schema(conn, calendar_schema)
+
+    def _ensure_reminder_schema(self, conn: sqlite3.Connection) -> None:
+        if self.registry.has("reminder"):
+            return
+        reminder_schema = RecordSchema(
+            entity_type="reminder",
+            fields={
+                "title": FieldDefinition("title", field_type="string", required=True),
+                "handle": FieldDefinition("handle", field_type="string", required=True),
+                "notes": FieldDefinition("notes", field_type="text", mention=True),
+                "due_at": FieldDefinition("due_at", field_type="string"),
+                "due_has_time": FieldDefinition("due_has_time", field_type="boolean", default=False),
+                "timezone": FieldDefinition("timezone", field_type="string", default="UTC"),
+                "completed": FieldDefinition("completed", field_type="boolean", default=False),
+                "completed_at": FieldDefinition("completed_at", field_type="string"),
+            },
+            handle_field="handle",
+            display_field="title",
+            description="Operational reminders with optional due dates and mention-enabled notes.",
+            storage="records",
+        )
+        self.register_schema(conn, reminder_schema)
 
     def register_schema(self, conn: sqlite3.Connection, schema_payload: Any) -> RecordSchema:
         schema = schema_payload if isinstance(schema_payload, RecordSchema) else RecordSchema.from_dict(schema_payload)

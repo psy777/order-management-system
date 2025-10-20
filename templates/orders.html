@@ -25,6 +25,8 @@
                         <a href="/orders" id="nav-orders-link" class="text-orange-300">Orders</a>
                         <a href="/contacts" class="hover:text-orange-300 transition">Contacts</a>
                         <a href="/analytics" class="hover:text-orange-300 transition">Analytics</a>
+                        <a href="/reminders" class="hover:text-orange-300 transition">Reminders</a>
+                        <a href="/calendar" class="hover:text-orange-300 transition">Calendar</a>
                         <a href="/passwords" class="hover:text-orange-300 transition">Password Manager</a>
                     </div>
                 </div>
@@ -534,7 +536,7 @@ const OrderLogsSection = ({ orderId, canEdit, allContacts = [], onContactsChange
                                 placeholder="Share updates and mention teammates or clients with @handle"
                                 value={details}
                                 onChange={setDetails}
-                                entityTypes={['contact', 'order', 'note']}
+                                entityTypes={['contact', 'order', 'note', 'calendar_event', 'reminder']}
                                 rows={4}
                             />
                             <div>
@@ -590,7 +592,7 @@ const OrderLogsSection = ({ orderId, canEdit, allContacts = [], onContactsChange
                                             {MentionText ? (
                                                 <MentionText
                                                     text={log.details || log.note || ''}
-                                                    entityTypes={['contact', 'order', 'note']}
+                                                    entityTypes={['contact', 'order', 'note', 'calendar_event', 'reminder']}
                                                     className="block whitespace-pre-wrap"
                                                 />
                                             ) : (
@@ -3350,7 +3352,7 @@ const unpackPackage = (id, pkgCode) => {
                             onChange={value => setFormData(p => ({...p, notes: value}))}
                             rows={4}
                             disabled={!canEdit}
-                            entityTypes={['contact', 'order', 'note']}
+                            entityTypes={['contact', 'order', 'note', 'calendar_event', 'reminder']}
                             placeholder="Capture order notes and use @handle to mention key contacts"
                             label=""
                         />

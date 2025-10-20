@@ -141,6 +141,62 @@
             return normalizedEnd >= dayStart && start <= dayEnd;
         };
 
+        const parseReminderDate = (value) => {
+            if (!value) return null;
+            const date = new Date(value);
+            return Number.isNaN(date.getTime()) ? null : date;
+        };
+
+        const reminderOccursOnDay = (reminder, targetDate) => {
+            const due = parseReminderDate(reminder.due_at);
+            if (!due) return false;
+            const dayStart = startOfDay(targetDate);
+            const dayEnd = endOfDay(targetDate);
+            return due >= dayStart && due <= dayEnd;
+        };
+
+        const sortRemindersByDue = (a, b) => {
+            const aDue = parseReminderDate(a.due_at);
+            const bDue = parseReminderDate(b.due_at);
+            if (aDue && bDue && aDue.getTime() !== bDue.getTime()) {
+                return aDue.getTime() - bDue.getTime();
+            }
+            if (aDue && !bDue) return -1;
+            if (!aDue && bDue) return 1;
+            return (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' });
+        };
+
+        const formatReminderDueSummary = (reminder) => {
+            if (!reminder.due_at) {
+                return 'No due date';
+            }
+            try {
+                const tz = reminder.timezone || defaultTimeZone;
+                const date = parseReminderDate(reminder.due_at);
+                if (!date) {
+                    return 'Due soon';
+                }
+                const dateFormatter = new Intl.DateTimeFormat('en-US', {
+                    timeZone: tz,
+                    month: 'short',
+                    day: 'numeric',
+                    year: 'numeric',
+                });
+                const datePart = dateFormatter.format(date);
+                if (!reminder.due_has_time) {
+                    return `Due ${datePart}`;
+                }
+                const timeFormatter = new Intl.DateTimeFormat('en-US', {
+                    timeZone: tz,
+                    hour: 'numeric',
+                    minute: '2-digit',
+                });
+                return `Due ${datePart} · ${timeFormatter.format(date)}`;
+            } catch (error) {
+                return 'Due soon';
+            }
+        };
+
         const sanitizeHandle = (text) => {
             if (!text) return '';
             return text.toLowerCase().replace(/[^a-z0-9.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
@@ -513,7 +569,7 @@
                                     <MentionTextarea
                                         value={formState.notes}
                                         onChange={(value) => updateField('notes', value)}
-                                        entityTypes={['contact', 'order', 'note', 'calendar_event']}
+                                        entityTypes={['contact', 'order', 'note', 'calendar_event', 'reminder']}
                                         rows={4}
                                         disabled={isSaving}
                                         placeholder="Mention teammates and linked notes with @handle"
@@ -557,6 +613,7 @@
             const [activeMonth, setActiveMonth] = useState(() => startOfMonth(new Date()));
             const [selectedDate, setSelectedDate] = useState(() => new Date());
             const [events, setEvents] = useState([]);
+            const [reminders, setReminders] = useState([]);
             const [isLoading, setIsLoading] = useState(false);
             const [loadError, setLoadError] = useState('');
             const [isModalOpen, setIsModalOpen] = useState(false);
@@ -565,6 +622,7 @@
             const [initialModalDate, setInitialModalDate] = useState(null);
             const [monthPickerOpen, setMonthPickerOpen] = useState(false);
             const [pickerYear, setPickerYear] = useState(() => activeMonth.getFullYear());
+            const [updatingReminderId, setUpdatingReminderId] = useState(null);
             const pickerMenuRef = useRef(null);
             const pickerToggleRef = useRef(null);
 
@@ -584,21 +642,37 @@
                 const params = new URLSearchParams();
                 params.set('start', startOfDay(firstVisible).toISOString());
                 params.set('end', endOfDay(lastVisible).toISOString());
+                const reminderParams = new URLSearchParams(params);
+                reminderParams.set('status', 'active');
+                reminderParams.set('scheduled_only', '1');
                 setIsLoading(true);
                 setLoadError('');
                 try {
-                    const response = await fetch(`/api/calendar/events?${params.toString()}`);
-                    if (!response.ok) {
-                        const result = await response.json().catch(() => ({}));
+                    const [eventsResponse, remindersResponse] = await Promise.all([
+                        fetch(`/api/calendar/events?${params.toString()}`),
+                        fetch(`/api/reminders?${reminderParams.toString()}`),
+                    ]);
+                    if (!eventsResponse.ok) {
+                        const result = await eventsResponse.json().catch(() => ({}));
                         throw new Error(result.message || 'Failed to load events');
                     }
-                    const result = await response.json();
-                    const records = Array.isArray(result.events) ? result.events.slice() : [];
-                    records.sort(sortEventsByStart);
-                    setEvents(records);
+                    if (!remindersResponse.ok) {
+                        const result = await remindersResponse.json().catch(() => ({}));
+                        throw new Error(result.message || 'Failed to load reminders');
+                    }
+                    const eventsResult = await eventsResponse.json();
+                    const remindersResult = await remindersResponse.json();
+                    const eventRecords = Array.isArray(eventsResult.events) ? eventsResult.events.slice() : [];
+                    eventRecords.sort(sortEventsByStart);
+                    setEvents(eventRecords);
+                    const reminderRecords = Array.isArray(remindersResult.reminders) ? remindersResult.reminders.slice() : [];
+                    reminderRecords.sort(sortRemindersByDue);
+                    setReminders(reminderRecords);
                 } catch (error) {
-                    console.error('Failed to load calendar events', error);
-                    setLoadError(error.message || 'Failed to load events');
+                    console.error('Failed to load calendar data', error);
+                    setLoadError(error.message || 'Failed to load calendar data');
+                    setEvents([]);
+                    setReminders([]);
                 } finally {
                     setIsLoading(false);
                 }
@@ -654,12 +728,54 @@
                 return map;
             }, [events]);
 
+            const remindersByDate = useMemo(() => {
+                const map = new Map();
+                reminders.forEach((reminder) => {
+                    const due = parseReminderDate(reminder.due_at);
+                    if (!due) {
+                        return;
+                    }
+                    const key = formatDateKey(due);
+                    const existing = map.get(key) || [];
+                    existing.push(reminder);
+                    existing.sort(sortRemindersByDue);
+                    map.set(key, existing);
+                });
+                return map;
+            }, [reminders]);
+
             const selectedDayEvents = useMemo(() => {
                 return events.filter((event) => occursOnDay(event, selectedDate)).sort(sortEventsByStart);
             }, [events, selectedDate]);
 
+            const selectedDayReminders = useMemo(() => {
+                return reminders
+                    .filter((reminder) => reminderOccursOnDay(reminder, selectedDate))
+                    .sort(sortRemindersByDue);
+            }, [reminders, selectedDate]);
+
             const dayRangeLabel = useMemo(() => {
                 if (!selectedDayEvents.length) {
+                    if (selectedDayReminders.length) {
+                        if (selectedDayReminders.every((reminder) => !reminder.due_has_time)) {
+                            return 'Reminders due';
+                        }
+                        const firstDue = parseReminderDate(selectedDayReminders[0].due_at);
+                        const lastDue = parseReminderDate(selectedDayReminders[selectedDayReminders.length - 1].due_at);
+                        if (!firstDue) {
+                            return 'Reminders due';
+                        }
+                        const formatter = new Intl.DateTimeFormat('en-US', {
+                            timeZone: defaultTimeZone,
+                            hour: 'numeric',
+                            minute: '2-digit',
+                        });
+                        if (!lastDue || !selectedDayReminders[selectedDayReminders.length - 1].due_has_time) {
+                            return formatter.format(firstDue);
+                        }
+                        const endDue = lastDue && lastDue > firstDue ? lastDue : firstDue;
+                        return `${formatter.format(firstDue)} – ${formatter.format(endDue)}`;
+                    }
                     return 'All day';
                 }
                 if (selectedDayEvents.some((event) => event.all_day)) {
@@ -677,11 +793,23 @@
                 });
                 const latestResolved = latest && latest > earliest ? latest : earliest;
                 return `${formatter.format(earliest)} – ${formatter.format(latestResolved)}`;
-            }, [selectedDayEvents]);
+            }, [selectedDayEvents, selectedDayReminders]);
 
-            const dayCountLabel = selectedDayEvents.length
-                ? `${selectedDayEvents.length} scheduled ${selectedDayEvents.length === 1 ? 'item' : 'items'}`
-                : '';
+            const dayCountLabel = (() => {
+                const eventCount = selectedDayEvents.length;
+                const reminderCount = selectedDayReminders.length;
+                if (!eventCount && !reminderCount) {
+                    return '';
+                }
+                const parts = [];
+                if (eventCount) {
+                    parts.push(`${eventCount} scheduled ${eventCount === 1 ? 'item' : 'items'}`);
+                }
+                if (reminderCount) {
+                    parts.push(`${reminderCount} reminder${reminderCount === 1 ? '' : 's'}`);
+                }
+                return parts.join(' · ');
+            })();
 
             const toggleMonthPicker = (value) => {
                 setMonthPickerOpen((prev) => typeof value === 'boolean' ? value : !prev);
@@ -759,10 +887,34 @@
                 }
             };
 
+            const handleToggleReminderCompletion = async (reminder) => {
+                const nextCompleted = !reminder.completed;
+                setUpdatingReminderId(reminder.id);
+                try {
+                    const response = await fetch(`/api/reminders/${reminder.id}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ completed: nextCompleted }),
+                    });
+                    if (!response.ok) {
+                        const result = await response.json().catch(() => ({}));
+                        throw new Error(result.message || 'Failed to update reminder');
+                    }
+                    await fetchEvents(activeMonth);
+                } catch (error) {
+                    console.error('Failed to update reminder', error);
+                    alert(error.message || 'Failed to update reminder.');
+                } finally {
+                    setUpdatingReminderId(null);
+                }
+            };
+
             const today = useMemo(() => new Date(), []);
             const monthDates = useMemo(() => {
                 return Array.from({ length: 42 }, (_, index) => addDays(firstVisibleDate, index));
             }, [firstVisibleDate]);
+
+            const hasDayItems = selectedDayEvents.length > 0 || selectedDayReminders.length > 0;
 
             return (
                 <div className="space-y-10">
@@ -784,6 +936,12 @@
                             >
                                 Today
                             </button>
+                            <a
+                                href="/reminders"
+                                className="rounded-lg border border-indigo-200 px-4 py-2 text-sm font-medium text-indigo-600 transition hover:bg-indigo-50"
+                            >
+                                Reminders App
+                            </a>
                             <div className="relative">
                                 <button
                                     type="button"
@@ -886,6 +1044,7 @@
                                     {monthDates.map((date) => {
                                         const key = formatDateKey(date);
                                         const dayEvents = eventsByDate.get(key) || [];
+                                        const dayReminders = remindersByDate.get(key) || [];
                                         const isCurrentMonth = date.getMonth() === activeMonth.getMonth();
                                         const isTodayDate = isSameDay(date, today);
                                         const isSelected = isSameDay(date, selectedDate);
@@ -920,6 +1079,17 @@
                                                     {dayEvents.length > 3 && (
                                                         <span className="text-[10px] font-medium text-slate-400">+{dayEvents.length - 3} more</span>
                                                     )}
+                                                    {dayReminders.slice(0, 2).map((reminder, index) => (
+                                                        <span
+                                                            key={reminder.id || reminder.handle || `reminder-${key}-${index}`}
+                                                            className="block truncate rounded-md bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700"
+                                                        >
+                                                            {reminder.title || 'Reminder'}
+                                                        </span>
+                                                    ))}
+                                                    {dayReminders.length > 2 && (
+                                                        <span className="text-[10px] font-medium text-indigo-500">+{dayReminders.length - 2} reminders</span>
+                                                    )}
                                                 </div>
                                             </button>
                                         );
@@ -927,7 +1097,7 @@
                                 </div>
                                 {isLoading && (
                                     <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-                                        Loading events…
+                                        Loading schedule…
                                     </div>
                                 )}
                                 {loadError && (
@@ -951,55 +1121,102 @@
                                 </div>
                             </div>
                             <div className="day-scroller mt-6 flex-1 space-y-4">
-                                {selectedDayEvents.length === 0 ? (
+                                {hasDayItems ? (
+                                    <>
+                                        {selectedDayEvents.map((event) => (
+                                            <div key={event.id} className="rounded-2xl border border-orange-100 bg-gradient-to-br from-orange-50 to-white p-5 shadow-sm">
+                                                <div className="flex items-start justify-between gap-4">
+                                                    <div>
+                                                        <p className="text-lg font-semibold text-slate-800">{event.title}</p>
+                                                        <p className="text-sm font-medium text-orange-600">{formatEventTimeRange(event)}</p>
+                                                        {event.location && (
+                                                            <p className="mt-1 text-sm text-slate-500">{event.location}</p>
+                                                        )}
+                                                    </div>
+                                                    <div className="flex gap-2">
+                                                        <button
+                                                            type="button"
+                                                            className="rounded-lg border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-100"
+                                                            onClick={() => openEditModal(event)}
+                                                        >
+                                                            Edit
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            className="rounded-lg border border-red-200 px-3 py-1 text-xs font-semibold text-red-600 transition hover:bg-red-50"
+                                                            onClick={() => handleDeleteEvent(event)}
+                                                        >
+                                                            Delete
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                <div className="mt-4 text-sm text-slate-600">
+                                                    {MentionText ? (
+                                                        <MentionText
+                                                            text={event.notes || ''}
+                                                            entityTypes={['contact', 'order', 'note', 'calendar_event', 'reminder']}
+                                                            className="space-y-2"
+                                                        />
+                                                    ) : (
+                                                        <p className="whitespace-pre-wrap text-sm text-slate-600">{event.notes || ''}</p>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        ))}
+                                        {selectedDayReminders.map((reminder) => (
+                                            <div key={reminder.id || reminder.handle} className="rounded-2xl border border-indigo-100 bg-gradient-to-br from-indigo-50 to-white p-5 shadow-sm">
+                                                <div className="flex items-start justify-between gap-4">
+                                                    <div>
+                                                        <div className="flex items-center gap-3">
+                                                            <p className="text-lg font-semibold text-slate-800">{reminder.title || 'Reminder'}</p>
+                                                            {reminder.completed && (
+                                                                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">Completed</span>
+                                                            )}
+                                                        </div>
+                                                        <p className="text-sm font-medium text-indigo-600">{formatReminderDueSummary(reminder)}</p>
+                                                        {reminder.handle && (
+                                                            <p className="text-xs uppercase tracking-wide text-slate-400">@{reminder.handle}</p>
+                                                        )}
+                                                    </div>
+                                                    <div className="flex gap-2">
+                                                        <button
+                                                            type="button"
+                                                            className="rounded-lg border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
+                                                            onClick={() => handleToggleReminderCompletion(reminder)}
+                                                            disabled={updatingReminderId === reminder.id}
+                                                        >
+                                                            {reminder.completed ? 'Mark active' : 'Complete'}
+                                                        </button>
+                                                        <a
+                                                            href="/reminders"
+                                                            className="rounded-lg border border-indigo-200 px-3 py-1 text-xs font-semibold text-indigo-600 transition hover:bg-indigo-50"
+                                                        >
+                                                            Reminders
+                                                        </a>
+                                                    </div>
+                                                </div>
+                                                <div className="mt-4 text-sm text-slate-600">
+                                                    {MentionText ? (
+                                                        <MentionText
+                                                            text={reminder.notes || ''}
+                                                            entityTypes={['contact', 'order', 'note', 'calendar_event', 'reminder']}
+                                                            className="space-y-2"
+                                                        />
+                                                    ) : (
+                                                        <p className="whitespace-pre-wrap text-sm text-slate-600">{reminder.notes || 'No notes added.'}</p>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </>
+                                ) : (
                                     <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 py-16 text-center text-slate-500">
                                         <svg className="mb-4 h-12 w-12 text-slate-400" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
                                             <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10m-8 4h6M5 21h14a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2z" />
                                         </svg>
-                                        <p className="text-sm font-medium">There are no events</p>
-                                        <p className="mt-1 text-xs text-slate-400">Add a hold, production review, or handoff to populate this day.</p>
+                                        <p className="text-sm font-medium">There are no scheduled items</p>
+                                        <p className="mt-1 text-xs text-slate-400">Add an event or reminder to populate this day.</p>
                                     </div>
-                                ) : (
-                                    selectedDayEvents.map((event) => (
-                                        <div key={event.id} className="rounded-2xl border border-orange-100 bg-gradient-to-br from-orange-50 to-white p-5 shadow-sm">
-                                            <div className="flex items-start justify-between gap-4">
-                                                <div>
-                                                    <p className="text-lg font-semibold text-slate-800">{event.title}</p>
-                                                    <p className="text-sm font-medium text-orange-600">{formatEventTimeRange(event)}</p>
-                                                    {event.location && (
-                                                        <p className="mt-1 text-sm text-slate-500">{event.location}</p>
-                                                    )}
-                                                </div>
-                                                <div className="flex gap-2">
-                                                    <button
-                                                        type="button"
-                                                        className="rounded-lg border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-100"
-                                                        onClick={() => openEditModal(event)}
-                                                    >
-                                                        Edit
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        className="rounded-lg border border-red-200 px-3 py-1 text-xs font-semibold text-red-600 transition hover:bg-red-50"
-                                                        onClick={() => handleDeleteEvent(event)}
-                                                    >
-                                                        Delete
-                                                    </button>
-                                                </div>
-                                            </div>
-                                            <div className="mt-4 text-sm text-slate-600">
-                                                {MentionText ? (
-                                                    <MentionText
-                                                        text={event.notes || ''}
-                                                        entityTypes={['contact', 'order', 'note', 'calendar_event']}
-                                                        className="space-y-2"
-                                                    />
-                                                ) : (
-                                                    <p className="whitespace-pre-wrap text-sm text-slate-600">{event.notes || ''}</p>
-                                                )}
-                                            </div>
-                                        </div>
-                                    ))
                                 )}
                             </div>
                             <button

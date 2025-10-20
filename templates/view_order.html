@@ -24,6 +24,8 @@
                         <a href="/orders" id="nav-orders-link" class="text-orange-300">Orders</a>
                         <a href="/contacts" class="hover:text-orange-300 transition">Contacts</a>
                         <a href="/analytics" class="hover:text-orange-300 transition">Analytics</a>
+                        <a href="/reminders" class="hover:text-orange-300 transition">Reminders</a>
+                        <a href="/calendar" class="hover:text-orange-300 transition">Calendar</a>
                         <a href="/passwords" class="hover:text-orange-300 transition">Password Manager</a>
                     </div>
                 </div>
@@ -359,7 +361,7 @@ const formatContactAddress = (address, city, state, zip) => {
                                     onChange={setDetails}
                                     placeholder={isStatusUpdate ? 'Enter the new status...' : 'Enter details about the log...'}
                                     rows={3}
-                                    entityTypes={['contact', 'order', 'note']}
+                                entityTypes={['contact', 'order', 'note', 'calendar_event', 'reminder']}
                                 />
                             </div>
                             <div className="mb-4">
@@ -1022,7 +1024,7 @@ const formatContactAddress = (address, city, state, zip) => {
                                                         {MentionText ? (
                                                             <MentionText
                                                                 text={log.details || log.note || ''}
-                                                                entityTypes={['contact', 'order', 'note']}
+                                            entityTypes={['contact', 'order', 'note', 'calendar_event', 'reminder']}
                                                                 className="block whitespace-pre-wrap"
                                                             />
                                                         ) : (
@@ -1096,7 +1098,7 @@ const formatContactAddress = (address, city, state, zip) => {
                                         order.notes ? (
                                             <MentionText
                                                 text={order.notes}
-                                                entityTypes={['contact', 'order', 'note']}
+                                                entityTypes={['contact', 'order', 'note', 'calendar_event', 'reminder']}
                                                 as="p"
                                                 className="text-slate-600"
                                             />
