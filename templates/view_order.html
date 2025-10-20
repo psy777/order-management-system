@@ -144,7 +144,7 @@ const sanitizePlaceholderValue = (value) => {
     const trimmed = value.toString().trim();
     if (!trimmed) return '';
     const lowered = trimmed.toLowerCase();
-    if (lowered === '[no contact found]' || lowered === 'no contact found') {
+    if (lowered === '[no contact found]' || lowered === 'no contact found' || lowered === '[contact not found]' || lowered === 'contact not found') {
         return '';
     }
     return trimmed;
