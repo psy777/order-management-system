@@ -139,6 +139,114 @@ const formatPhoneNumber = (value = '') => {
     return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)} ${digits.slice(6)}`;
 };
 
+const safeText = (value) => (typeof value === 'string' ? value.trim() : '');
+
+const normalizeDetailsAddress = (address = {}) => {
+    const kindRaw = safeText(address.kind).toLowerCase();
+    const kind = ['shipping', 'billing', 'other'].includes(kindRaw) ? kindRaw : 'other';
+    return {
+        kind,
+        street: safeText(address.street || address.address || address.addressLine1),
+        city: safeText(address.city),
+        state: safeText(address.state),
+        postalCode: safeText(address.postalCode || address.zip || address.zipCode),
+    };
+};
+
+const hasAddressFields = (entry) => {
+    if (!entry) return false;
+    return [entry.street, entry.city, entry.state, entry.postalCode].some(value => safeText(value));
+};
+
+const addressesAreEqual = (left, right) => {
+    const keys = ['street', 'city', 'state', 'postalCode'];
+    return keys.every(key => safeText(left?.[key]) === safeText(right?.[key]));
+};
+
+const pickContactAddress = (contact, preferredKind) => {
+    const empty = { kind: preferredKind, street: '', city: '', state: '', postalCode: '' };
+    if (!contact) {
+        return empty;
+    }
+    const detailsList = Array.isArray(contact?.contactDetails?.addresses)
+        ? contact.contactDetails.addresses.map(normalizeDetailsAddress).filter(hasAddressFields)
+        : [];
+    const byKind = detailsList.find(address => address.kind === preferredKind && hasAddressFields(address));
+    if (byKind) {
+        return byKind;
+    }
+    if (detailsList.length > 0) {
+        return { ...detailsList[0], kind: preferredKind };
+    }
+    const prefix = preferredKind === 'billing' ? 'billing' : 'shipping';
+    const legacy = {
+        kind: preferredKind,
+        street: safeText(contact[`${prefix}Address`]),
+        city: safeText(contact[`${prefix}City`]),
+        state: safeText(contact[`${prefix}State`]),
+        postalCode: safeText(contact[`${prefix}ZipCode`]),
+    };
+    if (hasAddressFields(legacy)) {
+        return legacy;
+    }
+    const altPrefix = prefix === 'shipping' ? 'billing' : 'shipping';
+    const altLegacy = {
+        kind: preferredKind,
+        street: safeText(contact[`${altPrefix}Address`]),
+        city: safeText(contact[`${altPrefix}City`]),
+        state: safeText(contact[`${altPrefix}State`]),
+        postalCode: safeText(contact[`${altPrefix}ZipCode`]),
+    };
+    if (hasAddressFields(altLegacy)) {
+        return altLegacy;
+    }
+    return empty;
+};
+
+const contactHasSavedAddresses = (contact) => {
+    if (!contact) {
+        return false;
+    }
+    if (Array.isArray(contact?.contactDetails?.addresses)) {
+        if (contact.contactDetails.addresses.some(address => hasAddressFields(normalizeDetailsAddress(address)))) {
+            return true;
+        }
+    }
+    const legacyFields = [
+        'shippingAddress', 'shippingCity', 'shippingState', 'shippingZipCode',
+        'billingAddress', 'billingCity', 'billingState', 'billingZipCode',
+    ];
+    return legacyFields.some(field => safeText(contact[field]));
+};
+
+const orderAddressesMatchContact = (contact, state) => {
+    if (!contactHasSavedAddresses(contact)) {
+        return false;
+    }
+
+    const shippingFromContact = pickContactAddress(contact, 'shipping');
+    const billingFromContact = pickContactAddress(contact, 'billing');
+    const orderShipping = extractAddressFields(state, 'shipping');
+    const orderBilling = extractAddressFields(state, 'billing');
+
+    const shippingMatches = hasAddressFields(shippingFromContact)
+        ? addressesAreEqual(orderShipping, shippingFromContact)
+        : !hasAddressFields(orderShipping);
+
+    const billingMatches = hasAddressFields(billingFromContact)
+        ? addressesAreEqual(orderBilling, billingFromContact)
+        : addressesAreEqual(orderBilling, orderShipping);
+
+    return shippingMatches && billingMatches;
+};
+
+const extractAddressFields = (state, prefix) => ({
+    street: safeText(state[`${prefix}Address`]),
+    city: safeText(state[`${prefix}City`]),
+    state: safeText(state[`${prefix}State`]),
+    postalCode: safeText(state[`${prefix}ZipCode`]),
+});
+
 const createEmptyLineItem = (id) => ({
     id: String(id),
     catalogItemId: null,
@@ -642,6 +750,42 @@ const generateInvoicePdf = (order, allItems, action = 'save', brandingOverride =
         shippingZipCode: '',
         ...baseContact
     };
+    const preferAddressValue = (primary, ...fallbacks) => {
+        const candidates = [primary, ...fallbacks];
+        for (const candidate of candidates) {
+            if (candidate == null) continue;
+            const value = String(candidate).trim();
+            if (value) {
+                return value;
+            }
+        }
+        return '';
+    };
+    const shippingFallback = {
+        address: preferAddressValue(contactInfo.shippingAddress, safeOrder.shippingAddress),
+        city: preferAddressValue(contactInfo.shippingCity, safeOrder.shippingCity),
+        state: preferAddressValue(contactInfo.shippingState, safeOrder.shippingState),
+        zip: preferAddressValue(contactInfo.shippingZipCode, safeOrder.shippingZipCode),
+    };
+    const billingFallbackSource = {
+        address: preferAddressValue(contactInfo.billingAddress, safeOrder.billingAddress),
+        city: preferAddressValue(contactInfo.billingCity, safeOrder.billingCity),
+        state: preferAddressValue(contactInfo.billingState, safeOrder.billingState),
+        zip: preferAddressValue(contactInfo.billingZipCode, safeOrder.billingZipCode),
+    };
+    const hasBillingFallback = Object.values(billingFallbackSource).some(value => value && String(value).trim());
+    const billingFallback = hasBillingFallback ? billingFallbackSource : shippingFallback;
+    const resolvedContactInfo = {
+        ...contactInfo,
+        shippingAddress: shippingFallback.address,
+        shippingCity: shippingFallback.city,
+        shippingState: shippingFallback.state,
+        shippingZipCode: shippingFallback.zip,
+        billingAddress: billingFallback.address,
+        billingCity: billingFallback.city,
+        billingState: billingFallback.state,
+        billingZipCode: billingFallback.zip,
+    };
 
     const renderBlock = (label, lines, x, y, wrapWidth = null) => {
         doc.setFontSize(12);
@@ -683,16 +827,31 @@ const generateInvoicePdf = (order, allItems, action = 'save', brandingOverride =
     const leftColumnX = 14;
     const rightColumnX = 105;
 
-    const customerPhone = formatPhoneNumber(contactInfo.phone);
-    const customerLines = [contactInfo.companyName, contactInfo.contactName, contactInfo.email, customerPhone].filter(Boolean);
+    const customerPhone = formatPhoneNumber(resolvedContactInfo.phone);
+    const customerLines = [
+        resolvedContactInfo.companyName,
+        resolvedContactInfo.contactName,
+        resolvedContactInfo.email,
+        customerPhone
+    ].filter(Boolean);
     leftColumnY = renderBlock("Bill To", customerLines, leftColumnX, leftColumnY);
 
-    const billingLines = buildAddressLines(contactInfo.billingAddress, contactInfo.billingCity, contactInfo.billingState, contactInfo.billingZipCode);
+    const billingLines = buildAddressLines(
+        resolvedContactInfo.billingAddress,
+        resolvedContactInfo.billingCity,
+        resolvedContactInfo.billingState,
+        resolvedContactInfo.billingZipCode
+    );
     if (billingLines.length) {
         rightColumnY = renderBlock("Billing Address", billingLines, rightColumnX, rightColumnY, 90);
     }
 
-    const shippingLines = buildAddressLines(contactInfo.shippingAddress, contactInfo.shippingCity, contactInfo.shippingState, contactInfo.shippingZipCode);
+    const shippingLines = buildAddressLines(
+        resolvedContactInfo.shippingAddress,
+        resolvedContactInfo.shippingCity,
+        resolvedContactInfo.shippingState,
+        resolvedContactInfo.shippingZipCode
+    );
     if (shippingLines.length) {
         rightColumnY = renderBlock("Shipping Address", shippingLines, rightColumnX, rightColumnY, 90);
     }
@@ -1394,7 +1553,7 @@ const formatContactAddress = (address, city, state, zip) => {
     return parts.length > 0 ? parts.join(' ') : 'Not provided';
 };
 
-const ContactSummaryCard = ({ contact }) => {
+const ContactSummaryCard = ({ contact, shippingFallback, billingFallback }) => {
     if (!contact) {
         return (
             <div className="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500">
@@ -1405,6 +1564,35 @@ const ContactSummaryCard = ({ contact }) => {
 
     const phoneDisplay = formatPhoneNumber(contact.phone);
     const companyDisplay = sanitizePlaceholderValue(contact.companyName);
+    const selectAddressField = (primary, fallback) => {
+        const normalizedPrimary = sanitizePlaceholderValue(primary);
+        if (normalizedPrimary) {
+            return normalizedPrimary;
+        }
+        return sanitizePlaceholderValue(fallback);
+    };
+    const fallbackShipping = shippingFallback || {};
+    const fallbackBilling = billingFallback || shippingFallback || {};
+    const resolvedShippingAddress = selectAddressField(contact.shippingAddress, fallbackShipping.address);
+    const resolvedShippingCity = selectAddressField(contact.shippingCity, fallbackShipping.city);
+    const resolvedShippingState = selectAddressField(contact.shippingState, fallbackShipping.state);
+    const resolvedShippingZip = selectAddressField(contact.shippingZipCode, fallbackShipping.zip);
+    const resolvedBillingAddress = selectAddressField(contact.billingAddress, fallbackBilling.address);
+    const resolvedBillingCity = selectAddressField(contact.billingCity, fallbackBilling.city);
+    const resolvedBillingState = selectAddressField(contact.billingState, fallbackBilling.state);
+    const resolvedBillingZip = selectAddressField(contact.billingZipCode, fallbackBilling.zip);
+    const shippingDisplay = formatContactAddress(
+        resolvedShippingAddress,
+        resolvedShippingCity,
+        resolvedShippingState,
+        resolvedShippingZip
+    );
+    const billingDisplay = formatContactAddress(
+        resolvedBillingAddress,
+        resolvedBillingCity,
+        resolvedBillingState,
+        resolvedBillingZip
+    );
 
     return (
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
@@ -1425,7 +1613,11 @@ const ContactSummaryCard = ({ contact }) => {
                 </div>
                 <div className="sm:col-span-2">
                     <p className="font-medium text-slate-700">Shipping</p>
-                    <p>{formatContactAddress(contact.shippingAddress, contact.shippingCity, contact.shippingState, contact.shippingZipCode)}</p>
+                    <p>{shippingDisplay}</p>
+                </div>
+                <div className="sm:col-span-2">
+                    <p className="font-medium text-slate-700">Billing</p>
+                    <p>{billingDisplay}</p>
                 </div>
             </div>
             {contact.handle && (
@@ -1776,6 +1968,10 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
         shippingCity: '',
         shippingState: '',
         shippingZipCode: '',
+        billingAddress: '',
+        billingCity: '',
+        billingState: '',
+        billingZipCode: '',
     };
 
     const deriveInitialFormState = (incomingOrder) => {
@@ -1836,6 +2032,10 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
             shippingCity: incomingOrder.shippingCity || '',
             shippingState: incomingOrder.shippingState || '',
             shippingZipCode: incomingOrder.shippingZipCode || '',
+            billingAddress: incomingOrder.billingAddress || '',
+            billingCity: incomingOrder.billingCity || '',
+            billingState: incomingOrder.billingState || '',
+            billingZipCode: incomingOrder.billingZipCode || '',
             lineItems: Array.isArray(incomingOrder.lineItems)
                 ? incomingOrder.lineItems.map((item, index) => ({
                     id: item?.id != null
@@ -1867,6 +2067,14 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
     const scanInputRef = React.useRef(null);
     const nextLineItemIdRef = useRef(1);
     const nextDiscountIdRef = useRef(1);
+    const [billingSameAsShipping, setBillingSameAsShipping] = useState(() =>
+        addressesAreEqual(
+            extractAddressFields(formData, 'shipping'),
+            extractAddressFields(formData, 'billing')
+        )
+    );
+    const [useContactAddresses, setUseContactAddresses] = useState(() => orderAddressesMatchContact(primaryContactSummary, formData));
+    const [lastSelectedContactId, setLastSelectedContactId] = useState(primaryContactId || '');
 
     useEffect(() => {
         const numericIds = formData.lineItems
@@ -1908,11 +2116,65 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
     const [primarySearchTerm, setPrimarySearchTerm] = useState('');
     const [showNewContactModal, setShowNewContactModal] = useState(false);
 
+    const applyContactAddresses = (contact, { updateContactInfo = false, preserveExistingWhenMissing = false } = {}) => {
+        let nextLinked = false;
+        const shippingFromContact = pickContactAddress(contact, 'shipping');
+        const billingFromContact = pickContactAddress(contact, 'billing');
+
+        setFormData(prev => {
+            const previousShipping = extractAddressFields(prev, 'shipping');
+            const previousBilling = extractAddressFields(prev, 'billing');
+            const effectiveShipping = hasAddressFields(shippingFromContact)
+                ? shippingFromContact
+                : (preserveExistingWhenMissing ? previousShipping : { kind: 'shipping', street: '', city: '', state: '', postalCode: '' });
+            const effectiveBilling = hasAddressFields(billingFromContact)
+                ? billingFromContact
+                : (preserveExistingWhenMissing ? previousBilling : effectiveShipping);
+            nextLinked = !hasAddressFields(billingFromContact) || addressesAreEqual(effectiveShipping, effectiveBilling);
+
+            const nextState = {
+                ...prev,
+                ...(updateContactInfo ? { contactInfo: { ...contact } } : {}),
+                shippingAddress: effectiveShipping.street,
+                shippingCity: effectiveShipping.city,
+                shippingState: effectiveShipping.state,
+                shippingZipCode: effectiveShipping.postalCode,
+            };
+
+            if (nextLinked) {
+                nextState.billingAddress = effectiveShipping.street;
+                nextState.billingCity = effectiveShipping.city;
+                nextState.billingState = effectiveShipping.state;
+                nextState.billingZipCode = effectiveShipping.postalCode;
+            } else {
+                nextState.billingAddress = effectiveBilling.street;
+                nextState.billingCity = effectiveBilling.city;
+                nextState.billingState = effectiveBilling.state;
+                nextState.billingZipCode = effectiveBilling.postalCode;
+            }
+
+            return nextState;
+        });
+
+        setBillingSameAsShipping(nextLinked);
+    };
+
     useEffect(() => {
-        setFormData(deriveInitialFormState(order));
-        setIsEditing(startInEditMode || !order || order.status === 'Draft');
-        setPrimaryContactId(order?.primaryContactId || order?.contactInfo?.id || '');
-        setPrimaryContactSummary(order?.primaryContact || order?.contactInfo || null);
+        const nextForm = deriveInitialFormState(order);
+        const nextPrimaryId = order?.primaryContactId || order?.contactInfo?.id || '';
+        const nextPrimaryContact = order?.primaryContact || order?.contactInfo || null;
+        setFormData(nextForm);
+        setIsEditing(startInEditMode || !order || order?.status === 'Draft');
+        setPrimaryContactId(nextPrimaryId);
+        setPrimaryContactSummary(nextPrimaryContact);
+        setBillingSameAsShipping(
+            addressesAreEqual(
+                extractAddressFields(nextForm, 'shipping'),
+                extractAddressFields(nextForm, 'billing')
+            )
+        );
+        setUseContactAddresses(orderAddressesMatchContact(nextPrimaryContact, nextForm));
+        setLastSelectedContactId(nextPrimaryId || '');
     }, [order, startInEditMode]);
 
     useEffect(() => {
@@ -1929,6 +2191,26 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
     const mentionedContacts = formData.additionalContacts || [];
     const normalizedLineItems = useMemo(() => normalizeLineItemsForSave(formData.lineItems), [formData.lineItems]);
 
+    const handleBillingSameToggle = (isChecked) => {
+        setBillingSameAsShipping(isChecked);
+        if (isChecked) {
+            setFormData(prev => ({
+                ...prev,
+                billingAddress: prev.shippingAddress,
+                billingCity: prev.shippingCity,
+                billingState: prev.shippingState,
+                billingZipCode: prev.shippingZipCode,
+            }));
+        }
+    };
+
+    const handleToggleUseContactAddresses = (isChecked) => {
+        setUseContactAddresses(isChecked);
+        if (isChecked && primaryContactSummary) {
+            applyContactAddresses(primaryContactSummary, { preserveExistingWhenMissing: false });
+        }
+    };
+
     const handleReturnToOrders = () => {
         const isNewUnsavedDraft = !order && (formData.lineItems.length > 0 || Boolean(primaryContactId));
 
@@ -1940,18 +2222,17 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
     };
 
     const handlePrimaryContactSelect = (contact) => {
+        if (!contact) {
+            return;
+        }
         setPrimaryContactId(contact.id);
         setPrimaryContactSummary(contact);
         setIsSelectingPrimary(false);
         setPrimarySearchTerm('');
-        setFormData(prev => ({
-            ...prev,
-            contactInfo: { ...contact },
-            shippingAddress: prev.shippingAddress || contact.shippingAddress || '',
-            shippingCity: prev.shippingCity || contact.shippingCity || '',
-            shippingState: prev.shippingState || contact.shippingState || '',
-            shippingZipCode: prev.shippingZipCode || contact.shippingZipCode || ''
-        }));
+        setLastSelectedContactId(contact.id);
+        const hasAddresses = contactHasSavedAddresses(contact);
+        setUseContactAddresses(hasAddresses);
+        applyContactAddresses(contact, { updateContactInfo: true, preserveExistingWhenMissing: false });
     };
 
     const filteredPrimaryContacts = useMemo(() => {
@@ -1965,17 +2246,6 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
             return name.includes(query) || company.includes(query) || email.includes(query) || handle.includes(query);
         });
     }, [allContacts, primarySearchTerm]);
-
-    const handleApplyContactShipping = () => {
-        if (!primaryContactSummary) return;
-        setFormData(prev => ({
-            ...prev,
-            shippingAddress: primaryContactSummary.shippingAddress || '',
-            shippingCity: primaryContactSummary.shippingCity || '',
-            shippingState: primaryContactSummary.shippingState || '',
-            shippingZipCode: primaryContactSummary.shippingZipCode || ''
-        }));
-    };
 
     const refreshMentionedContacts = useCallback(async () => {
         if (!formData.id) return;
@@ -2019,19 +2289,59 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
         }
 
         setIsCreatingContact(true);
+        const emailValue = newContactForm.email.trim();
+        const phoneDigits = normalizePhoneDigits(newContactForm.phone);
+        const shippingAddress = newContactForm.shippingAddress.trim();
+        const shippingCity = newContactForm.shippingCity.trim();
+        const shippingState = newContactForm.shippingState.trim();
+        const shippingZip = newContactForm.shippingZipCode.trim();
+        const billingAddress = newContactForm.billingAddress.trim();
+        const billingCity = newContactForm.billingCity.trim();
+        const billingState = newContactForm.billingState.trim();
+        const billingZip = newContactForm.billingZipCode.trim();
+
+        const addresses = [];
+        if ([shippingAddress, shippingCity, shippingState, shippingZip].some(Boolean)) {
+            addresses.push({
+                label: 'Shipping Address',
+                kind: 'shipping',
+                street: shippingAddress,
+                city: shippingCity,
+                state: shippingState,
+                postalCode: shippingZip,
+                isPrimary: true,
+            });
+        }
+        if ([billingAddress, billingCity, billingState, billingZip].some(Boolean)) {
+            addresses.push({
+                label: 'Billing Address',
+                kind: 'billing',
+                street: billingAddress,
+                city: billingCity,
+                state: billingState,
+                postalCode: billingZip,
+                isPrimary: addresses.length === 0,
+            });
+        }
+
         const payload = {
             contactName: newContactForm.contactName.trim(),
             companyName: newContactForm.companyName.trim(),
-            email: newContactForm.email.trim(),
-            phone: normalizePhoneDigits(newContactForm.phone),
-            shippingAddress: newContactForm.shippingAddress.trim(),
-            shippingCity: newContactForm.shippingCity.trim(),
-            shippingState: newContactForm.shippingState.trim(),
-            shippingZipCode: newContactForm.shippingZipCode.trim(),
-            billingAddress: newContactForm.billingAddress.trim(),
-            billingCity: newContactForm.billingCity.trim(),
-            billingState: newContactForm.billingState.trim(),
-            billingZipCode: newContactForm.billingZipCode.trim()
+            contactDetails: {
+                emails: emailValue ? [{ label: 'Email', value: emailValue, isPrimary: true }] : [],
+                phones: phoneDigits ? [{ label: 'Phone', value: phoneDigits, isPrimary: true }] : [],
+                addresses,
+            },
+            email: emailValue,
+            phone: phoneDigits,
+            shippingAddress,
+            shippingCity,
+            shippingState,
+            shippingZipCode: shippingZip,
+            billingAddress,
+            billingCity,
+            billingState,
+            billingZipCode: billingZip,
         };
         try {
             const response = await fetch('/api/contacts', {
@@ -2050,18 +2360,26 @@ const OrderForm = ({ order, navigateTo, saveOrder, deleteOrder, allContacts, all
             }
             setPrimaryContactId(created.id);
             setPrimaryContactSummary(created);
-            const normalizedShippingAddress = (created.shippingAddress || '').trim();
-            const normalizedShippingCity = (created.shippingCity || '').trim();
-            const normalizedShippingState = (created.shippingState || '').trim();
-            const normalizedShippingZip = (created.shippingZipCode || '').trim();
-            setFormData(prev => ({
-                ...prev,
-                contactInfo: { ...created },
-                shippingAddress: normalizedShippingAddress || prev.shippingAddress || '',
-                shippingCity: normalizedShippingCity || prev.shippingCity || '',
-                shippingState: normalizedShippingState || prev.shippingState || '',
-                shippingZipCode: normalizedShippingZip || prev.shippingZipCode || ''
-            }));
+            setLastSelectedContactId(created.id);
+            const hasAddresses = contactHasSavedAddresses(created);
+            setUseContactAddresses(hasAddresses);
+            if (hasAddresses) {
+                applyContactAddresses(created, { updateContactInfo: true, preserveExistingWhenMissing: false });
+            } else {
+                setFormData(prev => ({
+                    ...prev,
+                    contactInfo: { ...created },
+                    shippingAddress: '',
+                    shippingCity: '',
+                    shippingState: '',
+                    shippingZipCode: '',
+                    billingAddress: '',
+                    billingCity: '',
+                    billingState: '',
+                    billingZipCode: '',
+                }));
+                setBillingSameAsShipping(true);
+            }
             setShowNewContactModal(false);
             resetNewContactForm();
         } catch (error) {
@@ -2372,6 +2690,8 @@ const unpackPackage = (id, pkgCode) => {
 
     const isDraft = formData.status === 'Draft';
     const canEdit = isEditing || isDraft;
+    const contactHasAddresses = contactHasSavedAddresses(primaryContactSummary);
+    const addressesLocked = useContactAddresses && contactHasAddresses;
     const resolvedOrderLabel = formData.title || formData.display_id || formData.id || order?.id || 'New Order';
     const pageHeading = !order ? 'New Order' : (isEditing ? `Edit Order: ${resolvedOrderLabel}` : `Order Details: ${resolvedOrderLabel}`);
     
@@ -2381,9 +2701,20 @@ const unpackPackage = (id, pkgCode) => {
         try {
             const saved = await saveOrder(updatedOrder);
             if (saved) {
-                setFormData(deriveInitialFormState(saved));
-                setPrimaryContactId(saved.primaryContactId || saved.contactInfo?.id || '');
-                setPrimaryContactSummary(saved.primaryContact || saved.contactInfo || null);
+                const nextForm = deriveInitialFormState(saved);
+                const nextPrimaryId = saved.primaryContactId || saved.contactInfo?.id || '';
+                const nextPrimaryContact = saved.primaryContact || saved.contactInfo || null;
+                setFormData(nextForm);
+                setPrimaryContactId(nextPrimaryId);
+                setPrimaryContactSummary(nextPrimaryContact);
+                setBillingSameAsShipping(
+                    addressesAreEqual(
+                        extractAddressFields(nextForm, 'shipping'),
+                        extractAddressFields(nextForm, 'billing')
+                    )
+                );
+                setUseContactAddresses(orderAddressesMatchContact(nextPrimaryContact, nextForm));
+                setLastSelectedContactId(nextPrimaryId || '');
             }
         } catch (error) {
             console.error('Failed to update order status:', error);
@@ -2417,6 +2748,21 @@ const unpackPackage = (id, pkgCode) => {
             appliesTo: discount.appliesTo,
         }));
 
+        const shippingPayload = {
+            address: formData.shippingAddress || '',
+            city: formData.shippingCity || '',
+            state: formData.shippingState || '',
+            zip: formData.shippingZipCode || '',
+        };
+        const billingPayload = billingSameAsShipping
+            ? shippingPayload
+            : {
+                address: formData.billingAddress || '',
+                city: formData.billingCity || '',
+                state: formData.billingState || '',
+                zip: formData.billingZipCode || '',
+            };
+
         return {
             ...formData,
             lineItems: normalizedLineItems, // Use the filtered list
@@ -2431,7 +2777,15 @@ const unpackPackage = (id, pkgCode) => {
             total: finalTotal, // Use the recalculated total in cents
             signatureDataUrl: formData.signatureDataUrl,
             primaryContactId,
-            contactInfo: primaryContactSummary ? { ...primaryContactSummary, id: primaryContactId } : { id: primaryContactId }
+            contactInfo: primaryContactSummary ? { ...primaryContactSummary, id: primaryContactId } : { id: primaryContactId },
+            shippingAddress: shippingPayload.address,
+            shippingCity: shippingPayload.city,
+            shippingState: shippingPayload.state,
+            shippingZipCode: shippingPayload.zip,
+            billingAddress: billingPayload.address,
+            billingCity: billingPayload.city,
+            billingState: billingPayload.state,
+            billingZipCode: billingPayload.zip,
         };
     };
 
@@ -2444,9 +2798,20 @@ const unpackPackage = (id, pkgCode) => {
         try {
             const saved = await saveOrder(newOrder);
             if (saved) {
-                setFormData(deriveInitialFormState(saved));
-                setPrimaryContactId(saved.primaryContactId || saved.contactInfo?.id || '');
-                setPrimaryContactSummary(saved.primaryContact || saved.contactInfo || null);
+                const nextForm = deriveInitialFormState(saved);
+                const nextPrimaryId = saved.primaryContactId || saved.contactInfo?.id || '';
+                const nextPrimaryContact = saved.primaryContact || saved.contactInfo || null;
+                setFormData(nextForm);
+                setPrimaryContactId(nextPrimaryId);
+                setPrimaryContactSummary(nextPrimaryContact);
+                setBillingSameAsShipping(
+                    addressesAreEqual(
+                        extractAddressFields(nextForm, 'shipping'),
+                        extractAddressFields(nextForm, 'billing')
+                    )
+                );
+                setUseContactAddresses(orderAddressesMatchContact(nextPrimaryContact, nextForm));
+                setLastSelectedContactId(nextPrimaryId || '');
                 navigateTo('dashboard');
             }
         } catch (error) {
@@ -2464,9 +2829,20 @@ const unpackPackage = (id, pkgCode) => {
         try {
             const saved = await saveOrder(newOrder); // Save the order
             if (saved) {
-                setFormData(deriveInitialFormState(saved));
-                setPrimaryContactId(saved.primaryContactId || saved.contactInfo?.id || '');
-                setPrimaryContactSummary(saved.primaryContact || saved.contactInfo || null);
+                const nextForm = deriveInitialFormState(saved);
+                const nextPrimaryId = saved.primaryContactId || saved.contactInfo?.id || '';
+                const nextPrimaryContact = saved.primaryContact || saved.contactInfo || null;
+                setFormData(nextForm);
+                setPrimaryContactId(nextPrimaryId);
+                setPrimaryContactSummary(nextPrimaryContact);
+                setBillingSameAsShipping(
+                    addressesAreEqual(
+                        extractAddressFields(nextForm, 'shipping'),
+                        extractAddressFields(nextForm, 'billing')
+                    )
+                );
+                setUseContactAddresses(orderAddressesMatchContact(nextPrimaryContact, nextForm));
+                setLastSelectedContactId(nextPrimaryId || '');
                 // Instead of direct mailto and navigate, trigger the EmailModal
                 // The EmailModal's onEmailClientOpened callback (passed from App component) will handle navigation.
                 setOrderForEmailModal(saved);
@@ -2625,32 +3001,129 @@ const unpackPackage = (id, pkgCode) => {
                                     )}
                                 </div>
                             </div>
-                            <ContactSummaryCard contact={primaryContactSummary} />
+                            <ContactSummaryCard
+                                contact={primaryContactSummary}
+                                shippingFallback={{
+                                    address: formData.shippingAddress,
+                                    city: formData.shippingCity,
+                                    state: formData.shippingState,
+                                    zip: formData.shippingZipCode,
+                                }}
+                                billingFallback={{
+                                    address: formData.billingAddress,
+                                    city: formData.billingCity,
+                                    state: formData.billingState,
+                                    zip: formData.billingZipCode,
+                                }}
+                            />
                             <div className="space-y-4 border-t border-slate-200 pt-6">
                                 <div className="flex items-center justify-between">
                                     <h3 className="text-lg font-semibold text-slate-700">Shipping Details</h3>
-                                    {primaryContactSummary && canEdit && (
-                                        <button
-                                            type="button"
-                                            onClick={handleApplyContactShipping}
-                                            className="text-sm font-semibold text-orange-600 hover:text-orange-700"
-                                        >
-                                            Use contact address
-                                        </button>
-                                    )}
                                 </div>
                                 <Textarea
                                     label="Shipping Address"
                                     rows={2}
                                     value={formData.shippingAddress}
-                                    onChange={e => setFormData(prev => ({ ...prev, shippingAddress: e.target.value }))}
-                                    disabled={!canEdit}
+                                    onChange={e => {
+                                        const value = e.target.value;
+                                        setFormData(prev => {
+                                            const next = { ...prev, shippingAddress: value };
+                                            if (billingSameAsShipping) {
+                                                next.billingAddress = value;
+                                            }
+                                            return next;
+                                        });
+                                    }}
+                                    disabled={!canEdit || addressesLocked}
                                 />
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                    <Input label="City" value={formData.shippingCity} onChange={e => setFormData(prev => ({ ...prev, shippingCity: e.target.value }))} disabled={!canEdit} />
-                                    <Input label="State" value={formData.shippingState} onChange={e => setFormData(prev => ({ ...prev, shippingState: e.target.value }))} disabled={!canEdit} />
-                                    <Input label="Zip Code" value={formData.shippingZipCode} onChange={e => setFormData(prev => ({ ...prev, shippingZipCode: e.target.value }))} disabled={!canEdit} />
+                                    <Input
+                                        label="City"
+                                        value={formData.shippingCity}
+                                        onChange={e => {
+                                            const value = e.target.value;
+                                            setFormData(prev => {
+                                                const next = { ...prev, shippingCity: value };
+                                                if (billingSameAsShipping) {
+                                                    next.billingCity = value;
+                                                }
+                                                return next;
+                                            });
+                                        }}
+                                        disabled={!canEdit || addressesLocked}
+                                    />
+                                    <Input
+                                        label="State"
+                                        value={formData.shippingState}
+                                        onChange={e => {
+                                            const value = e.target.value;
+                                            setFormData(prev => {
+                                                const next = { ...prev, shippingState: value };
+                                                if (billingSameAsShipping) {
+                                                    next.billingState = value;
+                                                }
+                                                return next;
+                                            });
+                                        }}
+                                        disabled={!canEdit || addressesLocked}
+                                    />
+                                    <Input
+                                        label="Zip Code"
+                                        value={formData.shippingZipCode}
+                                        onChange={e => {
+                                            const value = e.target.value;
+                                            setFormData(prev => {
+                                                const next = { ...prev, shippingZipCode: value };
+                                                if (billingSameAsShipping) {
+                                                    next.billingZipCode = value;
+                                                }
+                                                return next;
+                                            });
+                                        }}
+                                        disabled={!canEdit || addressesLocked}
+                                    />
                                 </div>
+                                {canEdit && (
+                                    <div className="space-y-2">
+                                        <label className="flex items-center gap-2 text-sm text-slate-600">
+                                            <input
+                                                type="checkbox"
+                                                className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500"
+                                                checked={billingSameAsShipping}
+                                                disabled={!canEdit || addressesLocked}
+                                                onChange={e => handleBillingSameToggle(e.target.checked)}
+                                            />
+                                            Billing address is the same as shipping address
+                                        </label>
+                                        <label className={`flex items-center gap-2 text-sm ${contactHasAddresses ? 'text-slate-600' : 'text-slate-400'}`}>
+                                            <input
+                                                type="checkbox"
+                                                className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500 disabled:opacity-60"
+                                                checked={contactHasAddresses ? useContactAddresses : false}
+                                                disabled={!canEdit || !contactHasAddresses}
+                                                onChange={e => handleToggleUseContactAddresses(e.target.checked)}
+                                            />
+                                            Use saved contact addresses
+                                        </label>
+                                    </div>
+                                )}
+                                {!billingSameAsShipping && (
+                                    <div className="space-y-4 border-t border-slate-200 pt-4">
+                                        <h3 className="text-lg font-semibold text-slate-700">Billing Address</h3>
+                                        <Textarea
+                                            label="Billing Address"
+                                            rows={2}
+                                            value={formData.billingAddress}
+                                            onChange={e => setFormData(prev => ({ ...prev, billingAddress: e.target.value }))}
+                                            disabled={!canEdit || addressesLocked}
+                                        />
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                            <Input label="City" value={formData.billingCity} onChange={e => setFormData(prev => ({ ...prev, billingCity: e.target.value }))} disabled={!canEdit || addressesLocked} />
+                                            <Input label="State" value={formData.billingState} onChange={e => setFormData(prev => ({ ...prev, billingState: e.target.value }))} disabled={!canEdit || addressesLocked} />
+                                            <Input label="Zip Code" value={formData.billingZipCode} onChange={e => setFormData(prev => ({ ...prev, billingZipCode: e.target.value }))} disabled={!canEdit || addressesLocked} />
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                             <div className="border-t border-slate-200 pt-6 space-y-3">
                                 <div className="flex items-center justify-between">
@@ -3089,9 +3562,20 @@ const unpackPackage = (id, pkgCode) => {
                                     try {
                                         const saved = await saveOrder(createOrderObject());
                                         if (saved) {
-                                            setFormData(deriveInitialFormState(saved));
-                                            setPrimaryContactId(saved.primaryContactId || saved.contactInfo?.id || '');
-                                            setPrimaryContactSummary(saved.primaryContact || saved.contactInfo || null);
+                                            const nextForm = deriveInitialFormState(saved);
+                                            const nextPrimaryId = saved.primaryContactId || saved.contactInfo?.id || '';
+                                            const nextPrimaryContact = saved.primaryContact || saved.contactInfo || null;
+                                            setFormData(nextForm);
+                                            setPrimaryContactId(nextPrimaryId);
+                                            setPrimaryContactSummary(nextPrimaryContact);
+                                            setBillingSameAsShipping(
+                                                addressesAreEqual(
+                                                    extractAddressFields(nextForm, 'shipping'),
+                                                    extractAddressFields(nextForm, 'billing')
+                                                )
+                                            );
+                                            setUseContactAddresses(orderAddressesMatchContact(nextPrimaryContact, nextForm));
+                                            setLastSelectedContactId(nextPrimaryId || '');
                                             setIsEditing(false);
                                         }
                                     } catch (error) {
