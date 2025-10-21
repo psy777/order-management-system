@@ -44,7 +44,13 @@
             <aside class="fc-notes" aria-label="Notes">
                 <div class="fc-notes__search">
                     <label class="fc-screen-reader-only" for="fc-note-search">Search or create note</label>
-                    <input id="fc-note-search" class="fc-notes__search-input" type="search" placeholder="Search or create note" autocomplete="off">
+                    <div class="fc-notes__search-row">
+                        <input id="fc-note-search" class="fc-notes__search-input" type="search" placeholder="Search or create note" autocomplete="off">
+                        <button type="button" id="fc-create-note" class="fc-notes__create-button" aria-label="Create a new note">
+                            <span class="fc-notes__create-icon" aria-hidden="true">＋</span>
+                            <span class="fc-notes__create-label">New</span>
+                        </button>
+                    </div>
                 </div>
                 <div id="fc-note-list" class="fc-notes__list" role="listbox" aria-label="Saved notes"></div>
                 <p id="fc-no-notes" class="fc-notes__empty" hidden></p>
@@ -128,6 +134,7 @@
         (function () {
             const notesListEl = document.getElementById('fc-note-list');
             const noteSearchEl = document.getElementById('fc-note-search');
+            const createNoteButton = document.getElementById('fc-create-note');
             const noteEmptyEl = document.getElementById('fc-no-notes');
             const noteTitleEl = document.getElementById('fc-note-title');
             const noteHandleButton = document.getElementById('fc-note-handle');
@@ -562,8 +569,8 @@
                     if (noteEmptyEl) {
                         noteEmptyEl.hidden = false;
                         noteEmptyEl.textContent = trimmedQuery
-                            ? `No notes match "${trimmedQuery}". Press Enter to create it.`
-                            : 'Create a note to get started.';
+                            ? `No notes match "${trimmedQuery}". Press Enter or click New to create it.`
+                            : 'Click "New" to create your first note.';
                     }
                     return;
                 }
@@ -2086,6 +2093,37 @@
                             console.error('Failed to create note', error);
                             showError('Unable to create that note.');
                         }
+                    }
+                });
+            }
+
+            if (createNoteButton) {
+                createNoteButton.addEventListener('click', async () => {
+                    const desiredTitle = normalizePreview((noteSearchEl && noteSearchEl.value) || '');
+                    const fallbackTitle = desiredTitle || 'New note';
+                    const match = desiredTitle
+                        ? state.notes.find((note) => normalizePreview(note.title || '').toLowerCase() === desiredTitle.toLowerCase())
+                        : null;
+                    try {
+                        createNoteButton.disabled = true;
+                        if (match) {
+                            await selectNote(match.id, { focusComposer: true });
+                            return;
+                        }
+                        const note = await createNote(fallbackTitle);
+                        if (noteSearchEl) {
+                            noteSearchEl.value = '';
+                        }
+                        state.noteSearch = '';
+                        renderNotes();
+                        if (note) {
+                            await selectNote(note.id, { focusComposer: true });
+                        }
+                    } catch (error) {
+                        console.error('Failed to create note', error);
+                        showError('Unable to create that note.');
+                    } finally {
+                        createNoteButton.disabled = false;
                     }
                 });
             }

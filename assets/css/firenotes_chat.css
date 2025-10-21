@@ -39,8 +39,15 @@
     background: #f8fafc;
 }
 
+.fc-notes__search-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
 .fc-notes__search-input {
     width: 100%;
+    flex: 1 1 auto;
     padding: 0.55rem 0.75rem;
     border-radius: 10px;
     border: 1px solid #d7deea;
@@ -53,6 +60,43 @@
     outline: none;
     border-color: #93c5fd;
     box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+}
+
+.fc-notes__create-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.55rem 0.9rem;
+    border-radius: 999px;
+    border: 1px solid #fb923c;
+    background: linear-gradient(135deg, #fb923c, #f97316);
+    color: #ffffff;
+    font-weight: 600;
+    flex-shrink: 0;
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
+}
+
+.fc-notes__create-button:hover,
+.fc-notes__create-button:focus {
+    box-shadow: 0 8px 20px rgba(249, 115, 22, 0.25);
+    transform: translateY(-1px);
+    outline: none;
+}
+
+.fc-notes__create-button:active {
+    transform: translateY(0);
+    filter: brightness(0.95);
+}
+
+.fc-notes__create-icon {
+    font-size: 1.1rem;
+    line-height: 1;
+}
+
+.fc-notes__create-label {
+    font-size: 0.95rem;
+    line-height: 1;
 }
 
 .fc-notes__list {
