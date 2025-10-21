@@ -1,4 +1,5 @@
 import os
+import shutil
 from pathlib import Path
 import uuid
 import webbrowser
@@ -38,6 +39,7 @@ from database import (
     init_db,
     ensure_contact_handle,
     ensure_order_record_handle,
+    ensure_record_handle_schema,
     generate_unique_contact_handle,
 )
 from data_paths import DATA_ROOT, ensure_data_root
@@ -121,6 +123,8 @@ DATE_TO_RE = re.compile(r"\b(?:to|through|until|till|by)\s+(.+)", re.IGNORECASE)
 REPORT_ID_RE = re.compile(r"run\s+(?:the\s+)?report\s+(?P<report>[A-Za-z0-9_.-]+)", re.IGNORECASE)
 REPORT_LIST_RE = re.compile(r"\b(list|show)\s+(?:all\s+)?reports\b", re.IGNORECASE)
 MAX_CHAT_HISTORY = 250
+DEFAULT_CHAT_REACTOR = 'workspace-user'
+FIRENOTES_MENTION = '@firenotes'
 
 
 def _resolve_timezone_setting() -> str:
@@ -168,7 +172,10 @@ def _parse_json_column(value: Optional[str]) -> Optional[Any]:
         return None
 
 
-def _serialize_chat_row(row: sqlite3.Row) -> Dict[str, Any]:
+def _serialize_chat_row(
+    row: sqlite3.Row,
+    reaction_map: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+) -> Dict[str, Any]:
     if isinstance(row, sqlite3.Row):
         row = dict(row)
     elif isinstance(row, tuple):
@@ -181,7 +188,7 @@ def _serialize_chat_row(row: sqlite3.Row) -> Dict[str, Any]:
         }
     metadata = _parse_json_column(row.get('metadata_json'))
     attachments = _parse_json_column(row.get('attachments_json')) or []
-    return {
+    message = {
         'id': row.get('id'),
         'note_id': row.get('note_id'),
         'author': row.get('author'),
@@ -190,6 +197,58 @@ def _serialize_chat_row(row: sqlite3.Row) -> Dict[str, Any]:
         'attachments': attachments,
         'created_at': row.get('created_at'),
     }
+    if reaction_map and message['id']:
+        message['reactions'] = reaction_map.get(message['id'], [])
+    else:
+        message['reactions'] = []
+    return message
+
+
+def _collect_chat_reactions(
+    conn: sqlite3.Connection,
+    message_ids: List[str],
+    actor: str = DEFAULT_CHAT_REACTOR,
+) -> Dict[str, List[Dict[str, Any]]]:
+    normalized_ids = [str(message_id) for message_id in message_ids if message_id]
+    if not normalized_ids:
+        return {}
+    placeholders = ','.join('?' for _ in normalized_ids)
+    cursor = conn.execute(
+        f"""
+        SELECT message_id, emoji, reactor
+        FROM firecoast_chat_reactions
+        WHERE message_id IN ({placeholders})
+        """,
+        normalized_ids,
+    )
+    aggregated: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for row in cursor.fetchall():
+        if isinstance(row, sqlite3.Row):
+            message_id = row['message_id']
+            emoji = row['emoji']
+            reactor = row['reactor']
+        else:
+            message_id, emoji, reactor = row[:3]
+        if not message_id or not emoji:
+            continue
+        message_bucket = aggregated.setdefault(str(message_id), {})
+        entry = message_bucket.setdefault(
+            emoji,
+            {'emoji': emoji, 'count': 0, 'reacted': False, 'reactors': []},
+        )
+        entry['count'] += 1
+        if reactor:
+            entry['reactors'].append('You' if reactor == actor else str(reactor))
+        if reactor == actor:
+            entry['reacted'] = True
+    summarized: Dict[str, List[Dict[str, Any]]] = {}
+    for message_id, emoji_map in aggregated.items():
+        sorted_entries = sorted(
+            emoji_map.values(),
+            key=lambda item: (-int(item.get('count') or 0), item.get('emoji') or ''),
+        )
+        summarized[message_id] = sorted_entries
+    return summarized
 
 
 def _store_chat_message(
@@ -227,7 +286,8 @@ def _store_chat_message(
     )
     row = cursor.fetchone()
     _refresh_note_mentions(conn, note_id)
-    return _serialize_chat_row(row)
+    reaction_map = _collect_chat_reactions(conn, [message_id], DEFAULT_CHAT_REACTOR)
+    return _serialize_chat_row(row, reaction_map)
 
 
 def _list_chat_messages(conn: sqlite3.Connection, note_id: str, limit: int) -> List[Dict[str, Any]]:
@@ -242,7 +302,241 @@ def _list_chat_messages(conn: sqlite3.Connection, note_id: str, limit: int) -> L
         """,
         (note_id, limit),
     )
-    return [_serialize_chat_row(row) for row in cursor.fetchall()]
+    rows = cursor.fetchall()
+    message_ids: List[str] = []
+    for row in rows:
+        if isinstance(row, sqlite3.Row):
+            message_ids.append(str(row['id']))
+        else:
+            message_ids.append(str(row[0]))
+    reaction_map = _collect_chat_reactions(conn, message_ids, DEFAULT_CHAT_REACTOR)
+    return [_serialize_chat_row(row, reaction_map) for row in rows]
+
+
+def _toggle_chat_reaction(
+    conn: sqlite3.Connection,
+    message_id: str,
+    emoji: str,
+    reactor: str = DEFAULT_CHAT_REACTOR,
+) -> Tuple[Dict[str, Any], str]:
+    if not message_id:
+        raise ValueError('message_id is required')
+    normalized_emoji = (emoji or '').strip()
+    if not normalized_emoji:
+        raise ValueError('emoji is required')
+    message_row = conn.execute(
+        """
+        SELECT id, note_id, author, content, metadata_json, attachments_json, created_at
+        FROM firecoast_chat_messages
+        WHERE id = ?
+        """,
+        (message_id,),
+    ).fetchone()
+    if not message_row:
+        raise ValueError('Message not found.')
+    existing = conn.execute(
+        """
+        SELECT id
+        FROM firecoast_chat_reactions
+        WHERE message_id = ? AND emoji = ? AND reactor = ?
+        """,
+        (message_id, normalized_emoji, reactor),
+    ).fetchone()
+    if existing:
+        reaction_id = existing['id'] if isinstance(existing, sqlite3.Row) else existing[0]
+        conn.execute("DELETE FROM firecoast_chat_reactions WHERE id = ?", (reaction_id,))
+        action = 'removed'
+    else:
+        reaction_id = str(uuid.uuid4())
+        conn.execute(
+            """
+            INSERT INTO firecoast_chat_reactions (id, message_id, emoji, reactor)
+            VALUES (?, ?, ?, ?)
+            """,
+            (reaction_id, message_id, normalized_emoji, reactor),
+        )
+        action = 'added'
+    reaction_map = _collect_chat_reactions(conn, [message_id], reactor)
+    serialized = _serialize_chat_row(message_row, reaction_map)
+    return serialized, action
+
+
+def _get_chat_message_row(conn: sqlite3.Connection, message_id: str) -> Optional[sqlite3.Row]:
+    if not message_id:
+        return None
+    cursor = conn.execute(
+        """
+        SELECT id, note_id, author, content, metadata_json, attachments_json, created_at
+        FROM firecoast_chat_messages
+        WHERE id = ?
+        """,
+        (message_id,),
+    )
+    return cursor.fetchone()
+
+
+def _serialize_chat_message(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    *,
+    include_reactions: bool = True,
+) -> Dict[str, Any]:
+    if not row:
+        raise ValueError('Message not found.')
+    reaction_map: Optional[Dict[str, List[Dict[str, Any]]]] = None
+    if include_reactions:
+        message_id = row['id'] if isinstance(row, sqlite3.Row) else None
+        if message_id:
+            reaction_map = _collect_chat_reactions(conn, [message_id], DEFAULT_CHAT_REACTOR)
+    return _serialize_chat_row(row, reaction_map)
+
+
+def _clone_chat_attachments(original: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    if not original:
+        return []
+    clones: List[Dict[str, Any]] = []
+    base_dir = Path(app.config['UPLOAD_FOLDER'])
+    for attachment in original:
+        if not isinstance(attachment, dict):
+            continue
+        source_path = attachment.get('path')
+        filename = attachment.get('filename') or 'attachment'
+        content_type = attachment.get('content_type') or 'application/octet-stream'
+        is_image = bool(attachment.get('is_image'))
+        if source_path:
+            source_file = base_dir / source_path
+        else:
+            source_file = None
+        cloned: Dict[str, Any] = {
+            'id': str(uuid.uuid4()),
+            'filename': filename,
+            'content_type': content_type,
+            'is_image': is_image,
+        }
+        if source_file and source_file.exists():
+            sanitized = secure_filename(filename) or 'attachment'
+            unique_name = f"{uuid.uuid4().hex}_{sanitized}"
+            relative_path = os.path.join('firecoast', unique_name)
+            destination = base_dir / relative_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_file, destination)
+            cloned['path'] = relative_path.replace('\\', '/')
+            cloned['url'] = f"/data/{cloned['path']}"
+            cloned['size'] = destination.stat().st_size
+            cloned['is_image'] = content_type.startswith('image/') if content_type else is_image
+        else:
+            for key in ('path', 'url', 'size'):
+                if key in attachment:
+                    cloned[key] = attachment[key]
+        clones.append(cloned)
+    return clones
+
+
+def _edit_chat_message(conn: sqlite3.Connection, message_id: str, content: str) -> Dict[str, Any]:
+    if not message_id:
+        raise ValueError('message_id is required.')
+    trimmed = (content or '').strip()
+    if not trimmed:
+        raise ValueError('content is required.')
+    row = _get_chat_message_row(conn, message_id)
+    if not row:
+        raise ValueError('Message not found.')
+    note_id = row['note_id'] if isinstance(row, sqlite3.Row) else None
+    metadata = _parse_json_column(row['metadata_json']) or {}
+    metadata['edited_at'] = datetime.now(timezone.utc).isoformat()
+    metadata_json = json.dumps(metadata)
+    conn.execute(
+        """
+        UPDATE firecoast_chat_messages
+        SET content = ?, metadata_json = ?
+        WHERE id = ?
+        """,
+        (trimmed, metadata_json, message_id),
+    )
+    if note_id:
+        conn.execute(
+            "UPDATE firecoast_notes SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (note_id,),
+        )
+        _refresh_note_mentions(conn, note_id)
+    refreshed = _get_chat_message_row(conn, message_id)
+    return _serialize_chat_message(conn, refreshed)
+
+
+def _delete_chat_message(conn: sqlite3.Connection, message_id: str) -> Dict[str, Any]:
+    if not message_id:
+        raise ValueError('message_id is required.')
+    row = _get_chat_message_row(conn, message_id)
+    if not row:
+        raise ValueError('Message not found.')
+    note_id = row['note_id'] if isinstance(row, sqlite3.Row) else None
+    attachments = _parse_json_column(row['attachments_json']) or []
+    base_dir = Path(app.config['UPLOAD_FOLDER'])
+    for attachment in attachments:
+        if not isinstance(attachment, dict):
+            continue
+        rel_path = attachment.get('path')
+        if not rel_path:
+            continue
+        file_path = base_dir / rel_path
+        try:
+            if file_path.exists() and file_path.is_file():
+                file_path.unlink()
+        except OSError:
+            app.logger.warning('Failed to remove attachment %s for message %s', rel_path, message_id)
+    conn.execute("DELETE FROM firecoast_chat_reactions WHERE message_id = ?", (message_id,))
+    conn.execute("DELETE FROM firecoast_chat_messages WHERE id = ?", (message_id,))
+    if note_id:
+        conn.execute(
+            "UPDATE firecoast_notes SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (note_id,),
+        )
+        _refresh_note_mentions(conn, note_id)
+    return {'id': message_id, 'note_id': note_id, 'deleted': True}
+
+
+def _forward_chat_message(
+    conn: sqlite3.Connection,
+    message_id: str,
+    target_note_id: str,
+    *,
+    actor: str = 'user',
+) -> Dict[str, Any]:
+    if not message_id:
+        raise ValueError('message_id is required.')
+    if not target_note_id:
+        raise ValueError('target_note_id is required.')
+    original_row = _get_chat_message_row(conn, message_id)
+    if not original_row:
+        raise ValueError('Message not found.')
+    note = _get_note(conn, target_note_id)
+    if not note:
+        raise ValueError('Target note not found.')
+    original = _serialize_chat_row(original_row, None)
+    attachments = _clone_chat_attachments(original.get('attachments'))
+    forwarded_metadata = {
+        'forwarded_from': {
+            'id': original.get('id'),
+            'note_id': original.get('note_id'),
+            'author': original.get('author'),
+            'created_at': original.get('created_at'),
+        }
+    }
+    prefix_author = original.get('author') or 'assistant'
+    forwarded_body = original.get('content') or ''
+    if forwarded_body:
+        preface = f"Forwarded from {prefix_author}:\n\n"
+    else:
+        preface = f"Forwarded message from {prefix_author}"
+    stored = _store_chat_message(
+        conn,
+        target_note_id,
+        actor,
+        f"{preface}{forwarded_body}".strip(),
+        metadata=forwarded_metadata,
+        attachments=attachments,
+    )
+    return stored
 
 
 NOTE_HANDLE_SANITIZE_RE = re.compile(r"[^a-z0-9]+")
@@ -307,6 +601,7 @@ def _generate_note_handle(conn: sqlite3.Connection, note_id: str, title: str) ->
 
 
 def _upsert_note_handle(conn: sqlite3.Connection, note_id: str, title: str) -> str:
+    ensure_record_handle_schema(conn)
     handle = _generate_note_handle(conn, note_id, title)
     search_blob = title.strip().lower()
     conn.execute(
@@ -600,7 +895,7 @@ def _handle_event_command(conn: sqlite3.Connection, note_id: str, content: str) 
     service = get_record_service()
     try:
         normalized = _normalize_calendar_event_payload(conn, payload)
-        created = service.create_record(conn, 'calendar_event', normalized, actor='firecoast-chat')
+        created = service.create_record(conn, 'calendar_event', normalized, actor='firenotes-chat')
         event_payload = _serialize_calendar_event(created['data'])
         window_label = _format_event_window(event_payload, event_payload.get('timezone') or timezone_name)
         message_text = f"Scheduled \"{event_payload['title']}\" for {window_label}."
@@ -661,7 +956,7 @@ def _handle_reminder_command(conn: sqlite3.Connection, note_id: str, content: st
     service = get_record_service()
     try:
         normalized = _normalize_reminder_payload(conn, payload)
-        created = service.create_record(conn, 'reminder', normalized, actor='firecoast-chat')
+        created = service.create_record(conn, 'reminder', normalized, actor='firenotes-chat')
         reminder_payload = _serialize_reminder(created['data'])
         due_label = _format_reminder_due(reminder_payload)
         message_text = f"Reminder \"{reminder_payload['title']}\" {due_label}."
@@ -850,24 +1145,24 @@ def _handle_password_lookup(conn: sqlite3.Connection, note_id: str, text: str) -
     return [message]
 
 
-def _firecoast_help(conn: sqlite3.Connection, note_id: str) -> List[Dict[str, Any]]:
+def _firenotes_help(conn: sqlite3.Connection, note_id: str) -> List[Dict[str, Any]]:
     help_text = "\n".join(
         [
             "Here's what I can do:",
             "• `.reminder Title | tomorrow 9am | notes` to capture a follow-up.",
             "• `.event Planning session | Friday 2pm | 3pm | HQ | bring slides` to schedule a calendar block.",
-            "• `.report list` or `@firecoast run report orders_overview from 2024-01-01 to 2024-03-31` to pull analytics.",
-            "• `@firecoast what's my password for Example` to retrieve saved credentials.",
+            "• `.report list` or `@firenotes run report orders_overview from 2024-01-01 to 2024-03-31` to pull analytics.",
+            "• `@firenotes what's my password for Example` to retrieve saved credentials.",
         ]
     )
     message = _store_chat_message(conn, note_id, 'assistant', help_text, metadata={'action': 'help'})
     return [message]
 
 
-def _handle_firecoast_mention(conn: sqlite3.Connection, note_id: str, content: str) -> List[Dict[str, Any]]:
-    text = content[len('@firecoast'):].strip()
+def _handle_firenotes_mention(conn: sqlite3.Connection, note_id: str, content: str) -> List[Dict[str, Any]]:
+    text = content[len(FIRENOTES_MENTION):].strip()
     if not text:
-        return _firecoast_help(conn, note_id)
+        return _firenotes_help(conn, note_id)
     lowered = text.lower()
     if 'password' in lowered:
         return _handle_password_lookup(conn, note_id, text)
@@ -885,7 +1180,7 @@ def _handle_firecoast_mention(conn: sqlite3.Connection, note_id: str, content: s
             remainder = tokens[2] if len(tokens) > 2 else ''
             return _run_report_via_chat(conn, report_id, remainder, note_id=note_id)
     if 'help' in lowered or 'what can you do' in lowered:
-        return _firecoast_help(conn, note_id)
+        return _firenotes_help(conn, note_id)
     fallback = _store_chat_message(
         conn,
         note_id,
@@ -913,8 +1208,8 @@ def _handle_chat_message(conn: sqlite3.Connection, message: Dict[str, Any]) -> L
         return _handle_reminder_command(conn, note_id, content)
     if lowered.startswith('.report'):
         return _handle_report_command(conn, note_id, content)
-    if lowered.startswith('@firecoast'):
-        return _handle_firecoast_mention(conn, note_id, content)
+    if lowered.startswith(FIRENOTES_MENTION):
+        return _handle_firenotes_mention(conn, note_id, content)
     return []
 
 PHONE_CLEAN_RE = re.compile(r"\D+")
@@ -4288,7 +4583,7 @@ def get_settings():
         settings = {}
 
     defaults = {
-        "company_name": "FireCoast OMS",
+        "company_name": "FireNotes OMS",
         "default_shipping_zip_code": "",
         "default_email_body": "Dear [contactCompany],\n\nPlease find attached the purchase order [orderID] for your records.\n\nWe appreciate your business!\n\nThank you,\n[yourCompany]",
         "timezone": 'UTC',
@@ -4296,8 +4591,8 @@ def get_settings():
         "app_password": "",
         "email_cc": "",
         "email_bcc": "",
-        "invoice_business_name": "FireCoast OMS",
-        "invoice_business_details": "123 Harbor Way\nPortland, OR 97203\nhello@firecoast.com",
+        "invoice_business_name": "FireNotes OMS",
+        "invoice_business_details": "123 Harbor Way\nPortland, OR 97203\nhello@firenotes.com",
         "invoice_brand_color": "#f97316",
         "invoice_logo_data_url": "",
         "invoice_footer": "",
@@ -4476,8 +4771,9 @@ def password_entry_detail(entry_id):
     return jsonify(entry)
 
 
+@app.route('/api/firenotes/notes', methods=['GET', 'POST', 'PATCH', 'DELETE'])
 @app.route('/api/firecoast/notes', methods=['GET', 'POST', 'PATCH', 'DELETE'])
-def api_firecoast_notes():
+def api_firenotes_notes():
     conn = get_db_connection()
     try:
         if request.method == 'GET':
@@ -4527,14 +4823,15 @@ def api_firecoast_notes():
         return jsonify({'note': note})
     except Exception as exc:
         conn.rollback()
-        app.logger.exception("Failed to process FireCoast notes request: %s", exc)
+        app.logger.exception("Failed to process FireNotes notes request: %s", exc)
         return jsonify({'message': 'Unable to process notes request.'}), 500
     finally:
         conn.close()
 
 
+@app.route('/api/firenotes/chat', methods=['GET', 'POST'])
 @app.route('/api/firecoast/chat', methods=['GET', 'POST'])
-def api_firecoast_chat():
+def api_firenotes_chat():
     conn = get_db_connection()
     try:
         if request.method == 'GET':
@@ -4590,8 +4887,95 @@ def api_firecoast_chat():
         return jsonify({'messages': [stored] + responses, 'note': refreshed_note})
     except Exception as exc:
         conn.rollback()
-        app.logger.exception("Failed to process FireCoast chat request: %s", exc)
+        app.logger.exception("Failed to process FireNotes chat request: %s", exc)
         return jsonify({'message': 'Unable to process chat request.'}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/firenotes/chat/reactions', methods=['POST'])
+@app.route('/api/firecoast/chat/reactions', methods=['POST'])
+def api_firenotes_chat_reactions():
+    payload = request.get_json(force=True, silent=True) or {}
+    message_id = (payload.get('message_id') or payload.get('messageId') or '').strip()
+    emoji = (payload.get('emoji') or '').strip()
+    if not message_id or not emoji:
+        return jsonify({'message': 'message_id and emoji are required.'}), 400
+    conn = get_db_connection()
+    try:
+        updated, action = _toggle_chat_reaction(conn, message_id, emoji, DEFAULT_CHAT_REACTOR)
+        conn.commit()
+        return jsonify({'message': updated, 'action': action})
+    except ValueError as exc:
+        conn.rollback()
+        return jsonify({'message': str(exc)}), 400
+    except Exception as exc:
+        conn.rollback()
+        app.logger.exception("Failed to update FireNotes chat reaction: %s", exc)
+        return jsonify({'message': 'Unable to update reaction.'}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/firenotes/chat/messages/<message_id>', methods=['PATCH', 'DELETE'])
+@app.route('/api/firecoast/chat/messages/<message_id>', methods=['PATCH', 'DELETE'])
+def api_firenotes_chat_message(message_id: str):
+    normalized_id = (message_id or '').strip()
+    if not normalized_id:
+        return jsonify({'message': 'message_id is required.'}), 400
+    conn = get_db_connection()
+    try:
+        if request.method == 'DELETE':
+            deleted = _delete_chat_message(conn, normalized_id)
+            note = _get_note(conn, deleted.get('note_id')) if deleted.get('note_id') else None
+            conn.commit()
+            response: Dict[str, Any] = {'message': deleted}
+            if note:
+                response['note'] = note
+            return jsonify(response)
+        payload = request.get_json(force=True, silent=True) or {}
+        content = payload.get('content')
+        updated = _edit_chat_message(conn, normalized_id, content)
+        note_id = updated.get('note_id')
+        note = _get_note(conn, note_id) if note_id else None
+        conn.commit()
+        response: Dict[str, Any] = {'message': updated}
+        if note:
+            response['note'] = note
+        return jsonify(response)
+    except ValueError as exc:
+        conn.rollback()
+        return jsonify({'message': str(exc)}), 404
+    except Exception as exc:
+        conn.rollback()
+        app.logger.exception("Failed to update FireNotes chat message: %s", exc)
+        return jsonify({'message': 'Unable to update message.'}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/firenotes/chat/forward', methods=['POST'])
+@app.route('/api/firecoast/chat/forward', methods=['POST'])
+def api_firenotes_chat_forward():
+    payload = request.get_json(force=True, silent=True) or {}
+    message_id = (payload.get('message_id') or payload.get('messageId') or '').strip()
+    target_note_id = (payload.get('target_note_id') or payload.get('targetNoteId') or '').strip()
+    conn = get_db_connection()
+    try:
+        forwarded = _forward_chat_message(conn, message_id, target_note_id)
+        note = _get_note(conn, forwarded.get('note_id')) if forwarded.get('note_id') else None
+        conn.commit()
+        response: Dict[str, Any] = {'message': forwarded}
+        if note:
+            response['note'] = note
+        return jsonify(response), 201
+    except ValueError as exc:
+        conn.rollback()
+        return jsonify({'message': str(exc)}), 400
+    except Exception as exc:
+        conn.rollback()
+        app.logger.exception("Failed to forward FireNotes chat message: %s", exc)
+        return jsonify({'message': 'Unable to forward message.'}), 500
     finally:
         conn.close()
 
@@ -4603,9 +4987,10 @@ def manage_items_page(): return render_template('manage_items.html')
 @app.route('/manage/packages')
 def manage_packages_page(): return render_template('manage_packages.html')
 
+@app.route('/firenotes')
 @app.route('/firecoast')
-def firecoast_chat_page():
-    return render_template('firecoast_chat.html')
+def firenotes_chat_page():
+    return render_template('firenotes_chat.html')
 
 @app.route('/settings')
 def settings_page():

@@ -3,23 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FireCoast DM</title>
+    <title>FireNotes DM</title>
     <link rel="icon" href="/favicon.ico" type="image/x-icon">
     <link rel="stylesheet" href="/assets/css/styles.css">
-    <link rel="stylesheet" href="/assets/css/firecoast_chat.css">
+    <link rel="stylesheet" href="/assets/css/firenotes_chat.css">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script type="text/babel" src="/assets/js/record_mentions.jsx"></script>
 </head>
-<body class="bg-slate-50 min-h-screen font-sans firecoast-chat">
+<body class="bg-slate-50 min-h-screen font-sans firenotes-chat">
     <a class="fc-screen-reader-only" href="#fc-chat-log">Skip to chat</a>
     <nav class="bg-slate-900 text-white shadow">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex h-16 items-center justify-between">
                 <div class="flex items-center space-x-10">
-                    <a id="nav-home-link" href="/dashboard" class="text-lg font-semibold tracking-wide" aria-label="Return to dashboard">FireCoast OMS</a>
+                    <a id="nav-home-link" href="/dashboard" class="text-lg font-semibold tracking-wide" aria-label="Return to dashboard">FireNotes OMS</a>
                     <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
                         <a href="/orders" class="hover:text-orange-300 transition">Orders</a>
                         <a href="/contacts" class="hover:text-orange-300 transition">Contacts</a>
@@ -27,7 +27,7 @@
                         <a href="/reminders" class="hover:text-orange-300 transition">Reminders</a>
                         <a href="/calendar" class="hover:text-orange-300 transition">Calendar</a>
                         <a href="/passwords" class="hover:text-orange-300 transition">Password Manager</a>
-                        <a href="/firecoast" class="text-orange-300">FireCoast Chat</a>
+                        <a href="/firenotes" class="text-orange-300">FireNotes Chat</a>
                     </div>
                 </div>
                 <div class="flex items-center space-x-3 text-sm font-medium">
@@ -44,7 +44,13 @@
             <aside class="fc-notes" aria-label="Notes">
                 <div class="fc-notes__search">
                     <label class="fc-screen-reader-only" for="fc-note-search">Search or create note</label>
-                    <input id="fc-note-search" class="fc-notes__search-input" type="search" placeholder="Search or create note" autocomplete="off">
+                    <div class="fc-notes__search-row">
+                        <input id="fc-note-search" class="fc-notes__search-input" type="search" placeholder="Search or create note" autocomplete="off">
+                        <button type="button" id="fc-create-note" class="fc-notes__create-button" aria-label="Create a new note">
+                            <span class="fc-notes__create-icon" aria-hidden="true">＋</span>
+                            <span class="fc-notes__create-label">New</span>
+                        </button>
+                    </div>
                 </div>
                 <div id="fc-note-list" class="fc-notes__list" role="listbox" aria-label="Saved notes"></div>
                 <p id="fc-no-notes" class="fc-notes__empty" hidden></p>
@@ -128,6 +134,7 @@
         (function () {
             const notesListEl = document.getElementById('fc-note-list');
             const noteSearchEl = document.getElementById('fc-note-search');
+            const createNoteButton = document.getElementById('fc-create-note');
             const noteEmptyEl = document.getElementById('fc-no-notes');
             const noteTitleEl = document.getElementById('fc-note-title');
             const noteHandleButton = document.getElementById('fc-note-handle');
@@ -143,6 +150,13 @@
             const mentionRootEl = document.getElementById('fc-mention-root');
             const errorEl = document.getElementById('fc-error');
 
+            const API_BASE = '/api/firenotes';
+            const REACTION_ENDPOINT = `${API_BASE}/chat/reactions`;
+            const MESSAGE_ENDPOINT = `${API_BASE}/chat/messages`;
+            const FORWARD_ENDPOINT = `${API_BASE}/chat/forward`;
+            const REACTION_OPTIONS = ['👍', '✅', '🔥', '🎉', '❗'];
+            const QUICK_REACTIONS_LIMIT = 3;
+
             const state = {
                 notes: [],
                 messages: [],
@@ -157,8 +171,90 @@
                 error: null,
                 composerValue: '',
                 composerDisabled: true,
+                recentReactions: REACTION_OPTIONS.slice(0, QUICK_REACTIONS_LIMIT),
+                activeMessageEdit: null,
+                pendingMessageAction: null,
+            };
+            const pendingReactions = new Set();
+            let activePopover = null;
+
+            const handlePopoverDocumentClick = (event) => {
+                if (!activePopover) {
+                    return;
+                }
+                const { element, anchor } = activePopover;
+                if (element && element.contains(event.target)) {
+                    return;
+                }
+                if (anchor && anchor.contains(event.target)) {
+                    return;
+                }
+                closeActivePopover();
             };
 
+            const closeActivePopover = () => {
+                if (!activePopover) {
+                    return;
+                }
+                const { element, cleanup } = activePopover;
+                if (typeof cleanup === 'function') {
+                    try {
+                        cleanup();
+                    } catch (error) {
+                        console.debug('Popover cleanup failed', error);
+                    }
+                }
+                if (element && element.parentNode) {
+                    element.parentNode.removeChild(element);
+                }
+                document.removeEventListener('mousedown', handlePopoverDocumentClick, true);
+                window.removeEventListener('resize', closeActivePopover);
+                window.removeEventListener('scroll', closeActivePopover, true);
+                activePopover = null;
+            };
+
+            const openPopover = (anchor, buildContent, options = {}) => {
+                if (typeof buildContent !== 'function') {
+                    return null;
+                }
+                closeActivePopover();
+                const popover = document.createElement('div');
+                popover.className = 'fc-popover';
+                popover.style.visibility = 'hidden';
+                const content = buildContent(popover);
+                if (content instanceof Node) {
+                    popover.appendChild(content);
+                }
+                document.body.appendChild(popover);
+                const rect = anchor.getBoundingClientRect();
+                const offsetY = Number.isFinite(options.offsetY) ? options.offsetY : 8;
+                const offsetX = Number.isFinite(options.offsetX) ? options.offsetX : 0;
+                const width = popover.offsetWidth;
+                const height = popover.offsetHeight;
+                let top = rect.bottom + offsetY + window.scrollY;
+                let left = rect.right - width + offsetX + window.scrollX;
+                if (left < 8) {
+                    left = rect.left + window.scrollX;
+                }
+                const viewportBottom = window.scrollY + window.innerHeight;
+                if (top + height > viewportBottom && rect.top - height - offsetY > 0) {
+                    top = rect.top - height - offsetY + window.scrollY;
+                }
+                popover.style.top = `${Math.max(0, top)}px`;
+                popover.style.left = `${Math.max(8, left)}px`;
+                popover.style.visibility = 'visible';
+                activePopover = {
+                    element: popover,
+                    anchor,
+                    cleanup: options.onClose,
+                };
+                setTimeout(() => {
+                    document.addEventListener('mousedown', handlePopoverDocumentClick, true);
+                    window.addEventListener('resize', closeActivePopover);
+                    window.addEventListener('scroll', closeActivePopover, true);
+                }, 0);
+                return popover;
+            };
             const MAX_COMPOSER_HEIGHT = 220;
             let autoCreatingNote = false;
             const mentionEntityTypes = null;
@@ -180,6 +276,12 @@
                 textareaComponent: null,
                 textComponent: null,
                 renderScheduled: false,
+            };
+
+            const mentionDirectory = {
+                handles: [],
+                isLoading: false,
+                error: null,
             };
 
             const cleanupMentionTextRoots = () => {
@@ -287,6 +389,36 @@
                 }
                 mentionComposer.root = window.ReactDOM.createRoot(mentionRootEl);
                 renderMentionComposer();
+            };
+
+            const refreshMentionDirectory = async () => {
+                mentionDirectory.isLoading = true;
+                mentionDirectory.error = null;
+                try {
+                    const params = new URLSearchParams();
+                    if (mentionEntityTypes && Array.isArray(mentionEntityTypes) && mentionEntityTypes.length) {
+                        params.set('entity_types', mentionEntityTypes.join(','));
+                    } else if (typeof mentionEntityTypes === 'string' && mentionEntityTypes.trim()) {
+                        params.set('entity_types', mentionEntityTypes.trim());
+                    }
+                    const query = params.toString();
+                    const response = await fetch(query ? `/api/records/handles?${query}` : '/api/records/handles');
+                    if (!response.ok) {
+                        throw new Error('Failed to load mention handles');
+                    }
+                    const payload = await response.json();
+                    const handles = Array.isArray(payload.handles) ? payload.handles : [];
+                    mentionDirectory.handles = handles;
+                    if (mentionComposer.useMentionComponent) {
+                        refreshMentionHandles();
+                    }
+                } catch (error) {
+                    mentionDirectory.error = error;
+                    console.debug('Unable to refresh mention directory', error);
+                } finally {
+                    mentionDirectory.isLoading = false;
+                }
+                return mentionDirectory.handles;
             };
 
             const getComposerValue = () => {
@@ -473,8 +605,8 @@
                     if (noteEmptyEl) {
                         noteEmptyEl.hidden = false;
                         noteEmptyEl.textContent = trimmedQuery
-                            ? `No notes match "${trimmedQuery}". Press Enter to create it.`
-                            : 'Create a note to get started.';
+                            ? `No notes match "${trimmedQuery}". Press Enter or click New to create it.`
+                            : 'Click "New" to create your first note.';
                     }
                     return;
                 }
@@ -820,6 +952,660 @@
                 }
             };
 
+            const getReactionKey = (messageId, emoji) => `${messageId}:${emoji}`;
+
+            const updateRecentReactions = (emoji) => {
+                if (!emoji) {
+                    return;
+                }
+                const normalized = String(emoji).trim();
+                if (!normalized) {
+                    return;
+                }
+                const current = Array.isArray(state.recentReactions)
+                    ? state.recentReactions.slice()
+                    : [];
+                const filtered = current.filter((entry) => entry !== normalized);
+                filtered.unshift(normalized);
+                state.recentReactions = filtered.slice(0, QUICK_REACTIONS_LIMIT);
+            };
+
+            const getQuickReactionOptions = () => {
+                const seen = new Set();
+                const merged = [];
+                (state.recentReactions || []).forEach((emoji) => {
+                    if (!emoji || seen.has(emoji)) {
+                        return;
+                    }
+                    seen.add(emoji);
+                    merged.push(emoji);
+                });
+                REACTION_OPTIONS.forEach((emoji) => {
+                    if (!emoji || seen.has(emoji)) {
+                        return;
+                    }
+                    seen.add(emoji);
+                    merged.push(emoji);
+                });
+                return merged.slice(0, QUICK_REACTIONS_LIMIT);
+            };
+
+            const isReactionPending = (messageId, emoji) => {
+                if (!messageId || !emoji) {
+                    return false;
+                }
+                return pendingReactions.has(getReactionKey(messageId, emoji));
+            };
+
+            const setReactionPending = (messageId, emoji, pending) => {
+                if (!messageId || !emoji) {
+                    return;
+                }
+                const key = getReactionKey(messageId, emoji);
+                if (pending) {
+                    pendingReactions.add(key);
+                } else {
+                    pendingReactions.delete(key);
+                }
+            };
+
+            const upsertMessage = (message) => {
+                if (!message || !message.id) {
+                    return;
+                }
+                const index = state.messages.findIndex((entry) => entry.id === message.id);
+                if (index >= 0) {
+                    const existing = state.messages[index];
+                    state.messages[index] = { ...existing, ...message };
+                } else {
+                    state.messages.push(message);
+                }
+            };
+
+            const handleReactionToggle = async (messageId, emoji) => {
+                if (!messageId || !emoji) {
+                    return;
+                }
+                if (isReactionPending(messageId, emoji)) {
+                    return;
+                }
+                setReactionPending(messageId, emoji, true);
+                renderMessages();
+                try {
+                    const response = await fetch(REACTION_ENDPOINT, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ message_id: messageId, emoji }),
+                    });
+                    if (!response.ok) {
+                        throw new Error('Failed to update reaction');
+                    }
+                    const payload = await response.json();
+                    if (payload && payload.message) {
+                        upsertMessage(payload.message);
+                        clearError();
+                        if (payload.action === 'added') {
+                            updateRecentReactions(emoji);
+                        }
+                    }
+                } catch (error) {
+                    console.error('Failed to toggle reaction', error);
+                    showError('Unable to update reaction.');
+                } finally {
+                    setReactionPending(messageId, emoji, false);
+                    renderMessages();
+                }
+            };
+
+            const createReactionButton = (message, emoji, summary) => {
+                if (!message || !message.id || !emoji) {
+                    return null;
+                }
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'fc-reaction';
+                const reacted = summary && summary.reacted;
+                const count = summary && Number.isFinite(summary.count) ? Number(summary.count) : 0;
+                button.textContent = count > 0 ? `${emoji} ${count}` : emoji;
+                button.setAttribute('aria-pressed', reacted ? 'true' : 'false');
+                if (reacted) {
+                    button.classList.add('is-active');
+                }
+                const pending = isReactionPending(message.id, emoji);
+                if (pending) {
+                    button.classList.add('is-pending');
+                    button.disabled = true;
+                }
+                button.addEventListener('click', () => {
+                    handleReactionToggle(message.id, emoji);
+                });
+                let description = `React with ${emoji}`;
+                if (summary && Array.isArray(summary.reactors) && summary.reactors.length) {
+                    description = `${emoji} reaction from ${summary.reactors.join(', ')}`;
+                }
+                button.title = description;
+                button.setAttribute('aria-label', description);
+                if (count === 0) {
+                    button.classList.add('fc-reaction--ghost');
+                }
+                return button;
+            };
+
+            const renderReactionRow = (message) => {
+                if (!message || !message.id) {
+                    return null;
+                }
+                const container = document.createElement('div');
+                container.className = 'fc-message__reactions';
+                let hasVisible = false;
+                if (Array.isArray(message.reactions)) {
+                    message.reactions.forEach((reaction) => {
+                        if (!reaction || !reaction.emoji) {
+                            return;
+                        }
+                        const button = createReactionButton(message, reaction.emoji, reaction);
+                        if (button) {
+                            container.appendChild(button);
+                            hasVisible = true;
+                        }
+                    });
+                }
+                if (!hasVisible) {
+                    return null;
+                }
+                return container;
+            };
+
+            const isUserMessage = (message) => {
+                return String(message && message.author && message.author.toLowerCase()) === 'user';
+            };
+
+            const isMessageBeingEdited = (messageId) => {
+                return Boolean(state.activeMessageEdit && state.activeMessageEdit.id === messageId);
+            };
+
+            const setMessageEditValue = (value) => {
+                if (!state.activeMessageEdit) {
+                    return;
+                }
+                state.activeMessageEdit = {
+                    ...state.activeMessageEdit,
+                    value,
+                };
+            };
+
+            const startMessageEdit = (message) => {
+                if (!message || !message.id) {
+                    return;
+                }
+                closeActivePopover();
+                state.activeMessageEdit = {
+                    id: message.id,
+                    noteId: message.note_id,
+                    value: message.content || '',
+                    pending: false,
+                };
+                renderMessages();
+                scheduleFrame(() => {
+                    const textarea = document.querySelector(`[data-edit-textarea="${message.id}"]`);
+                    if (textarea) {
+                        textarea.focus();
+                        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+                    }
+                });
+            };
+
+            const cancelMessageEdit = () => {
+                if (!state.activeMessageEdit) {
+                    return;
+                }
+                state.activeMessageEdit = null;
+                renderMessages();
+            };
+
+            const submitMessageEdit = async () => {
+                const editState = state.activeMessageEdit;
+                if (!editState || editState.pending) {
+                    return;
+                }
+                const messageId = editState.id;
+                const content = editState.value || '';
+                const trimmed = normalizePreview(content);
+                if (!trimmed) {
+                    showError('Add some text before saving edits.');
+                    return;
+                }
+                const originalState = { ...editState };
+                state.activeMessageEdit = { ...editState, pending: true };
+                renderMessages();
+                try {
+                    const response = await fetch(`${MESSAGE_ENDPOINT}/${encodeURIComponent(messageId)}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ content }),
+                    });
+                    if (!response.ok) {
+                        throw new Error('Failed to save message edits');
+                    }
+                    const payload = await response.json();
+                    if (payload.message) {
+                        upsertMessage(payload.message);
+                    }
+                    if (payload.note) {
+                        updateNoteFromResponse(payload.note);
+                    }
+                    state.activeMessageEdit = null;
+                    clearError();
+                } catch (error) {
+                    console.error('Failed to update message', error);
+                    showError('Unable to update that message.');
+                    state.activeMessageEdit = { ...originalState, pending: false };
+                } finally {
+                    renderMessages();
+                }
+            };
+
+            const replyToMessage = (message) => {
+                if (!message) {
+                    return;
+                }
+                closeActivePopover();
+                const content = message.content || '';
+                const replyBlock = content
+                    ? content
+                          .split('\n')
+                          .map((line) => `> ${line}`)
+                          .join('\n')
+                    : '';
+                const existing = getComposerValue();
+                const authorLabel = formatMessageAuthorLabel(message.author);
+                const mention = authorLabel.startsWith('@')
+                    ? authorLabel
+                    : `@${authorLabel.toLowerCase()}`;
+                const segments = [];
+                if (existing) {
+                    segments.push(existing.trimEnd());
+                }
+                if (replyBlock) {
+                    segments.push(replyBlock);
+                }
+                segments.push(`${mention} `);
+                const composed = segments.join('\n');
+                setComposerValue(composed, { forceRender: true });
+                scheduleFrame(() => {
+                    const textarea = getActiveTextarea();
+                    if (textarea) {
+                        textarea.focus();
+                        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+                    }
+                });
+            };
+
+            const setPendingMessageAction = (action) => {
+                state.pendingMessageAction = action;
+            };
+
+            const isMessageActionPending = (messageId) => {
+                const pending = state.pendingMessageAction;
+                return Boolean(pending && pending.messageId === messageId);
+            };
+
+            const handleDeleteMessage = async (message) => {
+                if (!message || !message.id) {
+                    return;
+                }
+                const confirmDelete = window.confirm('Delete this message?');
+                if (!confirmDelete) {
+                    return;
+                }
+                closeActivePopover();
+                setPendingMessageAction({ type: 'delete', messageId: message.id });
+                renderMessages();
+                try {
+                    const response = await fetch(`${MESSAGE_ENDPOINT}/${encodeURIComponent(message.id)}`, {
+                        method: 'DELETE',
+                    });
+                    if (!response.ok) {
+                        throw new Error('Failed to delete');
+                    }
+                    const payload = await response.json();
+                    state.messages = state.messages.filter((entry) => entry.id !== message.id);
+                    if (payload.note) {
+                        updateNoteFromResponse(payload.note);
+                    }
+                    clearError();
+                } catch (error) {
+                    console.error('Failed to delete message', error);
+                    showError('Unable to delete that message.');
+                } finally {
+                    setPendingMessageAction(null);
+                    renderMessages();
+                }
+            };
+
+            const handleForwardMessage = async (message, targetNoteId) => {
+                if (!message || !message.id || !targetNoteId) {
+                    return;
+                }
+                closeActivePopover();
+                setPendingMessageAction({ type: 'forward', messageId: message.id });
+                renderMessages();
+                try {
+                    const response = await fetch(FORWARD_ENDPOINT, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ message_id: message.id, target_note_id: targetNoteId }),
+                    });
+                    if (!response.ok) {
+                        throw new Error('Failed to forward');
+                    }
+                    const payload = await response.json();
+                    if (payload.message) {
+                        if (payload.message.note_id === state.activeNoteId) {
+                            upsertMessage(payload.message);
+                        }
+                    }
+                    if (payload.note) {
+                        updateNoteFromResponse(payload.note);
+                    }
+                    clearError();
+                } catch (error) {
+                    console.error('Failed to forward message', error);
+                    showError('Unable to forward that message.');
+                } finally {
+                    setPendingMessageAction(null);
+                    renderMessages();
+                }
+            };
+
+            const handleCopyMessageText = async (message) => {
+                if (!navigator.clipboard || !message) {
+                    return;
+                }
+                try {
+                    await navigator.clipboard.writeText(message.content || '');
+                    closeActivePopover();
+                } catch (error) {
+                    console.error('Failed to copy message text', error);
+                    showError('Unable to copy message text.');
+                }
+            };
+
+            const handleCopyMessageLink = async (message) => {
+                if (!navigator.clipboard || !message || !message.id) {
+                    return;
+                }
+                const origin = window.location.origin || window.location.href;
+                const url = `${origin.replace(/\/#?$/, '')}/firenotes#message-${message.id}`;
+                try {
+                    await navigator.clipboard.writeText(url);
+                    closeActivePopover();
+                } catch (error) {
+                    console.error('Failed to copy message link', error);
+                    showError('Unable to copy message link.');
+                }
+            };
+
+            const openReactionPicker = (anchor, message) => {
+                if (!anchor || !message) {
+                    return;
+                }
+                openPopover(anchor, () => {
+                    const container = document.createElement('div');
+                    container.className = 'fc-popover__emoji';
+                    REACTION_OPTIONS.forEach((emoji) => {
+                        const button = document.createElement('button');
+                        button.type = 'button';
+                        button.className = 'fc-popover__emoji-button';
+                        button.textContent = emoji;
+                        button.setAttribute('aria-label', `React with ${emoji}`);
+                        button.addEventListener('click', (event) => {
+                            event.preventDefault();
+                            closeActivePopover();
+                            handleReactionToggle(message.id, emoji);
+                        });
+                        container.appendChild(button);
+                    });
+                    return container;
+                });
+            };
+
+            const openForwardPicker = (anchor, message) => {
+                if (!anchor || !message) {
+                    return;
+                }
+                openPopover(anchor, () => {
+                    const panel = document.createElement('div');
+                    panel.className = 'fc-popover__panel';
+                    const title = document.createElement('div');
+                    title.className = 'fc-popover__title';
+                    title.textContent = 'Forward message to…';
+                    panel.appendChild(title);
+                    const list = document.createElement('div');
+                    list.className = 'fc-popover__list';
+                    const notes = Array.isArray(state.notes) ? state.notes : [];
+                    if (!notes.length) {
+                        const empty = document.createElement('div');
+                        empty.className = 'fc-popover__empty';
+                        empty.textContent = 'No notes available';
+                        panel.appendChild(empty);
+                        return panel;
+                    }
+                    notes.forEach((note) => {
+                        if (!note || !note.id) {
+                            return;
+                        }
+                        const item = document.createElement('button');
+                        item.type = 'button';
+                        item.className = 'fc-popover__item';
+                        item.textContent = note.title || 'Untitled note';
+                        if (state.pendingMessageAction && state.pendingMessageAction.messageId === message.id) {
+                            item.disabled = true;
+                        }
+                        item.addEventListener('click', (event) => {
+                            event.preventDefault();
+                            handleForwardMessage(message, note.id);
+                        });
+                        list.appendChild(item);
+                    });
+                    panel.appendChild(list);
+                    return panel;
+                });
+            };
+
+            const openMessageMenu = (anchor, message) => {
+                if (!anchor || !message) {
+                    return;
+                }
+                openPopover(anchor, () => {
+                    const menu = document.createElement('div');
+                    menu.className = 'fc-popover__menu';
+                    const addItem = (label, handler, options = {}) => {
+                        const item = document.createElement('button');
+                        item.type = 'button';
+                        item.className = 'fc-popover__menu-item';
+                        if (options.destructive) {
+                            item.classList.add('is-destructive');
+                        }
+                        item.textContent = label;
+                        if (options.disabled) {
+                            item.disabled = true;
+                        }
+                        item.addEventListener('click', (event) => {
+                            event.preventDefault();
+                            handler();
+                        });
+                        menu.appendChild(item);
+                    };
+                    addItem('Add Reaction', () => {
+                        closeActivePopover();
+                        openReactionPicker(anchor, message);
+                    });
+                    if (isUserMessage(message)) {
+                        addItem('Edit Message', () => {
+                            startMessageEdit(message);
+                        }, { disabled: isMessageBeingEdited(message.id) });
+                    }
+                    addItem('Reply', () => {
+                        replyToMessage(message);
+                    });
+                    addItem('Forward', () => {
+                        openForwardPicker(anchor, message);
+                    });
+                    addItem('Copy Text', () => {
+                        handleCopyMessageText(message);
+                    });
+                    addItem('Copy Message Link', () => {
+                        handleCopyMessageLink(message);
+                    });
+                    if (isUserMessage(message)) {
+                        addItem(
+                            'Delete Message',
+                            () => {
+                                handleDeleteMessage(message);
+                            },
+                            { destructive: true }
+                        );
+                    }
+                    return menu;
+                });
+            };
+
+            const createToolbarButton = (label, icon, handler) => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'fc-message__toolbar-button';
+                button.title = label;
+                button.setAttribute('aria-label', label);
+                if (icon) {
+                    const iconSpan = document.createElement('span');
+                    iconSpan.className = 'fc-message__toolbar-icon';
+                    iconSpan.textContent = icon;
+                    button.appendChild(iconSpan);
+                }
+                button.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    handler(event.currentTarget || button);
+                });
+                return button;
+            };
+
+            const createQuickReactionButton = (message, emoji) => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'fc-message__toolbar-button fc-message__toolbar-button--emoji';
+                button.textContent = emoji;
+                button.setAttribute('aria-label', `React with ${emoji}`);
+                if (isReactionPending(message.id, emoji) || isMessageActionPending(message.id)) {
+                    button.disabled = true;
+                }
+                button.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    handleReactionToggle(message.id, emoji);
+                });
+                return button;
+            };
+
+            const createMessageToolbar = (message) => {
+                const toolbar = document.createElement('div');
+                toolbar.className = 'fc-message__toolbar';
+                if (!message || !message.id) {
+                    return toolbar;
+                }
+                const quickGroup = document.createElement('div');
+                quickGroup.className = 'fc-message__toolbar-group fc-message__toolbar-group--reactions';
+                getQuickReactionOptions().forEach((emoji) => {
+                    quickGroup.appendChild(createQuickReactionButton(message, emoji));
+                });
+                if (quickGroup.children.length) {
+                    toolbar.appendChild(quickGroup);
+                }
+                const actionsGroup = document.createElement('div');
+                actionsGroup.className = 'fc-message__toolbar-group';
+                const addReactionButton = createToolbarButton('Add reaction', '😊', (anchor) => {
+                    openReactionPicker(anchor, message);
+                });
+                actionsGroup.appendChild(addReactionButton);
+                if (isUserMessage(message)) {
+                    const editButton = createToolbarButton('Edit message', '✏️', () => {
+                        startMessageEdit(message);
+                    });
+                    if (isMessageBeingEdited(message.id)) {
+                        editButton.disabled = true;
+                    }
+                    actionsGroup.appendChild(editButton);
+                }
+                const forwardButton = createToolbarButton('Forward message', '↗', (anchor) => {
+                    openForwardPicker(anchor, message);
+                });
+                if (isMessageActionPending(message.id)) {
+                    forwardButton.disabled = true;
+                }
+                actionsGroup.appendChild(forwardButton);
+                const menuButton = createToolbarButton('More actions', '⋯', (anchor) => {
+                    openMessageMenu(anchor, message);
+                });
+                actionsGroup.appendChild(menuButton);
+                toolbar.appendChild(actionsGroup);
+                return toolbar;
+            };
+
+            const createMessageEditForm = (message, editState) => {
+                const form = document.createElement('form');
+                form.className = 'fc-message__edit';
+                const textarea = document.createElement('textarea');
+                textarea.className = 'fc-message__edit-input';
+                textarea.value = editState.value || '';
+                textarea.rows = Math.min(12, Math.max(3, textarea.value.split('\n').length));
+                textarea.setAttribute('data-edit-textarea', message.id);
+                textarea.addEventListener('input', () => {
+                    setMessageEditValue(textarea.value);
+                });
+                form.appendChild(textarea);
+                const actions = document.createElement('div');
+                actions.className = 'fc-message__edit-actions';
+                const saveButton = document.createElement('button');
+                saveButton.type = 'submit';
+                saveButton.className = 'fc-button fc-button--primary';
+                saveButton.textContent = editState.pending ? 'Saving…' : 'Save';
+                saveButton.disabled = !!editState.pending;
+                const cancelButton = document.createElement('button');
+                cancelButton.type = 'button';
+                cancelButton.className = 'fc-button';
+                cancelButton.textContent = 'Cancel';
+                cancelButton.disabled = !!editState.pending;
+                cancelButton.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    cancelMessageEdit();
+                });
+                actions.appendChild(cancelButton);
+                actions.appendChild(saveButton);
+                form.appendChild(actions);
+                form.addEventListener('submit', (event) => {
+                    event.preventDefault();
+                    submitMessageEdit();
+                });
+                return form;
+            };
+
+            const formatMessageAuthorLabel = (author) => {
+                const normalized = String(author || '').trim();
+                if (!normalized) {
+                    return '@firenotes';
+                }
+                const lowered = normalized.toLowerCase();
+                if (lowered === 'user') {
+                    return 'You';
+                }
+                if (lowered === 'assistant') {
+                    return '@firenotes';
+                }
+                if (normalized.startsWith('@')) {
+                    return normalized;
+                }
+                return `@${normalized}`;
+            };
+
             const createMessageElement = (message) => {
                 const author = (message.author || '').toLowerCase();
                 const isUser = author === 'user';
@@ -828,13 +1614,28 @@
                 if (message.id) {
                     wrapper.id = `message-${message.id}`;
                 }
+                if (isMessageActionPending(message.id)) {
+                    wrapper.classList.add('is-processing');
+                }
+                const metadata = message.metadata || {};
+                const editingState = isMessageBeingEdited(message.id) ? state.activeMessageEdit : null;
+                if (editingState) {
+                    wrapper.classList.add('is-editing');
+                }
+
+                const bubble = document.createElement('div');
+                bubble.className = 'fc-message__bubble';
+
+                const main = document.createElement('div');
+                main.className = 'fc-message__main';
 
                 const header = document.createElement('div');
                 header.className = 'fc-message__header';
 
                 const authorLabel = document.createElement('span');
                 authorLabel.className = 'fc-message__author';
-                authorLabel.textContent = isUser ? 'You' : '@firecoast';
+                authorLabel.textContent = formatMessageAuthorLabel(message.author);
+                header.appendChild(authorLabel);
 
                 const timestamp = document.createElement('time');
                 timestamp.className = 'fc-message__timestamp';
@@ -845,23 +1646,24 @@
                         timestamp.textContent = stampLabel;
                     }
                 }
-
-                header.appendChild(authorLabel);
                 header.appendChild(timestamp);
+
+                if (metadata.edited_at) {
+                    const editedIndicator = document.createElement('span');
+                    editedIndicator.className = 'fc-message__edited';
+                    editedIndicator.textContent = '(edited)';
+                    header.appendChild(editedIndicator);
+                }
+
+                main.appendChild(header);
 
                 const body = document.createElement('div');
                 body.className = 'fc-message__body';
 
-                if (message.content) {
-                    const text = document.createElement('div');
-                    text.className = 'fc-message__text';
-                    if (!renderMentionText(text, message.content)) {
-                        text.textContent = message.content;
+                const appendAttachments = () => {
+                    if (!Array.isArray(message.attachments) || !message.attachments.length) {
+                        return;
                     }
-                    body.appendChild(text);
-                }
-
-                if (Array.isArray(message.attachments) && message.attachments.length) {
                     const attachments = document.createElement('div');
                     attachments.className = 'fc-message__attachments';
                     message.attachments.forEach((attachment) => {
@@ -884,15 +1686,50 @@
                         }
                     });
                     body.appendChild(attachments);
+                };
+
+                if (editingState) {
+                    body.appendChild(createMessageEditForm(message, editingState));
+                    appendAttachments();
+                } else {
+                    if (metadata.forwarded_from) {
+                        const forwarded = document.createElement('div');
+                        forwarded.className = 'fc-message__forwarded';
+                        const forwardedAuthor = formatMessageAuthorLabel(metadata.forwarded_from.author);
+                        const forwardedStamp = metadata.forwarded_from.created_at
+                            ? formatTimestamp(metadata.forwarded_from.created_at, true)
+                            : null;
+                        forwarded.textContent = forwardedStamp
+                            ? `Forwarded from ${forwardedAuthor} · ${forwardedStamp}`
+                            : `Forwarded from ${forwardedAuthor}`;
+                        body.appendChild(forwarded);
+                    }
+                    if (message.content) {
+                        const text = document.createElement('div');
+                        text.className = 'fc-message__text';
+                        if (!renderMentionText(text, message.content)) {
+                            text.textContent = message.content;
+                        }
+                        body.appendChild(text);
+                    }
+                    appendAttachments();
+                    const metadataDetails = createMetadataDetails(metadata);
+                    if (metadataDetails) {
+                        body.appendChild(metadataDetails);
+                    }
+                    const reactionsRow = renderReactionRow(message);
+                    if (reactionsRow) {
+                        body.appendChild(reactionsRow);
+                    }
                 }
 
-                const metadataDetails = createMetadataDetails(message.metadata);
-                if (metadataDetails) {
-                    body.appendChild(metadataDetails);
-                }
+                main.appendChild(body);
+                bubble.appendChild(main);
 
-                wrapper.appendChild(header);
-                wrapper.appendChild(body);
+                const toolbar = createMessageToolbar(message);
+                bubble.appendChild(toolbar);
+
+                wrapper.appendChild(bubble);
                 return wrapper;
             };
 
@@ -925,7 +1762,14 @@
                 if (!chatLogEl) {
                     return;
                 }
+                if (
+                    state.activeMessageEdit &&
+                    !state.messages.some((entry) => entry && entry.id === state.activeMessageEdit.id)
+                ) {
+                    state.activeMessageEdit = null;
+                }
                 cleanupMentionTextRoots();
+                closeActivePopover();
                 chatLogEl.innerHTML = '';
                 if (!state.activeNoteId) {
                     const empty = document.createElement('div');
@@ -1077,12 +1921,13 @@
                     renderMessages();
                 }
                 try {
-                    const response = await fetch(`/api/firecoast/chat?noteId=${encodeURIComponent(noteId)}&limit=400`);
+                    const response = await fetch(`${API_BASE}/chat?noteId=${encodeURIComponent(noteId)}&limit=400`);
                     if (!response.ok) {
                         throw new Error('Failed to load messages');
                     }
                     const payload = await response.json();
                     state.messages = Array.isArray(payload.messages) ? payload.messages : [];
+                    pendingReactions.clear();
                     if (payload.note) {
                         state.activeNote = payload.note;
                         state.activeNoteId = payload.note.id;
@@ -1123,7 +1968,7 @@
             };
 
             const createNote = async (title) => {
-                const response = await fetch('/api/firecoast/notes', {
+                const response = await fetch(`${API_BASE}/notes`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ title }),
@@ -1139,7 +1984,7 @@
             };
 
             const deleteNote = async (noteId) => {
-                const response = await fetch('/api/firecoast/notes', {
+                const response = await fetch(`${API_BASE}/notes`, {
                     method: 'DELETE',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ id: noteId }),
@@ -1156,7 +2001,7 @@
                     state.isLoadingNotes = true;
                 }
                 try {
-                    const response = await fetch('/api/firecoast/notes');
+                    const response = await fetch(`${API_BASE}/notes`);
                     if (!response.ok) {
                         throw new Error('Failed to load notes');
                     }
@@ -1212,12 +2057,12 @@
                         state.pendingFiles.forEach((item) => {
                             formData.append('attachments', item.file, item.file.name);
                         });
-                        response = await fetch('/api/firecoast/chat', {
+                        response = await fetch(`${API_BASE}/chat`, {
                             method: 'POST',
                             body: formData,
                         });
                     } else {
-                        response = await fetch('/api/firecoast/chat', {
+                        response = await fetch(`${API_BASE}/chat`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ note_id: state.activeNoteId, content: rawContent }),
@@ -1228,7 +2073,9 @@
                     }
                     const payload = await response.json();
                     const incoming = Array.isArray(payload.messages) ? payload.messages : [];
-                    state.messages = state.messages.concat(incoming);
+                    incoming.forEach((entry) => {
+                        upsertMessage(entry);
+                    });
                     if (payload.note) {
                         updateNoteFromResponse(payload.note);
                     }
@@ -1261,7 +2108,11 @@
                         if (!trimmed) {
                             return;
                         }
-                        const existing = state.notes.find((note) => note.title.toLowerCase() === trimmed.toLowerCase());
+                        const trimmedLower = trimmed.toLowerCase();
+                        const existing = state.notes.find((note) => {
+                            const candidate = normalizePreview(note.title || '').toLowerCase();
+                            return candidate && candidate === trimmedLower;
+                        });
                         if (existing) {
                             await selectNote(existing.id, { focusComposer: true });
                             return;
@@ -1278,6 +2129,37 @@
                             console.error('Failed to create note', error);
                             showError('Unable to create that note.');
                         }
+                    }
+                });
+            }
+
+            if (createNoteButton) {
+                createNoteButton.addEventListener('click', async () => {
+                    const desiredTitle = normalizePreview((noteSearchEl && noteSearchEl.value) || '');
+                    const fallbackTitle = desiredTitle || 'New note';
+                    const match = desiredTitle
+                        ? state.notes.find((note) => normalizePreview(note.title || '').toLowerCase() === desiredTitle.toLowerCase())
+                        : null;
+                    try {
+                        createNoteButton.disabled = true;
+                        if (match) {
+                            await selectNote(match.id, { focusComposer: true });
+                            return;
+                        }
+                        const note = await createNote(fallbackTitle);
+                        if (noteSearchEl) {
+                            noteSearchEl.value = '';
+                        }
+                        state.noteSearch = '';
+                        renderNotes();
+                        if (note) {
+                            await selectNote(note.id, { focusComposer: true });
+                        }
+                    } catch (error) {
+                        console.error('Failed to create note', error);
+                        showError('Unable to create that note.');
+                    } finally {
+                        createNoteButton.disabled = false;
                     }
                 });
             }

@@ -13,7 +13,7 @@
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex h-16 items-center justify-between">
                 <div class="flex items-center space-x-10">
-                    <a href="/dashboard" id="nav-home-link" class="text-lg font-semibold tracking-wide">FireCoast OMS</a>
+                    <a href="/dashboard" id="nav-home-link" class="text-lg font-semibold tracking-wide">FireNotes OMS</a>
                     <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
                         <a href="/orders" class="hover:text-orange-300 transition">Orders</a>
                         <a href="/contacts" class="hover:text-orange-300 transition">Contacts</a>
@@ -66,7 +66,7 @@
     <main class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
         <header class="mb-8">
             <h1 class="text-3xl font-bold text-slate-800">Settings</h1>
-            <p class="mt-2 text-slate-500">Manage workspace defaults, fine-tune your invoice presentation, and handle the operational tasks that keep FireCoast OMS running smoothly.</p>
+            <p class="mt-2 text-slate-500">Manage workspace defaults, fine-tune your invoice presentation, and handle the operational tasks that keep FireNotes OMS running smoothly.</p>
         </header>
 
         <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mb-8">
@@ -113,7 +113,7 @@
             <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                     <h2 class="text-xl font-semibold text-slate-800">Invoice Appearance</h2>
-                    <p class="text-sm text-slate-500">Set the defaults for every invoice sent from FireCoast OMS.</p>
+                    <p class="text-sm text-slate-500">Set the defaults for every invoice sent from FireNotes OMS.</p>
                 </div>
                 <span id="invoiceStatus" class="text-sm text-slate-400"></span>
             </div>
@@ -123,7 +123,7 @@
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-sm font-medium text-slate-600" for="invoiceBusinessName">Business Name</label>
-                                <input type="text" id="invoiceBusinessName" name="invoiceBusinessName" class="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="FireCoast OMS" />
+                                <input type="text" id="invoiceBusinessName" name="invoiceBusinessName" class="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="FireNotes OMS" />
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-slate-600" for="invoiceAccentColor">Accent Color</label>
@@ -132,7 +132,7 @@
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-slate-600" for="invoiceBusinessDetails">Business Details</label>
-                            <textarea id="invoiceBusinessDetails" name="invoiceBusinessDetails" rows="4" class="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="123 Harbor Way&#10;Portland, OR 97203&#10;hello@firecoast.com"></textarea>
+                            <textarea id="invoiceBusinessDetails" name="invoiceBusinessDetails" rows="4" class="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-orange-500 focus:border-orange-500" placeholder="123 Harbor Way&#10;Portland, OR 97203&#10;hello@firenotes.com"></textarea>
                             <p class="mt-1 text-xs text-slate-500">These lines appear under your logo and business name.</p>
                         </div>
                         <div>
@@ -161,7 +161,7 @@
                     <div class="flex items-center justify-between">
                         <div>
                             <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Preview</p>
-                            <p id="previewBusinessName" class="mt-2 text-xl font-semibold text-slate-800">FireCoast OMS</p>
+                            <p id="previewBusinessName" class="mt-2 text-xl font-semibold text-slate-800">FireNotes OMS</p>
                         </div>
                         <div id="invoiceLogoPreview" class="w-16 h-16 bg-white border border-slate-200 rounded-md flex items-center justify-center overflow-hidden">
                             <span class="text-xs text-slate-400">Logo</span>
@@ -175,7 +175,7 @@
                         <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Business Details</p>
                         <p id="previewBusinessDetails" class="mt-2 text-sm text-slate-600 whitespace-pre-line">123 Harbor Way
 Portland, OR 97203
-hello@firecoast.com</p>
+hello@firenotes.com</p>
                     </div>
                     <div>
                         <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Footer</p>
@@ -189,7 +189,7 @@ hello@firecoast.com</p>
             <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                     <h2 class="text-xl font-semibold text-slate-800">Email Delivery</h2>
-                    <p class="text-sm text-slate-500">Configure the account FireCoast OMS uses to send purchase orders.</p>
+                    <p class="text-sm text-slate-500">Configure the account FireNotes OMS uses to send purchase orders.</p>
                 </div>
                 <span id="emailStatus" class="text-sm text-slate-400"></span>
             </div>
@@ -262,7 +262,7 @@ hello@firecoast.com</p>
                 </div>
                 <div class="border border-slate-200 rounded-lg p-5 space-y-3 bg-slate-50">
                     <h3 class="text-lg font-semibold text-slate-800">Import Backup</h3>
-                    <p class="text-sm text-slate-500">Restore FireCoast OMS from a ZIP export. <span class="font-semibold text-slate-700">This will overwrite all existing data.</span></p>
+                    <p class="text-sm text-slate-500">Restore FireNotes OMS from a ZIP export. <span class="font-semibold text-slate-700">This will overwrite all existing data.</span></p>
                     <input type="file" id="importFile" accept=".zip" class="hidden" />
                     <button id="importData" class="inline-flex items-center px-4 py-2 bg-slate-900 text-white text-sm font-semibold rounded-md shadow-sm hover:bg-slate-700 transition-colors">
                         Import Data
@@ -311,10 +311,10 @@ hello@firecoast.com</p>
 
             const updateInvoicePreview = () => {
                 if (previewName) {
-                    previewName.textContent = invoiceBusinessNameInput.value || 'FireCoast OMS';
+                    previewName.textContent = invoiceBusinessNameInput.value || 'FireNotes OMS';
                 }
                 if (previewDetails) {
-                    previewDetails.textContent = invoiceBusinessDetailsInput.value || '123 Harbor Way\nPortland, OR 97203\nhello@firecoast.com';
+                    previewDetails.textContent = invoiceBusinessDetailsInput.value || '123 Harbor Way\nPortland, OR 97203\nhello@firenotes.com';
                 }
                 if (previewFooter) {
                     const footerValue = (invoiceFooterInput?.value || '').trim();

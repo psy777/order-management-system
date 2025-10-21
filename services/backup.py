@@ -1,4 +1,4 @@
-"""Helpers for exporting and restoring FireCoast data backups."""
+"""Helpers for exporting and restoring FireNotes data backups."""
 from __future__ import annotations
 
 import io
