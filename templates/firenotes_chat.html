@@ -157,11 +157,96 @@
                 error: null,
                 composerValue: '',
                 composerDisabled: true,
+                recentReactions: REACTION_OPTIONS.slice(0, QUICK_REACTIONS_LIMIT),
+                activeMessageEdit: null,
+                pendingMessageAction: null,
             };
             const pendingReactions = new Set();
+            let activePopover = null;
+
+            const handlePopoverDocumentClick = (event) => {
+                if (!activePopover) {
+                    return;
+                }
+                const { element, anchor } = activePopover;
+                if (element && element.contains(event.target)) {
+                    return;
+                }
+                if (anchor && anchor.contains(event.target)) {
+                    return;
+                }
+                closeActivePopover();
+            };
+
+            const closeActivePopover = () => {
+                if (!activePopover) {
+                    return;
+                }
+                const { element, cleanup } = activePopover;
+                if (typeof cleanup === 'function') {
+                    try {
+                        cleanup();
+                    } catch (error) {
+                        console.debug('Popover cleanup failed', error);
+                    }
+                }
+                if (element && element.parentNode) {
+                    element.parentNode.removeChild(element);
+                }
+                document.removeEventListener('mousedown', handlePopoverDocumentClick, true);
+                window.removeEventListener('resize', closeActivePopover);
+                window.removeEventListener('scroll', closeActivePopover, true);
+                activePopover = null;
+            };
+
+            const openPopover = (anchor, buildContent, options = {}) => {
+                if (typeof buildContent !== 'function') {
+                    return null;
+                }
+                closeActivePopover();
+                const popover = document.createElement('div');
+                popover.className = 'fc-popover';
+                popover.style.visibility = 'hidden';
+                const content = buildContent(popover);
+                if (content instanceof Node) {
+                    popover.appendChild(content);
+                }
+                document.body.appendChild(popover);
+                const rect = anchor.getBoundingClientRect();
+                const offsetY = Number.isFinite(options.offsetY) ? options.offsetY : 8;
+                const offsetX = Number.isFinite(options.offsetX) ? options.offsetX : 0;
+                const width = popover.offsetWidth;
+                const height = popover.offsetHeight;
+                let top = rect.bottom + offsetY + window.scrollY;
+                let left = rect.right - width + offsetX + window.scrollX;
+                if (left < 8) {
+                    left = rect.left + window.scrollX;
+                }
+                const viewportBottom = window.scrollY + window.innerHeight;
+                if (top + height > viewportBottom && rect.top - height - offsetY > 0) {
+                    top = rect.top - height - offsetY + window.scrollY;
+                }
+                popover.style.top = `${Math.max(0, top)}px`;
+                popover.style.left = `${Math.max(8, left)}px`;
+                popover.style.visibility = 'visible';
+                activePopover = {
+                    element: popover,
+                    anchor,
+                    cleanup: options.onClose,
+                };
+                setTimeout(() => {
+                    document.addEventListener('mousedown', handlePopoverDocumentClick, true);
+                    window.addEventListener('resize', closeActivePopover);
+                    window.addEventListener('scroll', closeActivePopover, true);
+                }, 0);
+                return popover;
+            };
             const API_BASE = '/api/firenotes';
             const REACTION_ENDPOINT = `${API_BASE}/chat/reactions`;
+            const MESSAGE_ENDPOINT = `${API_BASE}/chat/messages`;
+            const FORWARD_ENDPOINT = `${API_BASE}/chat/forward`;
             const REACTION_OPTIONS = ['👍', '✅', '🔥', '🎉', '❗'];
+            const QUICK_REACTIONS_LIMIT = 3;
 
             const MAX_COMPOSER_HEIGHT = 220;
             let autoCreatingNote = false;
@@ -826,6 +911,42 @@
 
             const getReactionKey = (messageId, emoji) => `${messageId}:${emoji}`;
 
+            const updateRecentReactions = (emoji) => {
+                if (!emoji) {
+                    return;
+                }
+                const normalized = String(emoji).trim();
+                if (!normalized) {
+                    return;
+                }
+                const current = Array.isArray(state.recentReactions)
+                    ? state.recentReactions.slice()
+                    : [];
+                const filtered = current.filter((entry) => entry !== normalized);
+                filtered.unshift(normalized);
+                state.recentReactions = filtered.slice(0, QUICK_REACTIONS_LIMIT);
+            };
+
+            const getQuickReactionOptions = () => {
+                const seen = new Set();
+                const merged = [];
+                (state.recentReactions || []).forEach((emoji) => {
+                    if (!emoji || seen.has(emoji)) {
+                        return;
+                    }
+                    seen.add(emoji);
+                    merged.push(emoji);
+                });
+                REACTION_OPTIONS.forEach((emoji) => {
+                    if (!emoji || seen.has(emoji)) {
+                        return;
+                    }
+                    seen.add(emoji);
+                    merged.push(emoji);
+                });
+                return merged.slice(0, QUICK_REACTIONS_LIMIT);
+            };
+
             const isReactionPending = (messageId, emoji) => {
                 if (!messageId || !emoji) {
                     return false;
@@ -880,6 +1001,9 @@
                     if (payload && payload.message) {
                         upsertMessage(payload.message);
                         clearError();
+                        if (payload.action === 'added') {
+                            updateRecentReactions(emoji);
+                        }
                     }
                 } catch (error) {
                     console.error('Failed to toggle reaction', error);
@@ -930,32 +1054,513 @@
                 }
                 const container = document.createElement('div');
                 container.className = 'fc-message__reactions';
-                const seen = new Set();
+                let hasVisible = false;
                 if (Array.isArray(message.reactions)) {
                     message.reactions.forEach((reaction) => {
                         if (!reaction || !reaction.emoji) {
                             return;
                         }
-                        seen.add(reaction.emoji);
                         const button = createReactionButton(message, reaction.emoji, reaction);
                         if (button) {
                             container.appendChild(button);
+                            hasVisible = true;
                         }
                     });
                 }
-                REACTION_OPTIONS.forEach((emoji) => {
-                    if (seen.has(emoji)) {
-                        return;
-                    }
-                    const button = createReactionButton(message, emoji, null);
-                    if (button) {
-                        container.appendChild(button);
-                    }
-                });
-                if (!container.children.length) {
+                if (!hasVisible) {
                     return null;
                 }
                 return container;
+            };
+
+            const isUserMessage = (message) => {
+                return String(message && message.author && message.author.toLowerCase()) === 'user';
+            };
+
+            const isMessageBeingEdited = (messageId) => {
+                return Boolean(state.activeMessageEdit && state.activeMessageEdit.id === messageId);
+            };
+
+            const setMessageEditValue = (value) => {
+                if (!state.activeMessageEdit) {
+                    return;
+                }
+                state.activeMessageEdit = {
+                    ...state.activeMessageEdit,
+                    value,
+                };
+            };
+
+            const startMessageEdit = (message) => {
+                if (!message || !message.id) {
+                    return;
+                }
+                closeActivePopover();
+                state.activeMessageEdit = {
+                    id: message.id,
+                    noteId: message.note_id,
+                    value: message.content || '',
+                    pending: false,
+                };
+                renderMessages();
+                scheduleFrame(() => {
+                    const textarea = document.querySelector(`[data-edit-textarea="${message.id}"]`);
+                    if (textarea) {
+                        textarea.focus();
+                        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+                    }
+                });
+            };
+
+            const cancelMessageEdit = () => {
+                if (!state.activeMessageEdit) {
+                    return;
+                }
+                state.activeMessageEdit = null;
+                renderMessages();
+            };
+
+            const submitMessageEdit = async () => {
+                const editState = state.activeMessageEdit;
+                if (!editState || editState.pending) {
+                    return;
+                }
+                const messageId = editState.id;
+                const content = editState.value || '';
+                const trimmed = normalizePreview(content);
+                if (!trimmed) {
+                    showError('Add some text before saving edits.');
+                    return;
+                }
+                const originalState = { ...editState };
+                state.activeMessageEdit = { ...editState, pending: true };
+                renderMessages();
+                try {
+                    const response = await fetch(`${MESSAGE_ENDPOINT}/${encodeURIComponent(messageId)}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ content }),
+                    });
+                    if (!response.ok) {
+                        throw new Error('Failed to save message edits');
+                    }
+                    const payload = await response.json();
+                    if (payload.message) {
+                        upsertMessage(payload.message);
+                    }
+                    if (payload.note) {
+                        updateNoteFromResponse(payload.note);
+                    }
+                    state.activeMessageEdit = null;
+                    clearError();
+                } catch (error) {
+                    console.error('Failed to update message', error);
+                    showError('Unable to update that message.');
+                    state.activeMessageEdit = { ...originalState, pending: false };
+                } finally {
+                    renderMessages();
+                }
+            };
+
+            const replyToMessage = (message) => {
+                if (!message) {
+                    return;
+                }
+                closeActivePopover();
+                const content = message.content || '';
+                const replyBlock = content
+                    ? content
+                          .split('\n')
+                          .map((line) => `> ${line}`)
+                          .join('\n')
+                    : '';
+                const existing = getComposerValue();
+                const authorLabel = formatMessageAuthorLabel(message.author);
+                const mention = authorLabel.startsWith('@')
+                    ? authorLabel
+                    : `@${authorLabel.toLowerCase()}`;
+                const segments = [];
+                if (existing) {
+                    segments.push(existing.trimEnd());
+                }
+                if (replyBlock) {
+                    segments.push(replyBlock);
+                }
+                segments.push(`${mention} `);
+                const composed = segments.join('\n');
+                setComposerValue(composed, { forceRender: true });
+                scheduleFrame(() => {
+                    const textarea = getActiveTextarea();
+                    if (textarea) {
+                        textarea.focus();
+                        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+                    }
+                });
+            };
+
+            const setPendingMessageAction = (action) => {
+                state.pendingMessageAction = action;
+            };
+
+            const isMessageActionPending = (messageId) => {
+                const pending = state.pendingMessageAction;
+                return Boolean(pending && pending.messageId === messageId);
+            };
+
+            const handleDeleteMessage = async (message) => {
+                if (!message || !message.id) {
+                    return;
+                }
+                const confirmDelete = window.confirm('Delete this message?');
+                if (!confirmDelete) {
+                    return;
+                }
+                closeActivePopover();
+                setPendingMessageAction({ type: 'delete', messageId: message.id });
+                renderMessages();
+                try {
+                    const response = await fetch(`${MESSAGE_ENDPOINT}/${encodeURIComponent(message.id)}`, {
+                        method: 'DELETE',
+                    });
+                    if (!response.ok) {
+                        throw new Error('Failed to delete');
+                    }
+                    const payload = await response.json();
+                    state.messages = state.messages.filter((entry) => entry.id !== message.id);
+                    if (payload.note) {
+                        updateNoteFromResponse(payload.note);
+                    }
+                    clearError();
+                } catch (error) {
+                    console.error('Failed to delete message', error);
+                    showError('Unable to delete that message.');
+                } finally {
+                    setPendingMessageAction(null);
+                    renderMessages();
+                }
+            };
+
+            const handleForwardMessage = async (message, targetNoteId) => {
+                if (!message || !message.id || !targetNoteId) {
+                    return;
+                }
+                closeActivePopover();
+                setPendingMessageAction({ type: 'forward', messageId: message.id });
+                renderMessages();
+                try {
+                    const response = await fetch(FORWARD_ENDPOINT, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ message_id: message.id, target_note_id: targetNoteId }),
+                    });
+                    if (!response.ok) {
+                        throw new Error('Failed to forward');
+                    }
+                    const payload = await response.json();
+                    if (payload.message) {
+                        if (payload.message.note_id === state.activeNoteId) {
+                            upsertMessage(payload.message);
+                        }
+                    }
+                    if (payload.note) {
+                        updateNoteFromResponse(payload.note);
+                    }
+                    clearError();
+                } catch (error) {
+                    console.error('Failed to forward message', error);
+                    showError('Unable to forward that message.');
+                } finally {
+                    setPendingMessageAction(null);
+                    renderMessages();
+                }
+            };
+
+            const handleCopyMessageText = async (message) => {
+                if (!navigator.clipboard || !message) {
+                    return;
+                }
+                try {
+                    await navigator.clipboard.writeText(message.content || '');
+                    closeActivePopover();
+                } catch (error) {
+                    console.error('Failed to copy message text', error);
+                    showError('Unable to copy message text.');
+                }
+            };
+
+            const handleCopyMessageLink = async (message) => {
+                if (!navigator.clipboard || !message || !message.id) {
+                    return;
+                }
+                const origin = window.location.origin || window.location.href;
+                const url = `${origin.replace(/\/#?$/, '')}/firenotes#message-${message.id}`;
+                try {
+                    await navigator.clipboard.writeText(url);
+                    closeActivePopover();
+                } catch (error) {
+                    console.error('Failed to copy message link', error);
+                    showError('Unable to copy message link.');
+                }
+            };
+
+            const openReactionPicker = (anchor, message) => {
+                if (!anchor || !message) {
+                    return;
+                }
+                openPopover(anchor, () => {
+                    const container = document.createElement('div');
+                    container.className = 'fc-popover__emoji';
+                    REACTION_OPTIONS.forEach((emoji) => {
+                        const button = document.createElement('button');
+                        button.type = 'button';
+                        button.className = 'fc-popover__emoji-button';
+                        button.textContent = emoji;
+                        button.setAttribute('aria-label', `React with ${emoji}`);
+                        button.addEventListener('click', (event) => {
+                            event.preventDefault();
+                            closeActivePopover();
+                            handleReactionToggle(message.id, emoji);
+                        });
+                        container.appendChild(button);
+                    });
+                    return container;
+                });
+            };
+
+            const openForwardPicker = (anchor, message) => {
+                if (!anchor || !message) {
+                    return;
+                }
+                openPopover(anchor, () => {
+                    const panel = document.createElement('div');
+                    panel.className = 'fc-popover__panel';
+                    const title = document.createElement('div');
+                    title.className = 'fc-popover__title';
+                    title.textContent = 'Forward message to…';
+                    panel.appendChild(title);
+                    const list = document.createElement('div');
+                    list.className = 'fc-popover__list';
+                    const notes = Array.isArray(state.notes) ? state.notes : [];
+                    if (!notes.length) {
+                        const empty = document.createElement('div');
+                        empty.className = 'fc-popover__empty';
+                        empty.textContent = 'No notes available';
+                        panel.appendChild(empty);
+                        return panel;
+                    }
+                    notes.forEach((note) => {
+                        if (!note || !note.id) {
+                            return;
+                        }
+                        const item = document.createElement('button');
+                        item.type = 'button';
+                        item.className = 'fc-popover__item';
+                        item.textContent = note.title || 'Untitled note';
+                        if (state.pendingMessageAction && state.pendingMessageAction.messageId === message.id) {
+                            item.disabled = true;
+                        }
+                        item.addEventListener('click', (event) => {
+                            event.preventDefault();
+                            handleForwardMessage(message, note.id);
+                        });
+                        list.appendChild(item);
+                    });
+                    panel.appendChild(list);
+                    return panel;
+                });
+            };
+
+            const openMessageMenu = (anchor, message) => {
+                if (!anchor || !message) {
+                    return;
+                }
+                openPopover(anchor, () => {
+                    const menu = document.createElement('div');
+                    menu.className = 'fc-popover__menu';
+                    const addItem = (label, handler, options = {}) => {
+                        const item = document.createElement('button');
+                        item.type = 'button';
+                        item.className = 'fc-popover__menu-item';
+                        if (options.destructive) {
+                            item.classList.add('is-destructive');
+                        }
+                        item.textContent = label;
+                        if (options.disabled) {
+                            item.disabled = true;
+                        }
+                        item.addEventListener('click', (event) => {
+                            event.preventDefault();
+                            handler();
+                        });
+                        menu.appendChild(item);
+                    };
+                    addItem('Add Reaction', () => {
+                        closeActivePopover();
+                        openReactionPicker(anchor, message);
+                    });
+                    if (isUserMessage(message)) {
+                        addItem('Edit Message', () => {
+                            startMessageEdit(message);
+                        }, { disabled: isMessageBeingEdited(message.id) });
+                    }
+                    addItem('Reply', () => {
+                        replyToMessage(message);
+                    });
+                    addItem('Forward', () => {
+                        openForwardPicker(anchor, message);
+                    });
+                    addItem('Copy Text', () => {
+                        handleCopyMessageText(message);
+                    });
+                    addItem('Copy Message Link', () => {
+                        handleCopyMessageLink(message);
+                    });
+                    if (isUserMessage(message)) {
+                        addItem(
+                            'Delete Message',
+                            () => {
+                                handleDeleteMessage(message);
+                            },
+                            { destructive: true }
+                        );
+                    }
+                    return menu;
+                });
+            };
+
+            const createToolbarButton = (label, icon, handler) => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'fc-message__toolbar-button';
+                button.title = label;
+                button.setAttribute('aria-label', label);
+                if (icon) {
+                    const iconSpan = document.createElement('span');
+                    iconSpan.className = 'fc-message__toolbar-icon';
+                    iconSpan.textContent = icon;
+                    button.appendChild(iconSpan);
+                }
+                button.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    handler(event.currentTarget || button);
+                });
+                return button;
+            };
+
+            const createQuickReactionButton = (message, emoji) => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'fc-message__toolbar-button fc-message__toolbar-button--emoji';
+                button.textContent = emoji;
+                button.setAttribute('aria-label', `React with ${emoji}`);
+                if (isReactionPending(message.id, emoji) || isMessageActionPending(message.id)) {
+                    button.disabled = true;
+                }
+                button.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    handleReactionToggle(message.id, emoji);
+                });
+                return button;
+            };
+
+            const createMessageToolbar = (message) => {
+                const toolbar = document.createElement('div');
+                toolbar.className = 'fc-message__toolbar';
+                if (!message || !message.id) {
+                    return toolbar;
+                }
+                const quickGroup = document.createElement('div');
+                quickGroup.className = 'fc-message__toolbar-group fc-message__toolbar-group--reactions';
+                getQuickReactionOptions().forEach((emoji) => {
+                    quickGroup.appendChild(createQuickReactionButton(message, emoji));
+                });
+                if (quickGroup.children.length) {
+                    toolbar.appendChild(quickGroup);
+                }
+                const actionsGroup = document.createElement('div');
+                actionsGroup.className = 'fc-message__toolbar-group';
+                const addReactionButton = createToolbarButton('Add reaction', '😊', (anchor) => {
+                    openReactionPicker(anchor, message);
+                });
+                actionsGroup.appendChild(addReactionButton);
+                if (isUserMessage(message)) {
+                    const editButton = createToolbarButton('Edit message', '✏️', () => {
+                        startMessageEdit(message);
+                    });
+                    if (isMessageBeingEdited(message.id)) {
+                        editButton.disabled = true;
+                    }
+                    actionsGroup.appendChild(editButton);
+                }
+                const forwardButton = createToolbarButton('Forward message', '↗', (anchor) => {
+                    openForwardPicker(anchor, message);
+                });
+                if (isMessageActionPending(message.id)) {
+                    forwardButton.disabled = true;
+                }
+                actionsGroup.appendChild(forwardButton);
+                const menuButton = createToolbarButton('More actions', '⋯', (anchor) => {
+                    openMessageMenu(anchor, message);
+                });
+                actionsGroup.appendChild(menuButton);
+                toolbar.appendChild(actionsGroup);
+                return toolbar;
+            };
+
+            const createMessageEditForm = (message, editState) => {
+                const form = document.createElement('form');
+                form.className = 'fc-message__edit';
+                const textarea = document.createElement('textarea');
+                textarea.className = 'fc-message__edit-input';
+                textarea.value = editState.value || '';
+                textarea.rows = Math.min(12, Math.max(3, textarea.value.split('\n').length));
+                textarea.setAttribute('data-edit-textarea', message.id);
+                textarea.addEventListener('input', () => {
+                    setMessageEditValue(textarea.value);
+                });
+                form.appendChild(textarea);
+                const actions = document.createElement('div');
+                actions.className = 'fc-message__edit-actions';
+                const saveButton = document.createElement('button');
+                saveButton.type = 'submit';
+                saveButton.className = 'fc-button fc-button--primary';
+                saveButton.textContent = editState.pending ? 'Saving…' : 'Save';
+                saveButton.disabled = !!editState.pending;
+                const cancelButton = document.createElement('button');
+                cancelButton.type = 'button';
+                cancelButton.className = 'fc-button';
+                cancelButton.textContent = 'Cancel';
+                cancelButton.disabled = !!editState.pending;
+                cancelButton.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    cancelMessageEdit();
+                });
+                actions.appendChild(cancelButton);
+                actions.appendChild(saveButton);
+                form.appendChild(actions);
+                form.addEventListener('submit', (event) => {
+                    event.preventDefault();
+                    submitMessageEdit();
+                });
+                return form;
+            };
+
+            const formatMessageAuthorLabel = (author) => {
+                const normalized = String(author || '').trim();
+                if (!normalized) {
+                    return '@firenotes';
+                }
+                const lowered = normalized.toLowerCase();
+                if (lowered === 'user') {
+                    return 'You';
+                }
+                if (lowered === 'assistant') {
+                    return '@firenotes';
+                }
+                if (normalized.startsWith('@')) {
+                    return normalized;
+                }
+                return `@${normalized}`;
             };
 
             const createMessageElement = (message) => {
@@ -966,13 +1571,28 @@
                 if (message.id) {
                     wrapper.id = `message-${message.id}`;
                 }
+                if (isMessageActionPending(message.id)) {
+                    wrapper.classList.add('is-processing');
+                }
+                const metadata = message.metadata || {};
+                const editingState = isMessageBeingEdited(message.id) ? state.activeMessageEdit : null;
+                if (editingState) {
+                    wrapper.classList.add('is-editing');
+                }
+
+                const bubble = document.createElement('div');
+                bubble.className = 'fc-message__bubble';
+
+                const main = document.createElement('div');
+                main.className = 'fc-message__main';
 
                 const header = document.createElement('div');
                 header.className = 'fc-message__header';
 
                 const authorLabel = document.createElement('span');
                 authorLabel.className = 'fc-message__author';
-                authorLabel.textContent = isUser ? 'You' : '@firenotes';
+                authorLabel.textContent = formatMessageAuthorLabel(message.author);
+                header.appendChild(authorLabel);
 
                 const timestamp = document.createElement('time');
                 timestamp.className = 'fc-message__timestamp';
@@ -983,23 +1603,24 @@
                         timestamp.textContent = stampLabel;
                     }
                 }
-
-                header.appendChild(authorLabel);
                 header.appendChild(timestamp);
+
+                if (metadata.edited_at) {
+                    const editedIndicator = document.createElement('span');
+                    editedIndicator.className = 'fc-message__edited';
+                    editedIndicator.textContent = '(edited)';
+                    header.appendChild(editedIndicator);
+                }
+
+                main.appendChild(header);
 
                 const body = document.createElement('div');
                 body.className = 'fc-message__body';
 
-                if (message.content) {
-                    const text = document.createElement('div');
-                    text.className = 'fc-message__text';
-                    if (!renderMentionText(text, message.content)) {
-                        text.textContent = message.content;
+                const appendAttachments = () => {
+                    if (!Array.isArray(message.attachments) || !message.attachments.length) {
+                        return;
                     }
-                    body.appendChild(text);
-                }
-
-                if (Array.isArray(message.attachments) && message.attachments.length) {
                     const attachments = document.createElement('div');
                     attachments.className = 'fc-message__attachments';
                     message.attachments.forEach((attachment) => {
@@ -1022,20 +1643,50 @@
                         }
                     });
                     body.appendChild(attachments);
+                };
+
+                if (editingState) {
+                    body.appendChild(createMessageEditForm(message, editingState));
+                    appendAttachments();
+                } else {
+                    if (metadata.forwarded_from) {
+                        const forwarded = document.createElement('div');
+                        forwarded.className = 'fc-message__forwarded';
+                        const forwardedAuthor = formatMessageAuthorLabel(metadata.forwarded_from.author);
+                        const forwardedStamp = metadata.forwarded_from.created_at
+                            ? formatTimestamp(metadata.forwarded_from.created_at, true)
+                            : null;
+                        forwarded.textContent = forwardedStamp
+                            ? `Forwarded from ${forwardedAuthor} · ${forwardedStamp}`
+                            : `Forwarded from ${forwardedAuthor}`;
+                        body.appendChild(forwarded);
+                    }
+                    if (message.content) {
+                        const text = document.createElement('div');
+                        text.className = 'fc-message__text';
+                        if (!renderMentionText(text, message.content)) {
+                            text.textContent = message.content;
+                        }
+                        body.appendChild(text);
+                    }
+                    appendAttachments();
+                    const metadataDetails = createMetadataDetails(metadata);
+                    if (metadataDetails) {
+                        body.appendChild(metadataDetails);
+                    }
+                    const reactionsRow = renderReactionRow(message);
+                    if (reactionsRow) {
+                        body.appendChild(reactionsRow);
+                    }
                 }
 
-                const metadataDetails = createMetadataDetails(message.metadata);
-                if (metadataDetails) {
-                    body.appendChild(metadataDetails);
-                }
+                main.appendChild(body);
+                bubble.appendChild(main);
 
-                const reactionsRow = renderReactionRow(message);
-                if (reactionsRow) {
-                    body.appendChild(reactionsRow);
-                }
+                const toolbar = createMessageToolbar(message);
+                bubble.appendChild(toolbar);
 
-                wrapper.appendChild(header);
-                wrapper.appendChild(body);
+                wrapper.appendChild(bubble);
                 return wrapper;
             };
 
@@ -1068,7 +1719,14 @@
                 if (!chatLogEl) {
                     return;
                 }
+                if (
+                    state.activeMessageEdit &&
+                    !state.messages.some((entry) => entry && entry.id === state.activeMessageEdit.id)
+                ) {
+                    state.activeMessageEdit = null;
+                }
                 cleanupMentionTextRoots();
+                closeActivePopover();
                 chatLogEl.innerHTML = '';
                 if (!state.activeNoteId) {
                     const empty = document.createElement('div');

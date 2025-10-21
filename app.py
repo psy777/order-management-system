@@ -1,4 +1,5 @@
 import os
+import shutil
 from pathlib import Path
 import uuid
 import webbrowser
@@ -357,6 +358,184 @@ def _toggle_chat_reaction(
     reaction_map = _collect_chat_reactions(conn, [message_id], reactor)
     serialized = _serialize_chat_row(message_row, reaction_map)
     return serialized, action
+
+
+def _get_chat_message_row(conn: sqlite3.Connection, message_id: str) -> Optional[sqlite3.Row]:
+    if not message_id:
+        return None
+    cursor = conn.execute(
+        """
+        SELECT id, note_id, author, content, metadata_json, attachments_json, created_at
+        FROM firecoast_chat_messages
+        WHERE id = ?
+        """,
+        (message_id,),
+    )
+    return cursor.fetchone()
+
+
+def _serialize_chat_message(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    *,
+    include_reactions: bool = True,
+) -> Dict[str, Any]:
+    if not row:
+        raise ValueError('Message not found.')
+    reaction_map: Optional[Dict[str, List[Dict[str, Any]]]] = None
+    if include_reactions:
+        message_id = row['id'] if isinstance(row, sqlite3.Row) else None
+        if message_id:
+            reaction_map = _collect_chat_reactions(conn, [message_id], DEFAULT_CHAT_REACTOR)
+    return _serialize_chat_row(row, reaction_map)
+
+
+def _clone_chat_attachments(original: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    if not original:
+        return []
+    clones: List[Dict[str, Any]] = []
+    base_dir = Path(app.config['UPLOAD_FOLDER'])
+    for attachment in original:
+        if not isinstance(attachment, dict):
+            continue
+        source_path = attachment.get('path')
+        filename = attachment.get('filename') or 'attachment'
+        content_type = attachment.get('content_type') or 'application/octet-stream'
+        is_image = bool(attachment.get('is_image'))
+        if source_path:
+            source_file = base_dir / source_path
+        else:
+            source_file = None
+        cloned: Dict[str, Any] = {
+            'id': str(uuid.uuid4()),
+            'filename': filename,
+            'content_type': content_type,
+            'is_image': is_image,
+        }
+        if source_file and source_file.exists():
+            sanitized = secure_filename(filename) or 'attachment'
+            unique_name = f"{uuid.uuid4().hex}_{sanitized}"
+            relative_path = os.path.join('firecoast', unique_name)
+            destination = base_dir / relative_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_file, destination)
+            cloned['path'] = relative_path.replace('\\', '/')
+            cloned['url'] = f"/data/{cloned['path']}"
+            cloned['size'] = destination.stat().st_size
+            cloned['is_image'] = content_type.startswith('image/') if content_type else is_image
+        else:
+            for key in ('path', 'url', 'size'):
+                if key in attachment:
+                    cloned[key] = attachment[key]
+        clones.append(cloned)
+    return clones
+
+
+def _edit_chat_message(conn: sqlite3.Connection, message_id: str, content: str) -> Dict[str, Any]:
+    if not message_id:
+        raise ValueError('message_id is required.')
+    trimmed = (content or '').strip()
+    if not trimmed:
+        raise ValueError('content is required.')
+    row = _get_chat_message_row(conn, message_id)
+    if not row:
+        raise ValueError('Message not found.')
+    note_id = row['note_id'] if isinstance(row, sqlite3.Row) else None
+    metadata = _parse_json_column(row['metadata_json']) or {}
+    metadata['edited_at'] = datetime.now(timezone.utc).isoformat()
+    metadata_json = json.dumps(metadata)
+    conn.execute(
+        """
+        UPDATE firecoast_chat_messages
+        SET content = ?, metadata_json = ?
+        WHERE id = ?
+        """,
+        (trimmed, metadata_json, message_id),
+    )
+    if note_id:
+        conn.execute(
+            "UPDATE firecoast_notes SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (note_id,),
+        )
+        _refresh_note_mentions(conn, note_id)
+    refreshed = _get_chat_message_row(conn, message_id)
+    return _serialize_chat_message(conn, refreshed)
+
+
+def _delete_chat_message(conn: sqlite3.Connection, message_id: str) -> Dict[str, Any]:
+    if not message_id:
+        raise ValueError('message_id is required.')
+    row = _get_chat_message_row(conn, message_id)
+    if not row:
+        raise ValueError('Message not found.')
+    note_id = row['note_id'] if isinstance(row, sqlite3.Row) else None
+    attachments = _parse_json_column(row['attachments_json']) or []
+    base_dir = Path(app.config['UPLOAD_FOLDER'])
+    for attachment in attachments:
+        if not isinstance(attachment, dict):
+            continue
+        rel_path = attachment.get('path')
+        if not rel_path:
+            continue
+        file_path = base_dir / rel_path
+        try:
+            if file_path.exists() and file_path.is_file():
+                file_path.unlink()
+        except OSError:
+            app.logger.warning('Failed to remove attachment %s for message %s', rel_path, message_id)
+    conn.execute("DELETE FROM firecoast_chat_reactions WHERE message_id = ?", (message_id,))
+    conn.execute("DELETE FROM firecoast_chat_messages WHERE id = ?", (message_id,))
+    if note_id:
+        conn.execute(
+            "UPDATE firecoast_notes SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (note_id,),
+        )
+        _refresh_note_mentions(conn, note_id)
+    return {'id': message_id, 'note_id': note_id, 'deleted': True}
+
+
+def _forward_chat_message(
+    conn: sqlite3.Connection,
+    message_id: str,
+    target_note_id: str,
+    *,
+    actor: str = 'user',
+) -> Dict[str, Any]:
+    if not message_id:
+        raise ValueError('message_id is required.')
+    if not target_note_id:
+        raise ValueError('target_note_id is required.')
+    original_row = _get_chat_message_row(conn, message_id)
+    if not original_row:
+        raise ValueError('Message not found.')
+    note = _get_note(conn, target_note_id)
+    if not note:
+        raise ValueError('Target note not found.')
+    original = _serialize_chat_row(original_row, None)
+    attachments = _clone_chat_attachments(original.get('attachments'))
+    forwarded_metadata = {
+        'forwarded_from': {
+            'id': original.get('id'),
+            'note_id': original.get('note_id'),
+            'author': original.get('author'),
+            'created_at': original.get('created_at'),
+        }
+    }
+    prefix_author = original.get('author') or 'assistant'
+    forwarded_body = original.get('content') or ''
+    if forwarded_body:
+        preface = f"Forwarded from {prefix_author}:\n\n"
+    else:
+        preface = f"Forwarded message from {prefix_author}"
+    stored = _store_chat_message(
+        conn,
+        target_note_id,
+        actor,
+        f"{preface}{forwarded_body}".strip(),
+        metadata=forwarded_metadata,
+        attachments=attachments,
+    )
+    return stored
 
 
 NOTE_HANDLE_SANITIZE_RE = re.compile(r"[^a-z0-9]+")
@@ -4732,6 +4911,69 @@ def api_firenotes_chat_reactions():
         conn.rollback()
         app.logger.exception("Failed to update FireNotes chat reaction: %s", exc)
         return jsonify({'message': 'Unable to update reaction.'}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/firenotes/chat/messages/<message_id>', methods=['PATCH', 'DELETE'])
+@app.route('/api/firecoast/chat/messages/<message_id>', methods=['PATCH', 'DELETE'])
+def api_firenotes_chat_message(message_id: str):
+    normalized_id = (message_id or '').strip()
+    if not normalized_id:
+        return jsonify({'message': 'message_id is required.'}), 400
+    conn = get_db_connection()
+    try:
+        if request.method == 'DELETE':
+            deleted = _delete_chat_message(conn, normalized_id)
+            note = _get_note(conn, deleted.get('note_id')) if deleted.get('note_id') else None
+            conn.commit()
+            response: Dict[str, Any] = {'message': deleted}
+            if note:
+                response['note'] = note
+            return jsonify(response)
+        payload = request.get_json(force=True, silent=True) or {}
+        content = payload.get('content')
+        updated = _edit_chat_message(conn, normalized_id, content)
+        note_id = updated.get('note_id')
+        note = _get_note(conn, note_id) if note_id else None
+        conn.commit()
+        response: Dict[str, Any] = {'message': updated}
+        if note:
+            response['note'] = note
+        return jsonify(response)
+    except ValueError as exc:
+        conn.rollback()
+        return jsonify({'message': str(exc)}), 404
+    except Exception as exc:
+        conn.rollback()
+        app.logger.exception("Failed to update FireNotes chat message: %s", exc)
+        return jsonify({'message': 'Unable to update message.'}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/firenotes/chat/forward', methods=['POST'])
+@app.route('/api/firecoast/chat/forward', methods=['POST'])
+def api_firenotes_chat_forward():
+    payload = request.get_json(force=True, silent=True) or {}
+    message_id = (payload.get('message_id') or payload.get('messageId') or '').strip()
+    target_note_id = (payload.get('target_note_id') or payload.get('targetNoteId') or '').strip()
+    conn = get_db_connection()
+    try:
+        forwarded = _forward_chat_message(conn, message_id, target_note_id)
+        note = _get_note(conn, forwarded.get('note_id')) if forwarded.get('note_id') else None
+        conn.commit()
+        response: Dict[str, Any] = {'message': forwarded}
+        if note:
+            response['note'] = note
+        return jsonify(response), 201
+    except ValueError as exc:
+        conn.rollback()
+        return jsonify({'message': str(exc)}), 400
+    except Exception as exc:
+        conn.rollback()
+        app.logger.exception("Failed to forward FireNotes chat message: %s", exc)
+        return jsonify({'message': 'Unable to forward message.'}), 500
     finally:
         conn.close()
 

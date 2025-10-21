@@ -189,6 +189,68 @@ def test_message_reactions_toggle(configure_chat_environment):
     assert not any(reaction['emoji'] == '👍' for reaction in removed_message.get('reactions', []))
 
 
+def test_message_edit_updates_content_and_metadata(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Editable note')
+
+    create_response = client.post('/api/firenotes/chat', json={'note_id': note['id'], 'content': 'Initial content'})
+    assert create_response.status_code == 200
+    created = create_response.get_json()['messages'][0]
+
+    edit_response = client.patch(
+        f"/api/firenotes/chat/messages/{created['id']}",
+        json={'content': 'Updated body'},
+    )
+    assert edit_response.status_code == 200
+    payload = edit_response.get_json()
+    updated = payload['message']
+    assert updated['content'] == 'Updated body'
+    assert updated['metadata']['edited_at']
+
+    history_response = client.get(f"/api/firenotes/chat?noteId={note['id']}&limit=5")
+    history = history_response.get_json()['messages']
+    stored = next(entry for entry in history if entry['id'] == created['id'])
+    assert stored['content'] == 'Updated body'
+    assert stored['metadata']['edited_at']
+
+
+def test_message_forward_creates_new_entry(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    source_note = _create_note(client, 'Source note')
+    target_note = _create_note(client, 'Target note')
+
+    create_response = client.post('/api/firenotes/chat', json={'note_id': source_note['id'], 'content': 'Forward me'})
+    original = create_response.get_json()['messages'][0]
+
+    forward_response = client.post(
+        '/api/firenotes/chat/forward',
+        json={'message_id': original['id'], 'target_note_id': target_note['id']},
+    )
+    assert forward_response.status_code == 201
+    payload = forward_response.get_json()
+    forwarded = payload['message']
+    assert forwarded['note_id'] == target_note['id']
+    assert forwarded['metadata']['forwarded_from']['id'] == original['id']
+    assert forwarded['content'].startswith('Forwarded from')
+
+    dest_history = client.get(f"/api/firenotes/chat?noteId={target_note['id']}&limit=5").get_json()['messages']
+    assert any(entry['id'] == forwarded['id'] for entry in dest_history)
+
+
+def test_message_delete_removes_entry(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Disposable note')
+
+    create_response = client.post('/api/firenotes/chat', json={'note_id': note['id'], 'content': 'Delete me'})
+    message = create_response.get_json()['messages'][0]
+
+    delete_response = client.delete(f"/api/firenotes/chat/messages/{message['id']}")
+    assert delete_response.status_code == 200
+
+    history = client.get(f"/api/firenotes/chat?noteId={note['id']}&limit=5").get_json()['messages']
+    assert all(entry['id'] != message['id'] for entry in history)
+
+
 def test_notes_endpoint_updates_titles_and_handles(configure_chat_environment):
     client = firenotes_app.app.test_client()
     note = _create_note(client, 'Initial name')
