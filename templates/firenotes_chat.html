@@ -2065,7 +2065,11 @@
                         if (!trimmed) {
                             return;
                         }
-                        const existing = state.notes.find((note) => note.title.toLowerCase() === trimmed.toLowerCase());
+                        const trimmedLower = trimmed.toLowerCase();
+                        const existing = state.notes.find((note) => {
+                            const candidate = normalizePreview(note.title || '').toLowerCase();
+                            return candidate && candidate === trimmedLower;
+                        });
                         if (existing) {
                             await selectNote(existing.id, { focusComposer: true });
                             return;
