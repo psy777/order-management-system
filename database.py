@@ -2,6 +2,7 @@ import sqlite3
 import json
 import logging
 import re
+import uuid
 from typing import Optional
 
 from services.records import get_record_service
@@ -572,6 +573,71 @@ def init_db():
         );
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_record_activity_target ON record_activity_logs(entity_type, entity_id)")
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS firecoast_notes (
+            id TEXT PRIMARY KEY NOT NULL,
+            title TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_firecoast_notes_updated ON firecoast_notes(updated_at)"
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS firecoast_chat_messages (
+            id TEXT PRIMARY KEY NOT NULL,
+            note_id TEXT,
+            author TEXT NOT NULL,
+            content TEXT NOT NULL,
+            metadata_json TEXT,
+            attachments_json TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_firecoast_chat_created_at ON firecoast_chat_messages(created_at)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_firecoast_chat_note ON firecoast_chat_messages(note_id, created_at)"
+    )
+
+    cursor.execute("PRAGMA table_info('firecoast_chat_messages')")
+    column_rows = cursor.fetchall()
+    column_names = {row['name'] if isinstance(row, sqlite3.Row) else row[1] for row in column_rows}
+    if 'note_id' not in column_names:
+        cursor.execute("ALTER TABLE firecoast_chat_messages ADD COLUMN note_id TEXT")
+    if 'attachments_json' not in column_names:
+        cursor.execute("ALTER TABLE firecoast_chat_messages ADD COLUMN attachments_json TEXT")
+
+    cursor.execute(
+        "SELECT note_id FROM firecoast_chat_messages WHERE note_id IS NOT NULL AND note_id != '' LIMIT 1"
+    )
+    existing_default = cursor.fetchone()
+    if existing_default:
+        if isinstance(existing_default, sqlite3.Row):
+            default_note_id = existing_default['note_id']
+        else:
+            default_note_id = existing_default[0]
+    else:
+        default_note_id = str(uuid.uuid4())
+    if default_note_id:
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO firecoast_notes (id, title)
+            VALUES (?, 'General note')
+            """,
+            (default_note_id,),
+        )
+        cursor.execute(
+            "UPDATE firecoast_chat_messages SET note_id = ? WHERE note_id IS NULL OR note_id = ''",
+            (default_note_id,),
+        )
 
     cursor.execute("SELECT id, handle, contact_name, company_name, email FROM contacts")
     for row in cursor.fetchall():

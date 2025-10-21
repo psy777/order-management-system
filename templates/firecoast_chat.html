@@ -1,0 +1,1335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FireCoast DM</title>
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="/assets/css/styles.css">
+    <link rel="stylesheet" href="/assets/css/firecoast_chat.css">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script type="text/babel" src="/assets/js/record_mentions.jsx"></script>
+</head>
+<body class="bg-slate-50 min-h-screen font-sans firecoast-chat">
+    <a class="fc-screen-reader-only" href="#fc-chat-log">Skip to chat</a>
+    <nav class="bg-slate-900 text-white shadow">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex h-16 items-center justify-between">
+                <div class="flex items-center space-x-10">
+                    <a id="nav-home-link" href="/dashboard" class="text-lg font-semibold tracking-wide" aria-label="Return to dashboard">FireCoast OMS</a>
+                    <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
+                        <a href="/orders" class="hover:text-orange-300 transition">Orders</a>
+                        <a href="/contacts" class="hover:text-orange-300 transition">Contacts</a>
+                        <a href="/analytics" class="hover:text-orange-300 transition">Analytics</a>
+                        <a href="/reminders" class="hover:text-orange-300 transition">Reminders</a>
+                        <a href="/calendar" class="hover:text-orange-300 transition">Calendar</a>
+                        <a href="/passwords" class="hover:text-orange-300 transition">Password Manager</a>
+                        <a href="/firecoast" class="text-orange-300">FireCoast Chat</a>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-3 text-sm font-medium">
+                    <a href="/settings" class="hover:text-orange-300 transition">Settings</a>
+                    <a id="nav-log-out" href="#" class="hover:text-orange-300 transition">Log Out</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="py-8">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="fc-chat-layout">
+            <aside class="fc-notes" aria-label="Notes">
+                <div class="fc-notes__search">
+                    <label class="fc-screen-reader-only" for="fc-note-search">Search or create note</label>
+                    <input id="fc-note-search" class="fc-notes__search-input" type="search" placeholder="Search or create note" autocomplete="off">
+                </div>
+                <div id="fc-note-list" class="fc-notes__list" role="listbox" aria-label="Saved notes"></div>
+                <p id="fc-no-notes" class="fc-notes__empty" hidden></p>
+            </aside>
+            <section class="fc-chat-panel" aria-label="Note conversation">
+                <header class="fc-chat-panel__header">
+                    <div class="fc-chat-panel__title-group">
+                        <h1 id="fc-note-title" class="fc-chat-panel__title">Untitled note</h1>
+                        <button type="button" id="fc-note-handle" class="fc-note-handle" hidden></button>
+                    </div>
+                    <div class="fc-chat-panel__actions">
+                        <label class="fc-screen-reader-only" for="fc-message-search">Search this note</label>
+                        <input id="fc-message-search" class="fc-chat-search" type="search" placeholder="Search this note" autocomplete="off">
+                        <button type="button" id="fc-refresh" class="fc-icon-button" aria-label="Refresh note">
+                            <span aria-hidden="true">↺</span>
+                        </button>
+                        <button type="button" id="fc-delete-note" class="fc-icon-button fc-icon-button--danger" aria-label="Delete note">
+                            <span aria-hidden="true">🗑</span>
+                        </button>
+                    </div>
+                </header>
+                <div class="fc-chat-panel__body">
+                    <div id="fc-chat-log" class="fc-chat-log" role="log" aria-live="polite" aria-busy="false"></div>
+                </div>
+                <footer class="fc-chat-panel__footer">
+                    <p id="fc-error" class="fc-chat-error" role="status" aria-live="assertive" hidden></p>
+                    <div class="fc-composer" data-disabled="true">
+                        <div id="fc-attachment-chips" class="fc-composer__attachments" aria-live="polite"></div>
+                        <label class="fc-screen-reader-only" for="fc-input">Write a message</label>
+                        <div class="fc-composer__input-wrapper">
+                            <textarea id="fc-input" class="fc-composer__input" placeholder="Write a message" rows="1" disabled></textarea>
+                            <div id="fc-mention-root" class="fc-composer__mention-root" hidden></div>
+                        </div>
+                        <div class="fc-composer__actions">
+                            <input type="file" id="fc-attachment-input" class="fc-composer__file-input" multiple hidden>
+                            <button type="button" id="fc-attach-button" class="fc-icon-button" aria-label="Add files" disabled>
+                                <span aria-hidden="true">＋</span>
+                            </button>
+                        </div>
+                    </div>
+                </footer>
+            </section>
+        </div>
+        </div>
+    </main>
+
+    <script>
+        (function () {
+            const logoutLink = document.getElementById('nav-log-out');
+            const brandLink = document.getElementById('nav-home-link');
+            if (brandLink) {
+                brandLink.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    window.location.href = '/dashboard';
+                });
+            }
+            if (logoutLink) {
+                logoutLink.addEventListener('click', async (event) => {
+                    event.preventDefault();
+                    if (window.fireCoastLogout) {
+                        window.fireCoastLogout();
+                        return;
+                    }
+                    try {
+                        const response = await fetch('/shutdown', { method: 'POST' });
+                        if (response.ok) {
+                            document.body.innerHTML = '<div class="min-h-screen flex items-center justify-center text-slate-700 text-lg">Application has been shut down. You can now close this tab.</div>';
+                        } else {
+                            alert('Failed to log out.');
+                        }
+                    } catch (error) {
+                        console.error('Error logging out:', error);
+                        alert('Error attempting to log out.');
+                    }
+                });
+            }
+        })();
+    </script>
+
+    <script>
+        (function () {
+            const notesListEl = document.getElementById('fc-note-list');
+            const noteSearchEl = document.getElementById('fc-note-search');
+            const noteEmptyEl = document.getElementById('fc-no-notes');
+            const noteTitleEl = document.getElementById('fc-note-title');
+            const noteHandleButton = document.getElementById('fc-note-handle');
+            const chatLogEl = document.getElementById('fc-chat-log');
+            const messageSearchEl = document.getElementById('fc-message-search');
+            const refreshButton = document.getElementById('fc-refresh');
+            const deleteButton = document.getElementById('fc-delete-note');
+            const inputEl = document.getElementById('fc-input');
+            const attachmentInputEl = document.getElementById('fc-attachment-input');
+            const attachmentButtonEl = document.getElementById('fc-attach-button');
+            const attachmentChipsEl = document.getElementById('fc-attachment-chips');
+            const composerEl = document.querySelector('.fc-composer');
+            const mentionRootEl = document.getElementById('fc-mention-root');
+            const errorEl = document.getElementById('fc-error');
+
+            const state = {
+                notes: [],
+                messages: [],
+                activeNoteId: '',
+                activeNote: null,
+                noteSearch: '',
+                messageSearch: '',
+                isLoadingNotes: false,
+                isLoadingMessages: false,
+                isSending: false,
+                pendingFiles: [],
+                error: null,
+                composerValue: '',
+                composerDisabled: true,
+            };
+
+            const MAX_COMPOSER_HEIGHT = 220;
+            let autoCreatingNote = false;
+            const mentionEntityTypes = null;
+
+            let handleCopyResetTimer = null;
+            const activeMentionTextRoots = [];
+
+            const scheduleFrame = (callback) => {
+                if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+                    window.requestAnimationFrame(callback);
+                } else {
+                    window.setTimeout(callback, 16);
+                }
+            };
+
+            const mentionComposer = {
+                useMentionComponent: false,
+                root: null,
+                textareaComponent: null,
+                textComponent: null,
+                renderScheduled: false,
+            };
+
+            const cleanupMentionTextRoots = () => {
+                while (activeMentionTextRoots.length) {
+                    const root = activeMentionTextRoots.pop();
+                    try {
+                        root.unmount();
+                    } catch (error) {
+                        console.debug('Failed to unmount mention renderer', error);
+                    }
+                }
+            };
+
+            const getActiveTextarea = () => {
+                if (mentionComposer.useMentionComponent && mentionRootEl) {
+                    return mentionRootEl.querySelector('textarea');
+                }
+                return inputEl;
+            };
+
+            const renderMentionComposer = () => {
+                if (!mentionComposer.useMentionComponent || !mentionComposer.root || !mentionComposer.textareaComponent) {
+                    return;
+                }
+                mentionComposer.renderScheduled = false;
+                mentionComposer.root.render(
+                    window.React.createElement(mentionComposer.textareaComponent, {
+                        value: state.composerValue,
+                        onChange: (value) => {
+                            setComposerValue(value);
+                        },
+                        onSubmit: (value) => {
+                            sendMessage(value);
+                        },
+                        disabled: state.composerDisabled,
+                        rows: 1,
+                        placeholder: 'Write a message',
+                        entityTypes: mentionEntityTypes,
+                        className: 'fc-composer__mention',
+                        textareaClassName: 'fc-composer__mention-input',
+                    })
+                );
+                scheduleFrame(() => {
+                    autoResizeInput();
+                });
+            };
+
+            const scheduleMentionComposerRender = (options = {}) => {
+                if (!mentionComposer.useMentionComponent || !mentionComposer.root) {
+                    return;
+                }
+                const immediate = Boolean(options.immediate);
+                if (immediate) {
+                    mentionComposer.renderScheduled = false;
+                    renderMentionComposer();
+                    return;
+                }
+                if (mentionComposer.renderScheduled) {
+                    return;
+                }
+                mentionComposer.renderScheduled = true;
+                scheduleFrame(() => {
+                    renderMentionComposer();
+                });
+            };
+
+            const ensureMentionComposer = (attempt = 0) => {
+                if (!mentionRootEl || mentionComposer.useMentionComponent) {
+                    return;
+                }
+                const components = window.RecordMentionComponents || {};
+                if (
+                    components.RecordMentionTextarea &&
+                    components.RecordMentionText &&
+                    window.React &&
+                    window.ReactDOM &&
+                    typeof window.ReactDOM.createRoot === 'function'
+                ) {
+                    mentionComposer.useMentionComponent = true;
+                    mentionComposer.textareaComponent = components.RecordMentionTextarea;
+                    mentionComposer.textComponent = components.RecordMentionText;
+                    mentionComposer.root = window.ReactDOM.createRoot(mentionRootEl);
+                    mentionRootEl.hidden = false;
+                    mentionRootEl.setAttribute('data-ready', 'true');
+                    if (inputEl) {
+                        inputEl.hidden = true;
+                    }
+                    renderMentionComposer();
+                    renderMessages();
+                    return;
+                }
+                if (attempt < 40) {
+                    window.setTimeout(() => ensureMentionComposer(attempt + 1), 150);
+                }
+            };
+
+            const refreshMentionHandles = () => {
+                if (!mentionComposer.useMentionComponent || !mentionComposer.root || !mentionRootEl) {
+                    return;
+                }
+                try {
+                    mentionComposer.root.unmount();
+                } catch (error) {
+                    console.debug('Failed to refresh mention composer', error);
+                }
+                mentionComposer.root = window.ReactDOM.createRoot(mentionRootEl);
+                renderMentionComposer();
+            };
+
+            const getComposerValue = () => {
+                if (mentionComposer.useMentionComponent) {
+                    return state.composerValue || '';
+                }
+                return inputEl ? inputEl.value || '' : '';
+            };
+
+            function setComposerValue(value, options = {}) {
+                const next = value === null || value === undefined ? '' : String(value);
+                const forceRender = Boolean(options.forceRender);
+                const immediate = Boolean(options.immediate);
+                const previous = state.composerValue;
+                const hasChanged = previous !== next;
+                state.composerValue = next;
+                if (mentionComposer.useMentionComponent) {
+                    if (mentionComposer.root && (hasChanged || forceRender)) {
+                        scheduleMentionComposerRender({ immediate });
+                    } else if (forceRender) {
+                        scheduleMentionComposerRender({ immediate });
+                    }
+                } else if (inputEl) {
+                    inputEl.value = next;
+                }
+                if (!options.skipResize) {
+                    scheduleFrame(() => {
+                        autoResizeInput();
+                    });
+                }
+            }
+
+            const normalizePreview = (value) => {
+                if (value === null || value === undefined) {
+                    return '';
+                }
+                return String(value).replace(/\s+/g, ' ').trim();
+            };
+
+            const formatTimestamp = (value, withTime = true) => {
+                if (!value) {
+                    return '';
+                }
+                const date = new Date(value);
+                if (Number.isNaN(date.getTime())) {
+                    return '';
+                }
+                const options = withTime
+                    ? { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }
+                    : { year: 'numeric', month: 'short', day: 'numeric' };
+                return new Intl.DateTimeFormat(undefined, options).format(date);
+            };
+
+            const formatEventWindow = (event) => {
+                if (!event || !event.start_at) {
+                    return '';
+                }
+                const start = new Date(event.start_at);
+                const end = new Date(event.end_at || event.start_at);
+                if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+                    return formatTimestamp(event.start_at, !event.all_day);
+                }
+                const sameDay = start.toDateString() === end.toDateString();
+                if (event.all_day || (start.getHours() === 0 && start.getMinutes() === 0 && sameDay)) {
+                    return sameDay
+                        ? formatTimestamp(start.toISOString(), false)
+                        : `${formatTimestamp(start.toISOString(), false)} – ${formatTimestamp(end.toISOString(), false)}`;
+                }
+                if (sameDay) {
+                    const timeFormatter = new Intl.DateTimeFormat(undefined, {
+                        hour: 'numeric',
+                        minute: '2-digit',
+                    });
+                    return `${formatTimestamp(start.toISOString(), true)} – ${timeFormatter.format(end)}`;
+                }
+                return `${formatTimestamp(start.toISOString(), true)} – ${formatTimestamp(end.toISOString(), true)}`;
+            };
+
+            const setBusy = (value) => {
+                if (!chatLogEl) {
+                    return;
+                }
+                chatLogEl.setAttribute('aria-busy', value ? 'true' : 'false');
+            };
+
+            const showError = (message) => {
+                state.error = message;
+                if (!errorEl) {
+                    return;
+                }
+                if (message) {
+                    errorEl.hidden = false;
+                    errorEl.textContent = message;
+                } else {
+                    errorEl.hidden = true;
+                    errorEl.textContent = '';
+                }
+            };
+
+            const clearError = () => showError('');
+
+            const updateNoteHandleButton = (handle) => {
+                if (!noteHandleButton) {
+                    return;
+                }
+                window.clearTimeout(handleCopyResetTimer);
+                handleCopyResetTimer = null;
+                if (!handle) {
+                    noteHandleButton.hidden = true;
+                    noteHandleButton.dataset.handle = '';
+                    noteHandleButton.textContent = '';
+                    noteHandleButton.classList.remove('is-copied');
+                    noteHandleButton.disabled = true;
+                    noteHandleButton.title = '';
+                    return;
+                }
+                noteHandleButton.hidden = false;
+                noteHandleButton.disabled = false;
+                noteHandleButton.dataset.handle = handle;
+                noteHandleButton.textContent = handle;
+                noteHandleButton.classList.remove('is-copied');
+                noteHandleButton.title = 'Copy note handle';
+            };
+
+            const renderNoteTitle = (note) => {
+                if (!noteTitleEl) {
+                    return;
+                }
+                if (!note) {
+                    noteTitleEl.textContent = 'Untitled note';
+                    noteTitleEl.title = 'Select a note to view messages';
+                    noteTitleEl.removeAttribute('data-handle');
+                    updateNoteHandleButton('');
+                    return;
+                }
+                const label = normalizePreview(note.title || '') || 'Untitled note';
+                const handle = note.handle ? `@${note.handle}` : '';
+                noteTitleEl.textContent = label;
+                noteTitleEl.title = handle ? `${label} (${handle})` : label;
+                if (handle) {
+                    noteTitleEl.setAttribute('data-handle', handle);
+                } else {
+                    noteTitleEl.removeAttribute('data-handle');
+                }
+                updateNoteHandleButton(handle);
+            };
+
+            const sortNotes = () => {
+                state.notes.sort((a, b) => {
+                    const left = new Date(a.updated_at || a.last_message_at || a.created_at || 0).getTime();
+                    const right = new Date(b.updated_at || b.last_message_at || b.created_at || 0).getTime();
+                    return right - left;
+                });
+            };
+
+            const matchesNoteSearch = (note, query) => {
+                if (!query) {
+                    return true;
+                }
+                const lowered = query.toLowerCase();
+                const fields = [note.title, note.handle, note.last_message_preview];
+                return fields.some((field) => normalizePreview(field || '').toLowerCase().includes(lowered));
+            };
+
+            const renderNotes = () => {
+                if (!notesListEl) {
+                    return;
+                }
+                const trimmedQuery = normalizePreview(state.noteSearch || '');
+                const loweredQuery = trimmedQuery.toLowerCase();
+                notesListEl.innerHTML = '';
+                sortNotes();
+                const filtered = loweredQuery
+                    ? state.notes.filter((note) => matchesNoteSearch(note, loweredQuery))
+                    : state.notes.slice();
+
+                const hasQuery = Boolean(trimmedQuery);
+                const exactMatch = hasQuery
+                    ? state.notes.some((note) => normalizePreview(note.title || '').toLowerCase() === loweredQuery)
+                    : false;
+                const createSuggestion = hasQuery && !exactMatch;
+
+                if (!filtered.length && !createSuggestion) {
+                    if (noteEmptyEl) {
+                        noteEmptyEl.hidden = false;
+                        noteEmptyEl.textContent = trimmedQuery
+                            ? `No notes match "${trimmedQuery}". Press Enter to create it.`
+                            : 'Create a note to get started.';
+                    }
+                    return;
+                }
+
+                if (noteEmptyEl) {
+                    if (createSuggestion && !filtered.length) {
+                        noteEmptyEl.hidden = false;
+                        noteEmptyEl.textContent = `Press Enter or click below to create "${trimmedQuery}".`;
+                    } else {
+                        noteEmptyEl.hidden = true;
+                        noteEmptyEl.textContent = '';
+                    }
+                }
+
+                const fragment = document.createDocumentFragment();
+
+                if (createSuggestion) {
+                    const createButton = document.createElement('button');
+                    createButton.type = 'button';
+                    createButton.className = 'fc-note fc-note--create';
+                    createButton.setAttribute('data-create-note', trimmedQuery);
+
+                    const title = document.createElement('div');
+                    title.className = 'fc-note__title';
+                    title.textContent = `Create "${trimmedQuery}"`;
+
+                    const hint = document.createElement('div');
+                    hint.className = 'fc-note__preview';
+                    hint.textContent = 'Start a fresh note with this title.';
+
+                    createButton.appendChild(title);
+                    createButton.appendChild(hint);
+                    createButton.addEventListener('click', async () => {
+                        try {
+                            const note = await createNote(trimmedQuery);
+                            if (noteSearchEl) {
+                                noteSearchEl.value = '';
+                            }
+                            state.noteSearch = '';
+                            renderNotes();
+                            if (note) {
+                                await selectNote(note.id, { focusComposer: true });
+                            }
+                        } catch (error) {
+                            console.error('Failed to create note', error);
+                            showError('Unable to create that note.');
+                        }
+                    });
+                    fragment.appendChild(createButton);
+                }
+
+                filtered.forEach((note) => {
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = 'fc-note' + (note.id === state.activeNoteId ? ' fc-note--active' : '');
+                    button.setAttribute('data-note-id', note.id);
+                    button.setAttribute('role', 'option');
+                    button.setAttribute('aria-selected', note.id === state.activeNoteId ? 'true' : 'false');
+
+                    const title = document.createElement('div');
+                    title.className = 'fc-note__title';
+                    title.textContent = note.title;
+
+                    const preview = document.createElement('div');
+                    preview.className = 'fc-note__preview';
+                    const previewText = normalizePreview(note.last_message_preview || '');
+                    preview.textContent = previewText.length > 90 ? `${previewText.slice(0, 87)}…` : previewText;
+
+                    const meta = document.createElement('div');
+                    meta.className = 'fc-note__meta';
+                    if (note.handle) {
+                        const handle = document.createElement('span');
+                        handle.className = 'fc-note__handle';
+                        handle.textContent = `@${note.handle}`;
+                        meta.appendChild(handle);
+                    }
+
+                    const timestamp = document.createElement('time');
+                    timestamp.className = 'fc-note__timestamp';
+                    const stampValue = note.updated_at || note.last_message_at || note.created_at;
+                    const stampLabel = formatTimestamp(stampValue, true);
+                    if (stampLabel) {
+                        timestamp.dateTime = stampValue;
+                        timestamp.textContent = stampLabel;
+                    }
+
+                    button.appendChild(title);
+                    if (previewText) {
+                        button.appendChild(preview);
+                    }
+                    if (meta.childElementCount) {
+                        meta.appendChild(timestamp);
+                        button.appendChild(meta);
+                    } else if (stampLabel) {
+                        button.appendChild(timestamp);
+                    }
+                    button.addEventListener('click', () => {
+                        selectNote(note.id, { focusComposer: true });
+                    });
+                    fragment.appendChild(button);
+                });
+
+                notesListEl.appendChild(fragment);
+            };
+
+            const renderAttachmentChips = () => {
+                if (!attachmentChipsEl) {
+                    return;
+                }
+                attachmentChipsEl.innerHTML = '';
+                if (!state.pendingFiles.length) {
+                    attachmentChipsEl.hidden = true;
+                    return;
+                }
+                attachmentChipsEl.hidden = false;
+                const fragment = document.createDocumentFragment();
+                state.pendingFiles.forEach((item) => {
+                    const chip = document.createElement('div');
+                    chip.className = 'fc-chip';
+                    chip.textContent = item.file.name;
+
+                    const removeButton = document.createElement('button');
+                    removeButton.type = 'button';
+                    removeButton.className = 'fc-chip__remove';
+                    removeButton.setAttribute('aria-label', `Remove ${item.file.name}`);
+                    removeButton.textContent = 'Remove';
+                    removeButton.addEventListener('click', () => {
+                        removePendingFile(item.id);
+                    });
+                    chip.appendChild(removeButton);
+                    fragment.appendChild(chip);
+                });
+                attachmentChipsEl.appendChild(fragment);
+            };
+
+            if (noteHandleButton) {
+                noteHandleButton.addEventListener('click', async () => {
+                    const handle = noteHandleButton.dataset.handle || '';
+                    if (!handle) {
+                        return;
+                    }
+                    try {
+                        if (navigator.clipboard && navigator.clipboard.writeText) {
+                            await navigator.clipboard.writeText(handle);
+                        } else {
+                            const helper = document.createElement('textarea');
+                            helper.value = handle;
+                            helper.setAttribute('readonly', '');
+                            helper.style.position = 'fixed';
+                            helper.style.opacity = '0';
+                            document.body.appendChild(helper);
+                            helper.select();
+                            document.execCommand('copy');
+                            document.body.removeChild(helper);
+                        }
+                        window.clearTimeout(handleCopyResetTimer);
+                        noteHandleButton.classList.add('is-copied');
+                        noteHandleButton.textContent = 'Copied';
+                        handleCopyResetTimer = window.setTimeout(() => {
+                            updateNoteHandleButton(handle);
+                        }, 1400);
+                    } catch (error) {
+                        console.error('Failed to copy handle', error);
+                        window.prompt('Copy handle', handle);
+                    }
+                });
+            }
+
+            if (deleteButton) {
+                deleteButton.disabled = true;
+                deleteButton.setAttribute('aria-disabled', 'true');
+                deleteButton.addEventListener('click', async () => {
+                    if (!state.activeNoteId) {
+                        return;
+                    }
+                    const active = state.notes.find((note) => note.id === state.activeNoteId);
+                    const label = normalizePreview(active ? active.title : '') || 'this note';
+                    const confirmed = window.confirm(`Delete "${label}"? This will remove all messages and files.`);
+                    if (!confirmed) {
+                        return;
+                    }
+                    deleteButton.disabled = true;
+                    deleteButton.setAttribute('aria-disabled', 'true');
+                    try {
+                        await deleteNote(state.activeNoteId);
+                        const removedId = state.activeNoteId;
+                        state.notes = state.notes.filter((note) => note.id !== removedId);
+                        state.activeNoteId = '';
+                        state.activeNote = null;
+                        state.messages = [];
+                        renderMessages();
+                        renderNoteTitle(null);
+                        renderNotes();
+                        state.pendingFiles = [];
+                        renderAttachmentChips();
+                        clearError();
+                        refreshMentionHandles();
+                        updateComposerAvailability();
+                        if (state.notes.length) {
+                            await selectNote(state.notes[0].id, { focusComposer: true });
+                        }
+                    } catch (error) {
+                        console.error('Failed to delete note', error);
+                        showError('Unable to delete this note.');
+                    } finally {
+                        updateComposerAvailability();
+                    }
+                });
+            }
+
+            const createMetadataDetails = (metadata) => {
+                if (!metadata || typeof metadata !== 'object') {
+                    return null;
+                }
+                const container = document.createElement('div');
+                container.className = 'fc-message__meta';
+                const action = metadata.action;
+
+                if (action === 'calendar_event_created' && metadata.event) {
+                    const heading = document.createElement('div');
+                    heading.className = 'fc-message__meta-heading';
+                    heading.textContent = 'Calendar event';
+                    const body = document.createElement('div');
+                    body.className = 'fc-message__meta-body';
+                    const event = metadata.event;
+                    const lines = [
+                        event.title,
+                        formatEventWindow(event),
+                        normalizePreview(event.location || ''),
+                    ].filter(Boolean);
+                    body.textContent = lines.join(' • ');
+                    container.appendChild(heading);
+                    container.appendChild(body);
+                    return container;
+                }
+
+                if (action === 'reminder_created' && metadata.reminder) {
+                    const heading = document.createElement('div');
+                    heading.className = 'fc-message__meta-heading';
+                    heading.textContent = 'Reminder';
+                    const body = document.createElement('div');
+                    body.className = 'fc-message__meta-body';
+                    const reminder = metadata.reminder;
+                    const parts = [reminder.title];
+                    if (reminder.due_at) {
+                        const dueLabel = formatTimestamp(reminder.due_at, Boolean(reminder.due_has_time));
+                        if (dueLabel) {
+                            parts.push(`due ${dueLabel}`);
+                        }
+                    }
+                    if (reminder.notes) {
+                        parts.push(reminder.notes);
+                    }
+                    body.textContent = parts.join(' • ');
+                    container.appendChild(heading);
+                    container.appendChild(body);
+                    return container;
+                }
+
+                if (action === 'password_lookup') {
+                    const heading = document.createElement('div');
+                    heading.className = 'fc-message__meta-heading';
+                    heading.textContent = 'Passwords';
+                    const list = document.createElement('ul');
+                    list.className = 'fc-message__meta-list';
+                    (metadata.matches || []).slice(0, 5).forEach((match) => {
+                        const item = document.createElement('li');
+                        const service = match.service || 'Service';
+                        const username = match.username || '—';
+                        const passwordValue = match.password || '—';
+                        item.textContent = `${service}: ${username} / ${passwordValue}`;
+                        list.appendChild(item);
+                    });
+                    container.appendChild(heading);
+                    container.appendChild(list);
+                    return container;
+                }
+
+                if (action === 'report_list' && Array.isArray(metadata.reports)) {
+                    const heading = document.createElement('div');
+                    heading.className = 'fc-message__meta-heading';
+                    heading.textContent = 'Available reports';
+                    const list = document.createElement('ul');
+                    list.className = 'fc-message__meta-list';
+                    metadata.reports.slice(0, 6).forEach((report) => {
+                        const item = document.createElement('li');
+                        item.textContent = `${report.id}: ${report.name || ''}`.trim();
+                        list.appendChild(item);
+                    });
+                    container.appendChild(heading);
+                    container.appendChild(list);
+                    return container;
+                }
+
+                if (action === 'report_run' && metadata.report) {
+                    const heading = document.createElement('div');
+                    heading.className = 'fc-message__meta-heading';
+                    heading.textContent = metadata.report.name || metadata.report.id || 'Report';
+                    const list = document.createElement('ul');
+                    list.className = 'fc-message__meta-list';
+                    (metadata.report.summary || []).slice(0, 5).forEach((entry) => {
+                        const item = document.createElement('li');
+                        const label = entry.label || entry.id;
+                        const value = entry.display || entry.value;
+                        item.textContent = `${label}: ${value}`;
+                        list.appendChild(item);
+                    });
+                    container.appendChild(heading);
+                    container.appendChild(list);
+                    return container;
+                }
+
+                return null;
+            };
+
+            const renderMentionText = (container, content) => {
+                if (!content) {
+                    return false;
+                }
+                const components = window.RecordMentionComponents || {};
+                if (
+                    !components.RecordMentionText ||
+                    !window.React ||
+                    !window.ReactDOM ||
+                    typeof window.ReactDOM.createRoot !== 'function'
+                ) {
+                    return false;
+                }
+                try {
+                    const root = window.ReactDOM.createRoot(container);
+                    root.render(
+                        window.React.createElement(components.RecordMentionText, {
+                            text: content,
+                            entityTypes: mentionEntityTypes,
+                            className: 'fc-message__text-content',
+                        })
+                    );
+                    activeMentionTextRoots.push(root);
+                    return true;
+                } catch (error) {
+                    console.debug('Failed to render mention text', error);
+                    return false;
+                }
+            };
+
+            const createMessageElement = (message) => {
+                const author = (message.author || '').toLowerCase();
+                const isUser = author === 'user';
+                const wrapper = document.createElement('article');
+                wrapper.className = 'fc-message' + (isUser ? ' fc-message--user' : ' fc-message--assistant');
+                if (message.id) {
+                    wrapper.id = `message-${message.id}`;
+                }
+
+                const header = document.createElement('div');
+                header.className = 'fc-message__header';
+
+                const authorLabel = document.createElement('span');
+                authorLabel.className = 'fc-message__author';
+                authorLabel.textContent = isUser ? 'You' : '@firecoast';
+
+                const timestamp = document.createElement('time');
+                timestamp.className = 'fc-message__timestamp';
+                if (message.created_at) {
+                    timestamp.dateTime = message.created_at;
+                    const stampLabel = formatTimestamp(message.created_at, true);
+                    if (stampLabel) {
+                        timestamp.textContent = stampLabel;
+                    }
+                }
+
+                header.appendChild(authorLabel);
+                header.appendChild(timestamp);
+
+                const body = document.createElement('div');
+                body.className = 'fc-message__body';
+
+                if (message.content) {
+                    const text = document.createElement('div');
+                    text.className = 'fc-message__text';
+                    if (!renderMentionText(text, message.content)) {
+                        text.textContent = message.content;
+                    }
+                    body.appendChild(text);
+                }
+
+                if (Array.isArray(message.attachments) && message.attachments.length) {
+                    const attachments = document.createElement('div');
+                    attachments.className = 'fc-message__attachments';
+                    message.attachments.forEach((attachment) => {
+                        if (attachment.is_image) {
+                            const figure = document.createElement('figure');
+                            figure.className = 'fc-message__attachment fc-message__attachment--image';
+                            const img = document.createElement('img');
+                            img.src = attachment.url;
+                            img.alt = attachment.filename || 'Image attachment';
+                            figure.appendChild(img);
+                            attachments.appendChild(figure);
+                        } else {
+                            const link = document.createElement('a');
+                            link.className = 'fc-message__attachment';
+                            link.href = attachment.url;
+                            link.target = '_blank';
+                            link.rel = 'noopener noreferrer';
+                            link.textContent = attachment.filename || 'Download file';
+                            attachments.appendChild(link);
+                        }
+                    });
+                    body.appendChild(attachments);
+                }
+
+                const metadataDetails = createMetadataDetails(message.metadata);
+                if (metadataDetails) {
+                    body.appendChild(metadataDetails);
+                }
+
+                wrapper.appendChild(header);
+                wrapper.appendChild(body);
+                return wrapper;
+            };
+
+            const matchesMessageSearch = (message, query) => {
+                if (!query) {
+                    return true;
+                }
+                const lowered = query.toLowerCase();
+                const content = normalizePreview(message.content || '').toLowerCase();
+                if (content.includes(lowered)) {
+                    return true;
+                }
+                if (Array.isArray(message.attachments)) {
+                    if (message.attachments.some((attachment) => (attachment.filename || '').toLowerCase().includes(lowered))) {
+                        return true;
+                    }
+                }
+                try {
+                    const metadataText = JSON.stringify(message.metadata || {});
+                    if (metadataText && metadataText.toLowerCase().includes(lowered)) {
+                        return true;
+                    }
+                } catch (error) {
+                    console.debug('Unable to search metadata', error);
+                }
+                return false;
+            };
+
+            const renderMessages = () => {
+                if (!chatLogEl) {
+                    return;
+                }
+                cleanupMentionTextRoots();
+                chatLogEl.innerHTML = '';
+                if (!state.activeNoteId) {
+                    const empty = document.createElement('div');
+                    empty.className = 'fc-chat-placeholder';
+                    empty.textContent = 'Create a note to start chatting.';
+                    chatLogEl.appendChild(empty);
+                    return;
+                }
+                if (state.isLoadingMessages) {
+                    setBusy(true);
+                    const loading = document.createElement('div');
+                    loading.className = 'fc-chat-placeholder';
+                    loading.textContent = 'Loading note…';
+                    chatLogEl.appendChild(loading);
+                    return;
+                }
+                setBusy(false);
+                const trimmedQuery = normalizePreview(state.messageSearch || '');
+                const lowered = trimmedQuery.toLowerCase();
+                const visible = lowered
+                    ? state.messages.filter((message) => matchesMessageSearch(message, lowered))
+                    : state.messages.slice();
+                if (!visible.length) {
+                    const empty = document.createElement('div');
+                    empty.className = 'fc-chat-placeholder';
+                    empty.textContent = lowered ? 'No matches in this note.' : 'Drop a thought to get started.';
+                    chatLogEl.appendChild(empty);
+                    return;
+                }
+                const fragment = document.createDocumentFragment();
+                visible.forEach((message) => {
+                    fragment.appendChild(createMessageElement(message));
+                });
+                chatLogEl.appendChild(fragment);
+                if (!lowered) {
+                    chatLogEl.scrollTop = chatLogEl.scrollHeight;
+                }
+            };
+
+            const autoResizeInput = () => {
+                const textarea = getActiveTextarea();
+                if (!textarea) {
+                    return;
+                }
+                textarea.style.height = 'auto';
+                const targetHeight = Math.min(MAX_COMPOSER_HEIGHT, textarea.scrollHeight || 0);
+                const finalHeight = Math.max(targetHeight, 44);
+                textarea.style.height = `${finalHeight}px`;
+                if (mentionComposer.useMentionComponent && mentionRootEl) {
+                    const overlay = mentionRootEl.querySelector('.record-mention-textarea__overlay');
+                    if (overlay) {
+                        overlay.style.height = `${finalHeight}px`;
+                    }
+                }
+            };
+
+            const setComposerEnabled = (enabled) => {
+                state.composerDisabled = !enabled;
+                if (attachmentButtonEl) {
+                    attachmentButtonEl.disabled = !enabled;
+                }
+                if (composerEl) {
+                    composerEl.setAttribute('data-disabled', enabled ? 'false' : 'true');
+                }
+                if (deleteButton) {
+                    deleteButton.disabled = !enabled;
+                    deleteButton.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+                }
+                if (mentionComposer.useMentionComponent) {
+                    renderMentionComposer();
+                } else if (inputEl) {
+                    inputEl.disabled = !enabled;
+                    if (!enabled) {
+                        inputEl.value = '';
+                    }
+                }
+                if (!enabled) {
+                    state.pendingFiles = [];
+                    renderAttachmentChips();
+                    setComposerValue('', { forceRender: true });
+                } else {
+                    autoResizeInput();
+                }
+            };
+
+            const updateComposerAvailability = () => {
+                const enabled = Boolean(state.activeNoteId);
+                setComposerEnabled(enabled);
+                if (enabled) {
+                    autoResizeInput();
+                }
+            };
+
+            const resetComposer = () => {
+                setComposerValue('');
+                state.pendingFiles = [];
+                renderAttachmentChips();
+            };
+
+            const updateNoteFromResponse = (note) => {
+                if (!note || !note.id) {
+                    return;
+                }
+                const existingIndex = state.notes.findIndex((entry) => entry.id === note.id);
+                let handleChanged = false;
+                if (existingIndex >= 0) {
+                    const existing = state.notes[existingIndex];
+                    handleChanged = (existing.handle || '') !== (note.handle || '');
+                    state.notes[existingIndex] = { ...existing, ...note };
+                } else {
+                    state.notes.push(note);
+                    handleChanged = Boolean(note.handle);
+                }
+                sortNotes();
+                if (note.id === state.activeNoteId) {
+                    state.activeNote = note;
+                    renderNoteTitle(note);
+                }
+                renderNotes();
+                if (handleChanged) {
+                    refreshMentionHandles();
+                }
+            };
+
+            const removePendingFile = (id) => {
+                state.pendingFiles = state.pendingFiles.filter((item) => item.id !== id);
+                renderAttachmentChips();
+            };
+
+            const addPendingFiles = (fileList) => {
+                if (!fileList || !fileList.length) {
+                    return;
+                }
+                const files = Array.from(fileList);
+                files.forEach((file) => {
+                    const id = `file-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+                    state.pendingFiles.push({ id, file });
+                });
+                renderAttachmentChips();
+            };
+
+            const loadMessages = async (noteId, options = {}) => {
+                if (!noteId) {
+                    return;
+                }
+                const silent = Boolean(options.silent);
+                if (!silent) {
+                    state.isLoadingMessages = true;
+                    renderMessages();
+                }
+                try {
+                    const response = await fetch(`/api/firecoast/chat?noteId=${encodeURIComponent(noteId)}&limit=400`);
+                    if (!response.ok) {
+                        throw new Error('Failed to load messages');
+                    }
+                    const payload = await response.json();
+                    state.messages = Array.isArray(payload.messages) ? payload.messages : [];
+                    if (payload.note) {
+                        state.activeNote = payload.note;
+                        state.activeNoteId = payload.note.id;
+                        updateNoteFromResponse(payload.note);
+                    }
+                    clearError();
+                } catch (error) {
+                    console.error('Failed to load messages', error);
+                    showError('Unable to load this note.');
+                } finally {
+                    state.isLoadingMessages = false;
+                    renderMessages();
+                }
+            };
+
+            const selectNote = async (noteId, options = {}) => {
+                if (!noteId) {
+                    return;
+                }
+                state.activeNoteId = noteId;
+                state.activeNote = state.notes.find((note) => note.id === noteId) || null;
+                state.messageSearch = '';
+                if (messageSearchEl) {
+                    messageSearchEl.value = '';
+                }
+                renderNoteTitle(state.activeNote);
+                renderNotes();
+                updateComposerAvailability();
+                renderAttachmentChips();
+                renderMessages();
+                await loadMessages(noteId, { silent: options.silent });
+                if (options.focusComposer) {
+                    const textarea = getActiveTextarea();
+                    if (textarea) {
+                        textarea.focus();
+                    }
+                }
+            };
+
+            const createNote = async (title) => {
+                const response = await fetch('/api/firecoast/notes', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title }),
+                });
+                if (!response.ok) {
+                    throw new Error('Failed to create note');
+                }
+                const payload = await response.json();
+                if (payload.note) {
+                    updateNoteFromResponse(payload.note);
+                }
+                return payload.note;
+            };
+
+            const deleteNote = async (noteId) => {
+                const response = await fetch('/api/firecoast/notes', {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: noteId }),
+                });
+                if (!response.ok) {
+                    throw new Error('Failed to delete note');
+                }
+                return response.json();
+            };
+
+            const loadNotes = async (options = {}) => {
+                const silent = Boolean(options.silent);
+                if (!silent) {
+                    state.isLoadingNotes = true;
+                }
+                try {
+                    const response = await fetch('/api/firecoast/notes');
+                    if (!response.ok) {
+                        throw new Error('Failed to load notes');
+                    }
+                    const payload = await response.json();
+                    state.notes = Array.isArray(payload.notes) ? payload.notes : [];
+                    sortNotes();
+                    renderNotes();
+                    await refreshMentionDirectory();
+                    if (!state.activeNoteId && state.notes.length) {
+                        await selectNote(state.notes[0].id, { focusComposer: true, silent: true });
+                    }
+                    if (!state.notes.length && !autoCreatingNote) {
+                        autoCreatingNote = true;
+                        try {
+                            const note = await createNote('New note');
+                            if (note) {
+                                await selectNote(note.id, { focusComposer: true });
+                            }
+                        } catch (error) {
+                            console.error('Failed to create default note', error);
+                        } finally {
+                            autoCreatingNote = false;
+                        }
+                    }
+                } catch (error) {
+                    console.error('Failed to load notes', error);
+                    showError('Unable to load notes.');
+                } finally {
+                    state.isLoadingNotes = false;
+                }
+            };
+
+            const sendMessage = async (overrideContent = undefined) => {
+                if (!state.activeNoteId || state.isSending) {
+                    return;
+                }
+                const rawContent =
+                    overrideContent !== undefined && overrideContent !== null
+                        ? String(overrideContent)
+                        : getComposerValue();
+                const trimmed = normalizePreview(rawContent);
+                if (!trimmed && !state.pendingFiles.length) {
+                    return;
+                }
+                state.isSending = true;
+                clearError();
+                try {
+                    let response;
+                    if (state.pendingFiles.length) {
+                        const formData = new FormData();
+                        formData.append('note_id', state.activeNoteId);
+                        formData.append('content', rawContent);
+                        state.pendingFiles.forEach((item) => {
+                            formData.append('attachments', item.file, item.file.name);
+                        });
+                        response = await fetch('/api/firecoast/chat', {
+                            method: 'POST',
+                            body: formData,
+                        });
+                    } else {
+                        response = await fetch('/api/firecoast/chat', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ note_id: state.activeNoteId, content: rawContent }),
+                        });
+                    }
+                    if (!response.ok) {
+                        throw new Error('Message failed');
+                    }
+                    const payload = await response.json();
+                    const incoming = Array.isArray(payload.messages) ? payload.messages : [];
+                    state.messages = state.messages.concat(incoming);
+                    if (payload.note) {
+                        updateNoteFromResponse(payload.note);
+                    }
+                    resetComposer();
+                    renderMessages();
+                    clearError();
+                } catch (error) {
+                    console.error('Failed to send message', error);
+                    showError('Unable to send that message.');
+                } finally {
+                    state.isSending = false;
+                    if (chatLogEl) {
+                        chatLogEl.scrollTop = chatLogEl.scrollHeight;
+                    }
+                    if (attachmentInputEl) {
+                        attachmentInputEl.value = '';
+                    }
+                }
+            };
+
+            if (noteSearchEl) {
+                noteSearchEl.addEventListener('input', () => {
+                    state.noteSearch = noteSearchEl.value || '';
+                    renderNotes();
+                });
+                noteSearchEl.addEventListener('keydown', async (event) => {
+                    if (event.key === 'Enter') {
+                        event.preventDefault();
+                        const trimmed = normalizePreview(noteSearchEl.value || '');
+                        if (!trimmed) {
+                            return;
+                        }
+                        const existing = state.notes.find((note) => note.title.toLowerCase() === trimmed.toLowerCase());
+                        if (existing) {
+                            await selectNote(existing.id, { focusComposer: true });
+                            return;
+                        }
+                        try {
+                            const note = await createNote(trimmed);
+                            noteSearchEl.value = '';
+                            state.noteSearch = '';
+                            renderNotes();
+                            if (note) {
+                                await selectNote(note.id, { focusComposer: true });
+                            }
+                        } catch (error) {
+                            console.error('Failed to create note', error);
+                            showError('Unable to create that note.');
+                        }
+                    }
+                });
+            }
+
+            if (messageSearchEl) {
+                messageSearchEl.addEventListener('input', () => {
+                    state.messageSearch = messageSearchEl.value || '';
+                    renderMessages();
+                });
+            }
+
+            if (refreshButton) {
+                refreshButton.addEventListener('click', () => {
+                    if (state.activeNoteId) {
+                        loadMessages(state.activeNoteId, { silent: false });
+                    }
+                });
+            }
+
+            if (inputEl) {
+                inputEl.addEventListener('input', () => {
+                    state.composerValue = inputEl.value || '';
+                    autoResizeInput();
+                });
+                inputEl.addEventListener('keydown', (event) => {
+                    if (event.key === 'Enter' && !event.shiftKey) {
+                        event.preventDefault();
+                        sendMessage(inputEl.value || '');
+                    }
+                });
+            }
+
+            if (attachmentButtonEl) {
+                attachmentButtonEl.addEventListener('click', () => {
+                    if (attachmentInputEl && !attachmentButtonEl.disabled) {
+                        attachmentInputEl.click();
+                    }
+                });
+            }
+
+            if (attachmentInputEl) {
+                attachmentInputEl.addEventListener('change', (event) => {
+                    addPendingFiles(event.target.files);
+                });
+            }
+
+            renderNotes();
+            renderMessages();
+            renderAttachmentChips();
+            ensureMentionComposer();
+            loadNotes();
+        })();
+    </script>
+</body>
+</html>

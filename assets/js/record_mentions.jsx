@@ -39,7 +39,7 @@ const fetchHandles = async (entityTypes = null, search = '') => {
     return payload.handles || [];
 };
 
-function useMentionDirectory(entityTypes = ['contact']) {
+function useMentionDirectory(entityTypes = ['contact', 'firecoast_note']) {
     const [handles, setHandles] = useState([]);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState(null);
@@ -495,9 +495,12 @@ function RecordMentionTextarea({
     placeholder,
     value,
     onChange,
+    onSubmit = null,
     disabled = false,
     rows = 3,
     entityTypes = ['contact'],
+    className = '',
+    textareaClassName = '',
 }) {
     ensureCaretStyles();
     const containerRef = useRef(null);
@@ -638,20 +641,31 @@ function RecordMentionTextarea({
             }
             return;
         }
-        if (!isOpen || suggestions.length === 0) {
-            return;
+        if (isOpen && suggestions.length > 0) {
+            if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                setHighlightIndex(prev => (prev + 1) % suggestions.length);
+                return;
+            }
+            if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                setHighlightIndex(prev => (prev - 1 + suggestions.length) % suggestions.length);
+                return;
+            }
+            if (event.key === 'Enter' || event.key === 'Tab') {
+                event.preventDefault();
+                const suggestion = suggestions[highlightIndex] || suggestions[0];
+                if (suggestion) {
+                    replaceWithSuggestion(suggestion);
+                }
+                return;
+            }
         }
-        if (event.key === 'ArrowDown') {
-            event.preventDefault();
-            setHighlightIndex(prev => (prev + 1) % suggestions.length);
-        } else if (event.key === 'ArrowUp') {
-            event.preventDefault();
-            setHighlightIndex(prev => (prev - 1 + suggestions.length) % suggestions.length);
-        } else if (event.key === 'Enter' || event.key === 'Tab') {
-            event.preventDefault();
-            const suggestion = suggestions[highlightIndex] || suggestions[0];
-            if (suggestion) {
-                replaceWithSuggestion(suggestion);
+        if (event.key === 'Enter' && !event.shiftKey) {
+            if (typeof onSubmit === 'function') {
+                event.preventDefault();
+                const textarea = textareaRef.current;
+                onSubmit(textarea ? textarea.value : event.target.value);
             }
         }
     };
@@ -788,12 +802,15 @@ function RecordMentionTextarea({
     const overlayFocusClasses = !disabled && isActive ? 'border-orange-300 shadow-sm ring-2 ring-orange-200' : '';
 
     return (
-        <div className="space-y-2" ref={containerRef}>
+        <div
+            className={`record-mention-textarea space-y-2 ${className}`.trim()}
+            ref={containerRef}
+        >
             {label && <label className="block text-sm font-medium text-slate-600">{label}</label>}
             <div className="relative">
                 <div
                     ref={overlayRef}
-                    className={`pointer-events-none absolute inset-0 z-20 whitespace-pre-wrap break-words rounded-md px-3 py-2 text-sm transition duration-150 ${overlayStateClasses} ${overlayFocusClasses} selection:bg-orange-200 selection:text-inherit`}
+                    className={`record-mention-textarea__overlay pointer-events-none absolute inset-0 z-20 whitespace-pre-wrap break-words rounded-md px-3 py-2 text-sm transition duration-150 ${overlayStateClasses} ${overlayFocusClasses} selection:bg-orange-200 selection:text-inherit`}
                     aria-hidden="true"
                 >
                     {highlightNodes}
@@ -812,12 +829,12 @@ function RecordMentionTextarea({
                     placeholder={placeholder}
                     disabled={disabled}
                     rows={rows}
-                    className="relative z-10 block w-full resize-none rounded-md border-0 bg-transparent px-3 py-2 text-sm text-transparent caret-transparent selection:bg-orange-200 selection:text-orange-900 focus:outline-none focus:ring-0 disabled:cursor-not-allowed disabled:text-transparent disabled:caret-transparent"
+                    className={`record-mention-textarea__input relative z-10 block w-full resize-none rounded-md border-0 bg-transparent px-3 py-2 text-sm text-transparent caret-transparent selection:bg-orange-200 selection:text-orange-900 focus:outline-none focus:ring-0 disabled:cursor-not-allowed disabled:text-transparent disabled:caret-transparent ${textareaClassName}`.trim()}
                 />
                 {isOpen && (
-                    <div className="absolute bottom-full left-0 right-0 z-30 mb-2">
-                        <ul className="max-h-60 overflow-auto rounded-xl border border-slate-200 bg-white shadow-2xl ring-1 ring-slate-100" role="listbox">
-                            <li className="border-b border-slate-100 bg-slate-50 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    <div className="record-mention-textarea__menu absolute bottom-full left-0 right-0 z-30 mb-2">
+                        <ul className="record-mention-textarea__list max-h-60 overflow-auto rounded-xl border border-slate-200 bg-white shadow-2xl ring-1 ring-slate-100" role="listbox">
+                            <li className="record-mention-textarea__header border-b border-slate-100 bg-slate-50 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
                                 Mention a record
                             </li>
                             {suggestions.map((suggestion, index) => {
@@ -829,40 +846,40 @@ function RecordMentionTextarea({
                                         key={`${suggestion.entityType || 'record'}:${suggestion.entityId}`}
                                         role="option"
                                         aria-selected={isHighlighted}
-                                        className={`cursor-pointer px-4 py-3 text-sm transition-colors ${isHighlighted ? 'bg-orange-50 text-orange-700' : 'text-slate-700 hover:bg-slate-50'}`}
+                                        className={`record-mention-textarea__option cursor-pointer px-4 py-3 text-sm transition-colors ${isHighlighted ? 'is-active' : ''}`}
                                         onMouseDown={event => {
                                             event.preventDefault();
                                             replaceWithSuggestion(suggestion);
                                         }}
                                         onMouseEnter={() => setHighlightIndex(index)}
                                     >
-                                        <div className="flex items-center justify-between gap-2">
-                                            <span className="font-semibold">{displayLabel}</span>
+                                        <div className="record-mention-textarea__option-main flex items-center justify-between gap-2">
+                                            <span className="record-mention-textarea__item-label font-semibold">{displayLabel}</span>
                                             {entityLabel && (
-                                                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                                                <span className="record-mention-textarea__item-entity rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                                                     {entityLabel}
                                                 </span>
                                             )}
                                         </div>
-                                        <div className="mt-1 text-xs text-slate-500">@{suggestion.handle}</div>
+                                        <div className="record-mention-textarea__item-handle mt-1 text-xs text-slate-500">@{suggestion.handle}</div>
                                     </li>
                                 );
                             })}
                             {suggestions.length === 0 && !isLoading && !error && (
-                                <li className="px-4 py-3 text-sm text-slate-500">
+                                <li className="record-mention-textarea__empty px-4 py-3 text-sm text-slate-500">
                                     No matching records yet. Try typing more or refresh the directory.
                                 </li>
                             )}
                             {error && (
-                                <li className="px-4 py-3 text-sm text-red-600">Unable to load mention directory. Please refresh.</li>
+                                <li className="record-mention-textarea__error px-4 py-3 text-sm text-red-600">Unable to load mention directory. Please refresh.</li>
                             )}
                             {isLoading && (
-                                <li className="px-4 py-3 text-sm text-slate-500">Loading directory…</li>
+                                <li className="record-mention-textarea__loading px-4 py-3 text-sm text-slate-500">Loading directory…</li>
                             )}
-                            <li className="border-t border-slate-100 bg-white px-4 py-2">
+                            <li className="record-mention-textarea__footer border-t border-slate-100 bg-white px-4 py-2">
                                 <button
                                     type="button"
-                                    className="text-sm font-semibold text-orange-600 transition hover:text-orange-700"
+                                    className="record-mention-textarea__refresh text-sm font-semibold text-orange-600 transition hover:text-orange-700"
                                     onMouseDown={event => {
                                         event.preventDefault();
                                         refresh();
@@ -934,7 +951,7 @@ function RecordMentionText({
     return (
         <Tag
             ref={containerRef}
-            className={className}
+            className={`record-mention-text ${className}`.trim()}
             style={{ whiteSpace: 'pre-wrap', ...style }}
         >
             {content}
