@@ -33,37 +33,28 @@
 
     <main class="fc-main">
         <div class="fc-workspace">
-            <aside class="fc-sidebar" aria-label="FireCoast threads">
+            <aside class="fc-sidebar" aria-label="Pinned messages">
                 <div class="fc-sidebar__header">
-                    <h1 class="fc-sidebar__title">FireCoast DM</h1>
-                    <p class="fc-sidebar__subtitle">All of your notes with <strong>@firecoast</strong> in one place.</p>
+                    <h1 class="fc-sidebar__title">DMs</h1>
                 </div>
                 <div class="fc-sidebar__threads" id="fc-thread-list" role="list"></div>
-                <p id="fc-thread-empty" class="fc-sidebar__empty">Send yourself a note or command to pin it here for quick review.</p>
-                <div class="fc-sidebar__section" aria-label="Quick commands">
-                    <h2 class="fc-sidebar__section-title">Quick commands</h2>
-                    <div class="fc-quick-actions">
-                        <button type="button" class="fc-quick-button" data-template=".reminder Follow up | tomorrow 9am | add tracking number">.reminder</button>
-                        <button type="button" class="fc-quick-button" data-template=".event Project kickoff | next Tuesday 2pm | next Tuesday 3:30pm | HQ West | finalize agenda">.event</button>
-                        <button type="button" class="fc-quick-button" data-template="@firecoast what's my password for Example">Passwords</button>
-                        <button type="button" class="fc-quick-button" data-template=".report orders_overview from 2024-01-01 to 2024-03-31">Reports</button>
-                    </div>
-                </div>
+                <p id="fc-thread-empty" class="fc-sidebar__empty">Notes you send will show up here.</p>
             </aside>
-            <section class="fc-conversation" aria-label="Conversation with the FireCoast assistant">
+            <section class="fc-conversation" aria-label="Conversation with @firecoast">
                 <header class="fc-conversation__header">
-                    <div class="fc-conversation__title">
-                        <h2>You &amp; <span>@firecoast</span></h2>
-                        <p>Capture plans, tasks, and lookups across the business.</p>
+                    <div class="fc-channel">
+                        <div class="fc-channel__avatar" aria-hidden="true">F</div>
+                        <div class="fc-channel__meta">
+                            <h2 class="fc-channel__title">@firecoast</h2>
+                        </div>
                     </div>
                     <div class="fc-conversation__controls">
                         <div class="fc-search">
                             <label class="fc-screen-reader-only" for="fc-search-input">Search messages</label>
-                            <input id="fc-search-input" class="fc-search__input" type="search" placeholder="Search notes and commands" autocomplete="off">
+                            <input id="fc-search-input" class="fc-search__input" type="search" placeholder="Search" autocomplete="off">
                         </div>
                         <button type="button" id="fc-refresh" class="fc-refresh-button" aria-label="Refresh conversation">
                             <span class="fc-refresh-button__icon" aria-hidden="true">↺</span>
-                            <span class="fc-refresh-button__label">Refresh</span>
                         </button>
                     </div>
                 </header>
@@ -73,10 +64,9 @@
                 <footer class="fc-chat-footer">
                     <p id="fc-error" class="fc-error" role="status" aria-live="assertive" hidden></p>
                     <div class="fc-composer">
-                        <label for="fc-input" class="fc-screen-reader-only">Message the FireCoast assistant</label>
-                        <textarea id="fc-input" class="fc-textarea" placeholder="Message #personal-console. Use Shift+Enter for a new line." rows="3"></textarea>
+                        <label for="fc-input" class="fc-screen-reader-only">Message @firecoast</label>
+                        <textarea id="fc-input" class="fc-textarea" placeholder="Message @firecoast" rows="1"></textarea>
                         <button type="button" id="fc-send" class="fc-send-button" disabled>
-                            <span>Send</span>
                             <span class="fc-send-button__icon" aria-hidden="true">↩</span>
                         </button>
                     </div>
@@ -128,8 +118,6 @@
             const threadListEl = document.getElementById('fc-thread-list');
             const threadEmptyEl = document.getElementById('fc-thread-empty');
             const searchInput = document.getElementById('fc-search-input');
-            const quickButtons = Array.from(document.querySelectorAll('.fc-quick-button'));
-
             const state = {
                 messages: [],
                 isLoading: false,
@@ -139,7 +127,7 @@
                 searchQuery: '',
             };
 
-            const QUICK_TEMPLATE_FOCUS_DELAY = 10;
+            const MAX_COMPOSER_HEIGHT = 220;
 
             const formatTimestamp = (value, withTime = true) => {
                 if (!value) {
@@ -479,15 +467,15 @@
                     if (threadEmptyEl) {
                         threadEmptyEl.hidden = false;
                         threadEmptyEl.textContent = trimmedQuery
-                            ? 'No notes match this search yet.'
-                            : 'Send yourself a note or command to pin it here for quick review.';
+                            ? 'No matches yet.'
+                            : 'Notes you send will show up here.';
                     }
                     return;
                 }
 
                 if (threadEmptyEl) {
                     threadEmptyEl.hidden = true;
-                    threadEmptyEl.textContent = 'Send yourself a note or command to pin it here for quick review.';
+                    threadEmptyEl.textContent = 'Notes you send will show up here.';
                 }
 
                 const sorted = source
@@ -570,19 +558,11 @@
                 if (!visibleMessages.length) {
                     const empty = document.createElement('div');
                     empty.className = 'fc-empty-state' + (trimmedQuery ? ' fc-empty-state--search' : '');
-                    if (trimmedQuery) {
-                        const searchText = document.createElement('p');
-                        searchText.innerHTML = `No messages matched “<strong>${trimmedQuery}</strong>”.`;
-                        empty.appendChild(searchText);
-                    } else {
-                        const pill = document.createElement('div');
-                        pill.className = 'fc-empty-pill';
-                        pill.textContent = 'Start chatting';
-                        empty.appendChild(pill);
-                        const text = document.createElement('p');
-                        text.innerHTML = 'Send yourself notes and tasks. Try <code>.reminder Send invoices | tomorrow 9am</code> to see it in action.';
-                        empty.appendChild(text);
-                    }
+                    const text = document.createElement('p');
+                    text.textContent = trimmedQuery
+                        ? `No messages matched "${trimmedQuery}".`
+                        : 'Drop a note to start the thread.';
+                    empty.appendChild(text);
                     logEl.appendChild(empty);
                     return;
                 }
@@ -632,6 +612,15 @@
                 }
             };
 
+            const autoResizeInput = () => {
+                if (!inputEl) {
+                    return;
+                }
+                inputEl.style.height = 'auto';
+                const targetHeight = Math.min(MAX_COMPOSER_HEIGHT, inputEl.scrollHeight);
+                inputEl.style.height = `${Math.max(targetHeight, 44)}px`;
+            };
+
             const sendMessage = async () => {
                 if (!inputEl) {
                     return;
@@ -657,6 +646,7 @@
                     const incoming = Array.isArray(payload.messages) ? payload.messages : [];
                     state.messages = state.messages.concat(incoming);
                     inputEl.value = '';
+                    autoResizeInput();
                     updateSendButton();
                     clearError();
                     renderMessages();
@@ -674,13 +664,18 @@
             };
 
             if (inputEl) {
-                inputEl.addEventListener('input', updateSendButton);
+                autoResizeInput();
+                inputEl.addEventListener('input', () => {
+                    autoResizeInput();
+                    updateSendButton();
+                });
                 inputEl.addEventListener('keydown', (event) => {
                     if (event.key === 'Enter' && !event.shiftKey) {
                         event.preventDefault();
                         sendMessage();
                     }
                 });
+                updateSendButton();
             }
 
             if (sendButton) {
@@ -700,17 +695,6 @@
                     renderThreads();
                 });
             }
-
-            quickButtons.forEach((button) => {
-                button.addEventListener('click', () => {
-                    const value = button.getAttribute('data-template') || '';
-                    if (inputEl) {
-                        inputEl.value = value;
-                        updateSendButton();
-                        setTimeout(() => inputEl.focus(), QUICK_TEMPLATE_FOCUS_DELAY);
-                    }
-                });
-            });
 
             renderThreads();
             loadMessages();
