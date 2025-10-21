@@ -226,6 +226,7 @@ def _store_chat_message(
         (message_id,),
     )
     row = cursor.fetchone()
+    _refresh_note_mentions(conn, note_id)
     return _serialize_chat_row(row)
 
 
@@ -245,6 +246,40 @@ def _list_chat_messages(conn: sqlite3.Connection, note_id: str, limit: int) -> L
 
 
 NOTE_HANDLE_SANITIZE_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _refresh_note_mentions(conn: sqlite3.Connection, note_id: str) -> None:
+    if not note_id:
+        return
+    cursor = conn.execute(
+        """
+        SELECT content
+        FROM firecoast_chat_messages
+        WHERE note_id = ?
+        ORDER BY datetime(created_at) DESC, rowid DESC
+        """,
+        (note_id,),
+    )
+    handles: List[str] = []
+    snippet_source: Optional[str] = None
+    for row in cursor.fetchall():
+        if isinstance(row, sqlite3.Row):
+            try:
+                content = row['content']
+            except (KeyError, TypeError):
+                content = None
+        else:
+            content = row[0] if row and len(row) else None
+        if not content:
+            continue
+        extracted = extract_mentions(content)
+        if not extracted:
+            continue
+        handles.extend(extracted)
+        if not snippet_source:
+            snippet_source = content
+    unique_handles = sorted({handle.lower() for handle in handles})
+    sync_record_mentions(conn, unique_handles, 'firecoast_note', str(note_id), snippet_source or '')
 
 
 def _normalize_note_title(value: Optional[str]) -> str:

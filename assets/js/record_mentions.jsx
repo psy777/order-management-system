@@ -39,7 +39,7 @@ const fetchHandles = async (entityTypes = null, search = '') => {
     return payload.handles || [];
 };
 
-function useMentionDirectory(entityTypes = ['contact']) {
+function useMentionDirectory(entityTypes = ['contact', 'firecoast_note']) {
     const [handles, setHandles] = useState([]);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState(null);

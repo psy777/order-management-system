@@ -43,7 +43,7 @@
             </aside>
             <section class="fc-chat-panel" aria-label="Note conversation">
                 <header class="fc-chat-panel__header">
-                    <h1 id="fc-note-title" class="fc-chat-panel__title">@FireCoast</h1>
+                    <h1 id="fc-note-title" class="fc-chat-panel__title">Untitled note</h1>
                     <div class="fc-chat-panel__actions">
                         <label class="fc-screen-reader-only" for="fc-message-search">Search this note</label>
                         <input id="fc-message-search" class="fc-chat-search" type="search" placeholder="Search this note" autocomplete="off">
@@ -213,12 +213,20 @@
                     return;
                 }
                 if (!note) {
-                    noteTitleEl.textContent = '@—';
-                    noteTitleEl.title = 'No note selected';
+                    noteTitleEl.textContent = 'Untitled note';
+                    noteTitleEl.title = 'Select a note to view messages';
+                    noteTitleEl.removeAttribute('data-handle');
                     return;
                 }
-                noteTitleEl.textContent = `@${note.title}`;
-                noteTitleEl.title = note.title;
+                const label = normalizePreview(note.title || '') || 'Untitled note';
+                const handle = note.handle ? `@${note.handle}` : '';
+                noteTitleEl.textContent = label;
+                noteTitleEl.title = handle ? `${label} (${handle})` : label;
+                if (handle) {
+                    noteTitleEl.setAttribute('data-handle', handle);
+                } else {
+                    noteTitleEl.removeAttribute('data-handle');
+                }
             };
 
             const sortNotes = () => {

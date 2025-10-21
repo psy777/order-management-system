@@ -172,3 +172,38 @@ def test_notes_endpoint_updates_titles_and_handles(configure_chat_environment):
         assert row is not None
     finally:
         conn.close()
+
+
+def test_note_mentions_are_synced(configure_chat_environment):
+    client = firecoast_app.app.test_client()
+    note = _create_note(client, 'Mention note')
+
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO record_handles (handle, entity_type, entity_id, display_name, search_blob)
+            VALUES (?, 'contact', ?, ?, ?)
+            """,
+            ('ops-team', 'contact-1', 'Ops Team', 'ops team ops-team'),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    response = client.post(
+        '/api/firecoast/chat',
+        json={'note_id': note['id'], 'content': 'Loop in @ops-team for the review.'},
+    )
+    assert response.status_code == 200
+
+    conn = get_db_connection()
+    try:
+        rows = conn.execute(
+            "SELECT mentioned_handle FROM record_mentions WHERE context_entity_type = 'firecoast_note' AND context_entity_id = ?",
+            (note['id'],),
+        ).fetchall()
+        handles = {row['mentioned_handle'] for row in rows}
+        assert 'ops-team' in handles
+    finally:
+        conn.close()
