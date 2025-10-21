@@ -9,6 +9,7 @@ import sqlite3
 import sys
 import smtplib
 import re
+from collections import defaultdict
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
@@ -117,6 +118,45 @@ def read_password_entries():
 
 def write_password_entries(entries):
     write_json_file(PASSWORDS_FILE, {"entries": entries})
+
+
+def _fetch_attachments_for_logs(cursor, log_ids: List[int]) -> Dict[int, List[Dict[str, Any]]]:
+    if not log_ids:
+        return {}
+    placeholders = ",".join(["?"] * len(log_ids))
+    cursor.execute(
+        f"""
+        SELECT log_id, attachment_id, file_path, original_filename
+        FROM order_log_attachments
+        WHERE log_id IN ({placeholders})
+        ORDER BY attachment_id ASC
+        """,
+        log_ids,
+    )
+    attachments_by_log: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+    for row in cursor.fetchall():
+        file_path = row["file_path"]
+        original_name = row["original_filename"]
+        attachments_by_log[row["log_id"]].append(
+            {
+                "id": row["attachment_id"],
+                "path": file_path,
+                "name": original_name or os.path.basename(file_path),
+            }
+        )
+    return dict(attachments_by_log)
+
+
+def _remove_saved_files(file_paths: List[str]) -> None:
+    for relative_path in file_paths:
+        if not relative_path:
+            continue
+        absolute_path = os.path.join(app.config['UPLOAD_FOLDER'], relative_path)
+        try:
+            if os.path.exists(absolute_path):
+                os.remove(absolute_path)
+        except OSError:
+            app.logger.warning("Failed to remove attachment file %s", absolute_path)
 PASSWORD_SUBJECT_CLEAN_RE = re.compile(r"^(?:my|the)\s+", re.IGNORECASE)
 DATE_FROM_RE = re.compile(r"\bfrom\s+(.+?)(?=\s+\b(?:to|through|until|till|by)\b|$)", re.IGNORECASE)
 DATE_TO_RE = re.compile(r"\b(?:to|through|until|till|by)\s+(.+)", re.IGNORECASE)
@@ -2009,13 +2049,19 @@ def serialize_order(cursor, order_row, user_timezone, include_logs=False):
             "SELECT log_id, timestamp, user, action, details, note, attachment_path FROM order_logs WHERE order_id = ? ORDER BY timestamp DESC",
             (order_dict['id'],)
         )
+        log_rows = cursor.fetchall()
+        attachments_map = _fetch_attachments_for_logs(cursor, [row['log_id'] for row in log_rows])
         logs = []
-        for log_row in cursor.fetchall():
+        for log_row in log_rows:
             log_dict = dict(log_row)
             if log_dict.get('timestamp'):
                 naive_date = dateutil_parse(log_dict['timestamp'])
                 utc_date = pytz.utc.localize(naive_date)
                 log_dict['timestamp'] = utc_date.astimezone(user_timezone).isoformat()
+            attachments_payload = attachments_map.get(log_dict['log_id'], [])
+            log_dict['attachments'] = attachments_payload
+            if attachments_payload:
+                log_dict['attachment_path'] = attachments_payload[0]['path']
             logs.append(log_dict)
         order_dict['orderLogs'] = logs
 
@@ -2336,25 +2382,40 @@ def handle_order_logs(order_id):
         details = request.form.get('details')
         note = request.form.get('note')
         log_body = (details if details is not None else note) or ''
-        file = request.files.get('attachment')
-        attachment_path = None
+        upload_candidates = request.files.getlist('attachments')
+        if not upload_candidates:
+            single_file = request.files.get('attachment')
+            if single_file:
+                upload_candidates = [single_file]
 
-        if file and file.filename:
-            filename = secure_filename(file.filename)
-            unique_filename = f"{uuid.uuid4().hex[:8]}_{filename}"
-            attachment_path = unique_filename
+        saved_attachments: List[Dict[str, str]] = []
+        for upload in upload_candidates:
+            if not upload or not upload.filename:
+                continue
+            original_name = upload.filename
+            sanitized_name = secure_filename(original_name) or f"attachment_{uuid.uuid4().hex[:8]}"
+            unique_filename = f"{uuid.uuid4().hex[:8]}_{sanitized_name}"
             try:
-                file.save(os.path.join(app.config['UPLOAD_FOLDER'], unique_filename))
+                upload.save(os.path.join(app.config['UPLOAD_FOLDER'], unique_filename))
             except Exception as e:
                 app.logger.error(f"Failed to save attachment for order {order_id}: {e}")
+                _remove_saved_files([entry['path'] for entry in saved_attachments])
                 return jsonify({"status": "error", "message": "Failed to save attachment"}), 500
+            saved_attachments.append({"path": unique_filename, "name": original_name})
+
+        primary_attachment_path = saved_attachments[0]['path'] if saved_attachments else None
 
         try:
             cursor.execute(
                 "INSERT INTO order_logs (order_id, user, action, details, note, attachment_path) VALUES (?, ?, ?, ?, ?, ?)",
-                (order_id, "system", action, log_body, log_body, attachment_path)
+                (order_id, "system", action, log_body, log_body, primary_attachment_path)
             )
             log_id = cursor.lastrowid
+            for saved in saved_attachments:
+                cursor.execute(
+                    "INSERT INTO order_log_attachments (log_id, file_path, original_filename) VALUES (?, ?, ?)",
+                    (log_id, saved['path'], saved['name']),
+                )
             handles = extract_mentions(log_body)
             sync_record_mentions(cursor.connection, handles, 'order_log', log_id, log_body)
             cursor.execute("SELECT contact_id FROM orders WHERE order_id = ?", (order_id,))
@@ -2365,7 +2426,7 @@ def handle_order_logs(order_id):
 
             cursor.execute("SELECT * FROM order_logs WHERE log_id = ?", (log_id,))
             new_log_row = cursor.fetchone()
-            
+
             if not new_log_row:
                 conn.close()
                 return jsonify({"status": "error", "message": "Failed to retrieve new log entry"}), 500
@@ -2375,6 +2436,11 @@ def handle_order_logs(order_id):
                 naive_date = dateutil_parse(new_log_dict['timestamp'])
                 utc_date = pytz.utc.localize(naive_date)
                 new_log_dict['timestamp'] = utc_date.astimezone(user_timezone).isoformat()
+
+            attachments_map = _fetch_attachments_for_logs(cursor, [log_id])
+            attachments_payload = attachments_map.get(log_id, [])
+            new_log_dict['attachments'] = attachments_payload
+            new_log_dict['attachment_path'] = attachments_payload[0]['path'] if attachments_payload else None
 
             if normalized_action in {'status update', 'status'} and log_body:
                 try:
@@ -2392,6 +2458,7 @@ def handle_order_logs(order_id):
 
         except sqlite3.Error as e:
             conn.rollback()
+            _remove_saved_files([entry['path'] for entry in saved_attachments])
             conn.close()
             app.logger.error(f"Database error adding log for order {order_id}: {e}")
             return jsonify({"status": "error", "message": "Database error"}), 500
@@ -2403,6 +2470,8 @@ def handle_order_logs(order_id):
 
     cursor.execute("SELECT log_id, timestamp, user, action, details, note, attachment_path FROM order_logs WHERE order_id = ? ORDER BY timestamp DESC", (order_id,))
     logs_from_db = cursor.fetchall()
+    log_ids = [row['log_id'] for row in logs_from_db]
+    attachments_map = _fetch_attachments_for_logs(cursor, log_ids)
     logs = []
     for log_row in logs_from_db:
         log_dict = dict(log_row)
@@ -2413,8 +2482,11 @@ def handle_order_logs(order_id):
             naive_date = dateutil_parse(log_dict['timestamp'])
             utc_date = pytz.utc.localize(naive_date)
             log_dict['timestamp'] = utc_date.astimezone(user_timezone).isoformat()
+        attachments_payload = attachments_map.get(log_dict['log_id'], [])
+        log_dict['attachments'] = attachments_payload
+        log_dict['attachment_path'] = attachments_payload[0]['path'] if attachments_payload else None
         logs.append(log_dict)
-    
+
     conn.close()
     return jsonify(logs)
 
@@ -2423,38 +2495,61 @@ def handle_specific_order_log(order_id, log_id):
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    cursor.execute("SELECT attachment_path FROM order_logs WHERE log_id = ? AND order_id = ?", (log_id, order_id))
+    cursor.execute(
+        "SELECT log_id, action, details, note, attachment_path FROM order_logs WHERE log_id = ? AND order_id = ?",
+        (log_id, order_id),
+    )
     log = cursor.fetchone()
 
     if not log:
         conn.close()
         return jsonify({"status": "error", "message": "Log not found"}), 404
 
+    attachments_map = _fetch_attachments_for_logs(cursor, [log_id])
+    existing_attachments = attachments_map.get(log_id, [])
+
     if request.method == 'POST':  # Using POST for update to handle multipart/form-data
         note = request.form.get('note')
         details = request.form.get('details')
         action_override = request.form.get('action')
         log_body = (details if details is not None else note) or ''
-        file = request.files.get('attachment')
+        upload_candidates = request.files.getlist('attachments')
+        if not upload_candidates:
+            single_file = request.files.get('attachment')
+            if single_file:
+                upload_candidates = [single_file]
 
-        attachment_path = log['attachment_path']
+        saved_attachments: List[Dict[str, str]] = []
+        for upload in upload_candidates:
+            if not upload or not upload.filename:
+                continue
+            original_name = upload.filename
+            sanitized_name = secure_filename(original_name) or f"attachment_{uuid.uuid4().hex[:8]}"
+            unique_filename = f"{uuid.uuid4().hex[:8]}_{sanitized_name}"
+            try:
+                upload.save(os.path.join(app.config['UPLOAD_FOLDER'], unique_filename))
+            except Exception as e:
+                app.logger.error(f"Failed to save attachment for order {order_id}: {e}")
+                _remove_saved_files([entry['path'] for entry in saved_attachments])
+                conn.close()
+                return jsonify({"status": "error", "message": "Failed to save attachment"}), 500
+            saved_attachments.append({"path": unique_filename, "name": original_name})
 
-        if file and file.filename:
-            if attachment_path:
-                old_file_path = os.path.join(app.config['UPLOAD_FOLDER'], attachment_path)
-                if os.path.exists(old_file_path):
-                    os.remove(old_file_path)
-
-            filename = secure_filename(file.filename)
-            unique_filename = f"{uuid.uuid4().hex[:8]}_{filename}"
-            attachment_path = unique_filename
-            file.save(os.path.join(app.config['UPLOAD_FOLDER'], unique_filename))
+        replace_attachments = bool(saved_attachments)
+        attachment_path = saved_attachments[0]['path'] if replace_attachments else log['attachment_path']
 
         updated_action = action_override.strip() if action_override and action_override.strip() else log['action']
         cursor.execute(
             "UPDATE order_logs SET action = ?, details = ?, note = ?, attachment_path = ? WHERE log_id = ?",
             (updated_action, log_body, log_body, attachment_path, log_id)
         )
+        if replace_attachments:
+            cursor.execute("DELETE FROM order_log_attachments WHERE log_id = ?", (log_id,))
+            for saved in saved_attachments:
+                cursor.execute(
+                    "INSERT INTO order_log_attachments (log_id, file_path, original_filename) VALUES (?, ?, ?)",
+                    (log_id, saved['path'], saved['name']),
+                )
         handles = extract_mentions(log_body)
         sync_record_mentions(cursor.connection, handles, 'order_log', log_id, log_body)
         cursor.execute("SELECT contact_id FROM orders WHERE order_id = ?", (order_id,))
@@ -2462,15 +2557,19 @@ def handle_specific_order_log(order_id, log_id):
         primary_contact_for_order = primary_row['contact_id'] if primary_row else None
         refresh_order_contact_links(cursor, order_id, primary_contact_for_order)
         conn.commit()
+        if replace_attachments:
+            old_paths = {attachment['path'] for attachment in existing_attachments}
+            if log['attachment_path']:
+                old_paths.add(log['attachment_path'])
+            _remove_saved_files(list(old_paths))
         conn.close()
         return jsonify({"status": "success", "message": "Log updated."})
 
     elif request.method == 'DELETE':
-        attachment_path = log['attachment_path']
-        if attachment_path:
-            file_path = os.path.join(app.config['UPLOAD_FOLDER'], attachment_path)
-            if os.path.exists(file_path):
-                os.remove(file_path)
+        paths_to_remove = {attachment['path'] for attachment in existing_attachments}
+        if log['attachment_path']:
+            paths_to_remove.add(log['attachment_path'])
+        _remove_saved_files(list(paths_to_remove))
 
         cursor.execute("DELETE FROM order_logs WHERE log_id = ?", (log_id,))
         cursor.execute(

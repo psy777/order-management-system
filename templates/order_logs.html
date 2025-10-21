@@ -98,7 +98,7 @@
                                         <th className="px-4 py-3">Timestamp</th>
                                         <th className="px-4 py-3">Action</th>
                                         <th className="px-4 py-3">Details</th>
-                                        <th className="px-4 py-3">Attachment</th>
+                                        <th className="px-4 py-3">Attachments</th>
                                         <th className="px-4 py-3"><span className="sr-only">Actions</span></th>
                                     </tr>
                                 </thead>
@@ -109,8 +109,24 @@
                                             <td className="px-4 py-3">{log.action}</td>
                                             <td className="px-4 py-3">{log.details || ''}</td>
                                             <td className="px-4 py-3">
-                                                {log.attachment_path ? 
-                                                    <a href={`/data/${log.attachment_path}`} target="_blank" className="text-orange-600 hover:underline">View File</a> : ''}
+                                                {log.attachments && log.attachments.length > 0 ? (
+                                                    <ul className="space-y-1">
+                                                        {log.attachments.map(attachment => (
+                                                            <li key={attachment.id || attachment.path}>
+                                                                <a
+                                                                    href={`/data/${attachment.path}`}
+                                                                    target="_blank"
+                                                                    rel="noopener noreferrer"
+                                                                    className="text-orange-600 hover:underline"
+                                                                >
+                                                                    {attachment.name || 'Download'}
+                                                                </a>
+                                                            </li>
+                                                        ))}
+                                                    </ul>
+                                                ) : (
+                                                    <span className="text-slate-400">—</span>
+                                                )}
                                             </td>
                                             <td className="px-4 py-3 text-right">
                                               <button onClick={() => handleDelete(log.log_id)} className="font-medium text-red-600 hover:underline">Delete</button>

@@ -304,6 +304,7 @@ const formatContactAddress = (address, city, state, zip) => {
             const [details, setDetails] = useState('');
             const [isSubmitting, setIsSubmitting] = useState(false);
             const fileInputRef = useRef(null);
+            const [selectedFiles, setSelectedFiles] = useState([]);
 
             const isStatusUpdate = ['status update', 'status'].includes(action.toLowerCase());
 
@@ -314,9 +315,12 @@ const formatContactAddress = (address, city, state, zip) => {
                 const formData = new FormData();
                 formData.append('action', action);
                 formData.append('details', details);
-                if (fileInputRef.current.files[0]) {
-                    formData.append('attachment', fileInputRef.current.files[0]);
-                }
+                const filesToUpload = fileInputRef.current ? Array.from(fileInputRef.current.files || []) : [];
+                filesToUpload.forEach(file => {
+                    if (file) {
+                        formData.append('attachments', file);
+                    }
+                });
 
                 try {
                     const response = await fetch(`/api/orders/${orderId}/logs`, {
@@ -329,6 +333,10 @@ const formatContactAddress = (address, city, state, zip) => {
                     }
                     const newLog = await response.json();
                     onLogAdded(newLog);
+                    setSelectedFiles([]);
+                    if (fileInputRef.current) {
+                        fileInputRef.current.value = '';
+                    }
                     onClose();
                 } catch (error) {
                     console.error("Error adding log:", error.message);
@@ -366,7 +374,27 @@ const formatContactAddress = (address, city, state, zip) => {
                             </div>
                             <div className="mb-4">
                                 <label htmlFor="attachment" className="block text-sm font-medium text-slate-700">Attachment</label>
-                                <input type="file" id="attachment" ref={fileInputRef} className="mt-1 block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-orange-50 file:text-orange-700 hover:file:bg-orange-100" />
+                                <input
+                                    type="file"
+                                    id="attachment"
+                                    ref={fileInputRef}
+                                    multiple
+                                    onChange={event => {
+                                        const files = Array.from(event.target.files || []);
+                                        setSelectedFiles(files);
+                                    }}
+                                    className="mt-1 block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-orange-50 file:text-orange-700 hover:file:bg-orange-100"
+                                />
+                                {selectedFiles.length > 0 && (
+                                    <ul className="mt-2 space-y-1 text-sm text-slate-600">
+                                        {selectedFiles.map((file, index) => (
+                                            <li key={`${file.name}-${index}`} className="flex items-center gap-2">
+                                                <span className="inline-flex items-center rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-700">{index + 1}</span>
+                                                <span className="truncate">{file.name}</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
                             </div>
                             <div className="flex justify-end gap-3 mt-6">
                                 <button type="button" onClick={onClose} disabled={isSubmitting} className="px-4 py-2 bg-slate-200 text-slate-800 font-semibold rounded-md hover:bg-slate-300 transition-colors">Cancel</button>
@@ -1012,7 +1040,7 @@ const formatContactAddress = (address, city, state, zip) => {
                                                 <th className="px-4 py-3">Timestamp</th>
                                                 <th className="px-4 py-3">Action</th>
                                                 <th className="px-4 py-3">Details</th>
-                                                <th className="px-4 py-3">Attachment</th>
+                                                <th className="px-4 py-3">Attachments</th>
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -1032,8 +1060,24 @@ const formatContactAddress = (address, city, state, zip) => {
                                                         )}
                                                     </td>
                                                     <td className="px-4 py-3">
-                                                        {log.attachment_path ?
-                                                            <a href={`/data/${log.attachment_path}`} target="_blank" className="text-orange-600 hover:underline">View File</a> : ''}
+                                                        {log.attachments && log.attachments.length > 0 ? (
+                                                            <ul className="space-y-1">
+                                                                {log.attachments.map((attachment, index) => (
+                                                                    <li key={attachment.id || `${attachment.path}-${index}`}>
+                                                                        <a
+                                                                            href={`/data/${attachment.path}`}
+                                                                            target="_blank"
+                                                                            rel="noopener noreferrer"
+                                                                            className="text-orange-600 hover:underline"
+                                                                        >
+                                                                            {attachment.name || 'Download'}
+                                                                        </a>
+                                                                    </li>
+                                                                ))}
+                                                            </ul>
+                                                        ) : (
+                                                            <span className="text-slate-400">—</span>
+                                                        )}
                                                     </td>
                                                 </tr>
                                             ))}
