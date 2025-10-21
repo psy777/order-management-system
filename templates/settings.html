@@ -303,6 +303,36 @@ hello@firenotes.com</p>
                 node.className = `text-sm ${tone === 'error' ? 'text-red-600' : tone === 'success' ? 'text-green-600' : 'text-slate-400'}`;
             };
 
+            const waitForAppRestart = () => {
+                const pollIntervalMs = 2000;
+                const timeoutMs = 60000;
+                const start = Date.now();
+
+                const pollForAvailability = async () => {
+                    try {
+                        const response = await fetch(window.location.pathname, {
+                            cache: 'no-store',
+                            headers: { 'X-FireCoast-Restart-Check': '1' },
+                        });
+                        if (response.ok) {
+                            window.location.reload();
+                            return;
+                        }
+                    } catch (error) {
+                        // Ignore network errors while the server restarts.
+                    }
+
+                    if (Date.now() - start >= timeoutMs) {
+                        window.location.reload();
+                        return;
+                    }
+
+                    setTimeout(pollForAvailability, pollIntervalMs);
+                };
+
+                setTimeout(pollForAvailability, pollIntervalMs);
+            };
+
             const sanitizeColor = (value) => {
                 if (typeof value !== 'string') return '#f97316';
                 const normalized = value.trim();
@@ -585,21 +615,52 @@ hello@firenotes.com</p>
             importFileInput.addEventListener('change', async () => {
                 const file = importFileInput.files[0];
                 if (!file) return;
-                setStatus(databaseStatus, 'Uploading backup…');
+
+                const confirmed = window.confirm(
+                    'Importing a backup will replace your existing data and restart FireCoast. Do you want to continue?'
+                );
+
+                if (!confirmed) {
+                    importFileInput.value = '';
+                    setStatus(databaseStatus, 'Import cancelled.', 'info');
+                    return;
+                }
+
+                setStatus(
+                    databaseStatus,
+                    'Uploading backup… FireCoast will restart automatically once the import finishes.'
+                );
+
                 const formData = new FormData();
                 formData.append('file', file);
+
                 try {
                     const response = await fetch('/api/import-data', {
                         method: 'POST',
                         body: formData,
                     });
+                    const payload = await response.json().catch(() => null);
+
                     if (!response.ok) {
-                        throw new Error('Import failed');
+                        const message = payload?.message || 'Import failed. The database was not replaced.';
+                        throw new Error(message);
                     }
-                    setStatus(databaseStatus, 'Database restored successfully.', 'success');
+
+                    const message =
+                        (payload && typeof payload.message === 'string')
+                            ? payload.message
+                            : 'Database restored successfully. FireCoast is restarting…';
+                    setStatus(databaseStatus, message, 'success');
+                    waitForAppRestart();
                 } catch (error) {
                     console.error(error);
-                    setStatus(databaseStatus, 'Import failed. The database was not replaced.', 'error');
+                    setStatus(
+                        databaseStatus,
+                        error instanceof Error && error.message
+                            ? error.message
+                            : 'Import failed. The database was not replaced.',
+                        'error'
+                    );
                 } finally {
                     importFileInput.value = '';
                 }
