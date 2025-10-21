@@ -546,6 +546,21 @@ def init_db():
     """)
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_record_handles_entity ON record_handles(entity_type, entity_id)")
 
+    cursor.execute("PRAGMA table_info(record_handles)")
+    record_handle_columns = {row[1] for row in cursor.fetchall()}
+    if 'display_name' not in record_handle_columns:
+        cursor.execute("ALTER TABLE record_handles ADD COLUMN display_name TEXT")
+    if 'search_blob' not in record_handle_columns:
+        cursor.execute("ALTER TABLE record_handles ADD COLUMN search_blob TEXT")
+    if 'created_at' not in record_handle_columns:
+        cursor.execute(
+            "ALTER TABLE record_handles ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP"
+        )
+    if 'updated_at' not in record_handle_columns:
+        cursor.execute(
+            "ALTER TABLE record_handles ADD COLUMN updated_at TEXT DEFAULT CURRENT_TIMESTAMP"
+        )
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS record_mentions (
             mention_id INTEGER PRIMARY KEY AUTOINCREMENT,

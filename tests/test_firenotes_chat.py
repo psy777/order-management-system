@@ -53,6 +53,32 @@ def _create_note(client, title='New note'):
     return payload['note']
 
 
+def test_init_db_upgrades_record_handles_schema(configure_chat_environment):
+    conn = get_db_connection()
+    try:
+        conn.execute('DROP TABLE record_handles')
+        conn.execute(
+            'CREATE TABLE record_handles (handle TEXT PRIMARY KEY, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL)'
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    firenotes_app.init_db()
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.execute('PRAGMA table_info(record_handles)')
+        columns = {row[1] for row in cursor.fetchall()}
+        assert {'display_name', 'search_blob', 'created_at', 'updated_at'} <= columns
+    finally:
+        conn.close()
+
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Schema upgrade note')
+    assert note['title'] == 'Schema upgrade note'
+
+
 def test_chat_creates_reminder_entry(configure_chat_environment):
     client = firenotes_app.app.test_client()
     note = _create_note(client, 'Ops note')
