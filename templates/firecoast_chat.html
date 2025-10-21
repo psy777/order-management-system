@@ -186,22 +186,6 @@
                 return inputEl;
             };
 
-            const handleComposerKeydown = (event) => {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                    event.preventDefault();
-                    sendMessage();
-                }
-            };
-
-            const attachMentionKeyHandler = () => {
-                const textarea = getActiveTextarea();
-                if (!textarea || textarea.dataset.fcKeyAttached === 'true') {
-                    return;
-                }
-                textarea.addEventListener('keydown', handleComposerKeydown);
-                textarea.dataset.fcKeyAttached = 'true';
-            };
-
             const renderMentionComposer = () => {
                 if (!mentionComposer.useMentionComponent || !mentionComposer.root || !mentionComposer.textareaComponent) {
                     return;
@@ -215,6 +199,9 @@
                                 autoResizeInput();
                             });
                         },
+                        onSubmit: () => {
+                            sendMessage();
+                        },
                         disabled: state.composerDisabled,
                         rows: 1,
                         placeholder: 'Write a message',
@@ -224,7 +211,6 @@
                     })
                 );
                 requestAnimationFrame(() => {
-                    attachMentionKeyHandler();
                     autoResizeInput();
                 });
             };

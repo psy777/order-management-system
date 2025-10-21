@@ -495,6 +495,7 @@ function RecordMentionTextarea({
     placeholder,
     value,
     onChange,
+    onSubmit = null,
     disabled = false,
     rows = 3,
     entityTypes = ['contact'],
@@ -640,20 +641,31 @@ function RecordMentionTextarea({
             }
             return;
         }
-        if (!isOpen || suggestions.length === 0) {
-            return;
+        if (isOpen && suggestions.length > 0) {
+            if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                setHighlightIndex(prev => (prev + 1) % suggestions.length);
+                return;
+            }
+            if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                setHighlightIndex(prev => (prev - 1 + suggestions.length) % suggestions.length);
+                return;
+            }
+            if (event.key === 'Enter' || event.key === 'Tab') {
+                event.preventDefault();
+                const suggestion = suggestions[highlightIndex] || suggestions[0];
+                if (suggestion) {
+                    replaceWithSuggestion(suggestion);
+                }
+                return;
+            }
         }
-        if (event.key === 'ArrowDown') {
-            event.preventDefault();
-            setHighlightIndex(prev => (prev + 1) % suggestions.length);
-        } else if (event.key === 'ArrowUp') {
-            event.preventDefault();
-            setHighlightIndex(prev => (prev - 1 + suggestions.length) % suggestions.length);
-        } else if (event.key === 'Enter' || event.key === 'Tab') {
-            event.preventDefault();
-            const suggestion = suggestions[highlightIndex] || suggestions[0];
-            if (suggestion) {
-                replaceWithSuggestion(suggestion);
+        if (event.key === 'Enter' && !event.shiftKey) {
+            if (typeof onSubmit === 'function') {
+                event.preventDefault();
+                const textarea = textareaRef.current;
+                onSubmit(textarea ? textarea.value : event.target.value);
             }
         }
     };
