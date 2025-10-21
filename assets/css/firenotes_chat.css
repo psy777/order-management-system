@@ -363,13 +363,18 @@
     position: relative;
     min-height: 0;
     background: #ffffff;
-    overflow: hidden;
     display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    max-height: 100%;
+    overflow: hidden;
 }
 
 .fc-chat-log {
     flex: 1 1 auto;
     min-height: 0;
+    height: 100%;
+    max-height: 100%;
     padding: 1.5rem;
     overflow-y: auto;
     display: flex;
@@ -379,6 +384,8 @@
     background: transparent;
     scroll-behavior: smooth;
     overscroll-behavior: contain;
+    scrollbar-gutter: stable both-edges;
+    scrollbar-width: thin;
 }
 
 .fc-chat-log::-webkit-scrollbar {
@@ -389,6 +396,7 @@
     background: rgba(148, 163, 184, 0.3);
     border-radius: 999px;
 }
+
 
 .fc-chat-placeholder {
     margin: auto;
