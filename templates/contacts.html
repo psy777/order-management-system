@@ -563,16 +563,6 @@ const ContactDetail = ({ contact, onSave, isSaving, onCancelCreate, onDelete, is
                                 Primary for {primaryOrders.length} order{primaryOrders.length === 1 ? '' : 's'}
                             </span>
                         )}
-                        {isViewMode && formState.id && onDelete && (
-                            <button
-                                type="button"
-                                onClick={handleDelete}
-                                disabled={isDeleting}
-                                className="inline-flex items-center px-3 py-1.5 text-sm font-semibold text-white bg-red-600 rounded-md shadow-sm hover:bg-red-700 transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
-                            >
-                                {isDeleting ? 'Deleting…' : 'Delete'}
-                            </button>
-                        )}
                         {isViewMode && formState.id && (
                             <button
                                 type="button"
