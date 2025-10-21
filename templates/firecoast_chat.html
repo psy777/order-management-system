@@ -7,35 +7,39 @@
     <link rel="icon" href="/favicon.ico" type="image/x-icon">
     <link rel="stylesheet" href="/assets/css/styles.css">
     <link rel="stylesheet" href="/assets/css/firecoast_chat.css">
+    <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script type="text/babel" src="/assets/js/record_mentions.jsx"></script>
 </head>
-<body class="fc-body">
+<body class="bg-slate-50 min-h-screen font-sans firecoast-chat">
     <a class="fc-screen-reader-only" href="#fc-chat-log">Skip to chat</a>
-    <nav class="fc-top-nav">
-        <div class="fc-top-nav__inner">
-            <div class="fc-nav-brand">
-                <a id="nav-home-link" href="/dashboard" aria-label="Return to dashboard">FireCoast OMS</a>
-            </div>
-            <div class="fc-nav-links" aria-label="Primary navigation">
-                <a href="/orders">Orders</a>
-                <a href="/contacts">Contacts</a>
-                <a href="/analytics">Analytics</a>
-                <a href="/passwords">Password Manager</a>
-                <a href="/reminders">Reminders</a>
-                <a href="/calendar">Calendar</a>
-                <a href="/firecoast" aria-current="page">FireCoast Chat</a>
-            </div>
-            <div class="fc-nav-links-secondary">
-                <a href="/settings">Settings</a>
-                <a id="nav-log-out" href="#">Log Out</a>
+    <nav class="bg-slate-900 text-white shadow">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex h-16 items-center justify-between">
+                <div class="flex items-center space-x-10">
+                    <a id="nav-home-link" href="/dashboard" class="text-lg font-semibold tracking-wide" aria-label="Return to dashboard">FireCoast OMS</a>
+                    <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
+                        <a href="/orders" class="hover:text-orange-300 transition">Orders</a>
+                        <a href="/contacts" class="hover:text-orange-300 transition">Contacts</a>
+                        <a href="/analytics" class="hover:text-orange-300 transition">Analytics</a>
+                        <a href="/reminders" class="hover:text-orange-300 transition">Reminders</a>
+                        <a href="/calendar" class="hover:text-orange-300 transition">Calendar</a>
+                        <a href="/passwords" class="hover:text-orange-300 transition">Password Manager</a>
+                        <a href="/firecoast" class="text-orange-300">FireCoast Chat</a>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-3 text-sm font-medium">
+                    <a href="/settings" class="hover:text-orange-300 transition">Settings</a>
+                    <a id="nav-log-out" href="#" class="hover:text-orange-300 transition">Log Out</a>
+                </div>
             </div>
         </div>
     </nav>
 
-    <main class="fc-main fc-main--chat">
+    <main class="py-8">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div class="fc-chat-layout">
             <aside class="fc-notes" aria-label="Notes">
                 <div class="fc-notes__search">
@@ -84,6 +88,7 @@
                 </footer>
             </section>
         </div>
+        </div>
     </main>
 
     <script>
@@ -106,7 +111,7 @@
                     try {
                         const response = await fetch('/shutdown', { method: 'POST' });
                         if (response.ok) {
-                            document.body.innerHTML = '<div class="fc-main" style="color:#1f2933;text-align:center;">Application has been shut down. You can now close this tab.</div>';
+                            document.body.innerHTML = '<div class="min-h-screen flex items-center justify-center text-slate-700 text-lg">Application has been shut down. You can now close this tab.</div>';
                         } else {
                             alert('Failed to log out.');
                         }
@@ -156,7 +161,7 @@
 
             const MAX_COMPOSER_HEIGHT = 220;
             let autoCreatingNote = false;
-            const mentionEntityTypes = ['contact', 'note', 'firecoast_note'];
+            const mentionEntityTypes = null;
 
             let handleCopyResetTimer = null;
             const activeMentionTextRoots = [];

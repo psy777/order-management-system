@@ -2,18 +2,6 @@
     color-scheme: light;
 }
 
-body.fc-body {
-    margin: 0;
-    min-height: 100vh;
-    background: #f8f9fa;
-    color: #1f2937;
-    font-family: 'Segoe UI', Tahoma, sans-serif;
-    line-height: 1.5;
-    display: flex;
-    flex-direction: column;
-    -webkit-font-smoothing: antialiased;
-}
-
 .fc-screen-reader-only {
     position: absolute;
     width: 1px;
@@ -26,80 +14,12 @@ body.fc-body {
     border: 0;
 }
 
-
-.fc-top-nav {
-    background: #0f172a;
-    color: #f8fafc;
-    box-shadow: 0 1px 4px rgba(15, 23, 42, 0.25);
-}
-
-.fc-top-nav__inner {
-    width: 100%;
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 0 1.5rem;
-    height: 64px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1.5rem;
-    box-sizing: border-box;
-}
-
-.fc-nav-brand a {
-    color: #f8fafc;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    text-decoration: none;
-}
-
-.fc-nav-brand a:hover,
-.fc-nav-brand a:focus {
-    color: #f97316;
-    outline: none;
-}
-
-.fc-nav-links,
-.fc-nav-links-secondary {
-    display: flex;
-    gap: 1.25rem;
-    font-size: 0.95rem;
-    font-weight: 600;
-    color: #cbd5f5;
-}
-
-.fc-nav-links a,
-.fc-nav-links-secondary a {
-    color: inherit;
-    text-decoration: none;
-    transition: color 0.15s ease;
-}
-
-.fc-nav-links a:hover,
-.fc-nav-links-secondary a:hover,
-.fc-nav-links a:focus,
-.fc-nav-links-secondary a:focus {
-    color: #f97316;
-    outline: none;
-}
-
-.fc-nav-links a[aria-current='page'] {
-    color: #f97316;
-}
-
-.fc-main--chat {
-    flex: 1;
-    display: flex;
-    padding: 1.5rem;
-    box-sizing: border-box;
-}
-
 .fc-chat-layout {
     width: 100%;
     display: grid;
-    grid-template-columns: 260px minmax(0, 1fr);
-    gap: 1.5rem;
-    min-height: 0;
+    grid-template-columns: 280px minmax(0, 1fr);
+    gap: 1.75rem;
+    min-height: max(540px, calc(100vh - 12rem));
 }
 
 .fc-notes {
@@ -110,6 +30,7 @@ body.fc-body {
     border-radius: 12px;
     overflow: hidden;
     min-height: 0;
+    box-shadow: 0 24px 48px -28px rgba(15, 23, 42, 0.35);
 }
 
 .fc-notes__search {
@@ -233,6 +154,7 @@ body.fc-body {
     border: 1px solid #d7dde8;
     border-radius: 12px;
     overflow: hidden;
+    box-shadow: 0 24px 48px -28px rgba(15, 23, 42, 0.32);
 }
 
 .fc-chat-panel__header {
@@ -590,7 +512,7 @@ body.fc-body {
     display: none;
 }
 
-.fc-body .record-mention-textarea {
+.firecoast-chat .record-mention-textarea {
     position: relative;
     width: 100%;
     display: flex;
@@ -598,13 +520,13 @@ body.fc-body {
     gap: 0.5rem;
 }
 
-.fc-body .record-mention-textarea > .relative,
-.fc-body .record-mention-textarea .relative {
+.firecoast-chat .record-mention-textarea > .relative,
+.firecoast-chat .record-mention-textarea .relative {
     position: relative;
     display: block;
 }
 
-.fc-body .record-mention-textarea__overlay {
+.firecoast-chat .record-mention-textarea__overlay {
     position: absolute;
     inset: 0;
     pointer-events: none;
@@ -622,39 +544,39 @@ body.fc-body {
     word-break: break-word;
 }
 
-.fc-body .record-mention-textarea__overlay.border-slate-200 {
+.firecoast-chat .record-mention-textarea__overlay.border-slate-200 {
     border-color: #e2e8f0;
 }
 
-.fc-body .record-mention-textarea__overlay.border-slate-300 {
+.firecoast-chat .record-mention-textarea__overlay.border-slate-300 {
     border-color: #cbd5f5;
 }
 
-.fc-body .record-mention-textarea__overlay.border-orange-300 {
+.firecoast-chat .record-mention-textarea__overlay.border-orange-300 {
     border-color: #fbbf24;
 }
 
-.fc-body .record-mention-textarea__overlay.bg-slate-100 {
+.firecoast-chat .record-mention-textarea__overlay.bg-slate-100 {
     background-color: #f1f5f9;
 }
 
-.fc-body .record-mention-textarea__overlay.bg-white {
+.firecoast-chat .record-mention-textarea__overlay.bg-white {
     background-color: #ffffff;
 }
 
-.fc-body .record-mention-textarea__overlay.shadow-sm {
+.firecoast-chat .record-mention-textarea__overlay.shadow-sm {
     box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
 }
 
-.fc-body .record-mention-textarea__overlay.ring-2 {
+.firecoast-chat .record-mention-textarea__overlay.ring-2 {
     box-shadow: 0 0 0 4px rgba(251, 191, 36, 0.28);
 }
 
-.fc-body .record-mention-textarea__overlay.ring-orange-200 {
+.firecoast-chat .record-mention-textarea__overlay.ring-orange-200 {
     box-shadow: 0 0 0 4px rgba(254, 215, 170, 0.4);
 }
 
-.fc-body .record-mention-textarea__input {
+.firecoast-chat .record-mention-textarea__input {
     position: relative;
     z-index: 1;
     width: 100%;
@@ -670,20 +592,20 @@ body.fc-body {
     line-height: 1.5;
 }
 
-.fc-body .record-mention-textarea__input::placeholder {
+.firecoast-chat .record-mention-textarea__input::placeholder {
     color: transparent;
 }
 
-.fc-body .record-mention-textarea__input:focus {
+.firecoast-chat .record-mention-textarea__input:focus {
     outline: none;
     box-shadow: none;
 }
 
-.fc-body .record-mention-textarea__input:disabled {
+.firecoast-chat .record-mention-textarea__input:disabled {
     cursor: not-allowed;
 }
 
-.fc-body .record-mention-textarea__menu {
+.firecoast-chat .record-mention-textarea__menu {
     position: absolute;
     left: 0;
     right: 0;
@@ -692,7 +614,7 @@ body.fc-body {
     z-index: 30;
 }
 
-.fc-body .record-mention-textarea__list {
+.firecoast-chat .record-mention-textarea__list {
     background: #ffffff;
     border: 1px solid #d0d5dd;
     border-radius: 12px;
@@ -700,7 +622,7 @@ body.fc-body {
     overflow: hidden;
 }
 
-.fc-body .record-mention-textarea__header {
+.firecoast-chat .record-mention-textarea__header {
     background: #f8fafc;
     color: #475569;
     font-size: 12px;
@@ -708,33 +630,33 @@ body.fc-body {
     text-transform: uppercase;
 }
 
-.fc-body .record-mention-textarea__option {
+.firecoast-chat .record-mention-textarea__option {
     border: none;
     color: #1f2933;
     border-radius: 8px;
 }
 
-.fc-body .record-mention-textarea__option.is-active,
-.fc-body .record-mention-textarea__option:hover {
+.firecoast-chat .record-mention-textarea__option.is-active,
+.firecoast-chat .record-mention-textarea__option:hover {
     background: rgba(246, 108, 64, 0.1);
     color: #d05832;
 }
 
-.fc-body .record-mention-textarea__item-entity {
+.firecoast-chat .record-mention-textarea__item-entity {
     background: #f1f5f9;
     color: #475569;
 }
 
-.fc-body .record-mention-textarea__refresh {
+.firecoast-chat .record-mention-textarea__refresh {
     color: #d05832;
 }
 
-.fc-body .record-mention-text {
+.firecoast-chat .record-mention-text {
     color: inherit;
     font-size: inherit;
 }
 
-.fc-body .record-mention-text button {
+.firecoast-chat .record-mention-text button {
     border: 1px solid #d0d5dd;
     border-radius: 999px;
     padding: 2px 8px;
@@ -744,8 +666,8 @@ body.fc-body {
     transition: background 0.15s ease, color 0.15s ease;
 }
 
-.fc-body .record-mention-text button:hover,
-.fc-body .record-mention-text button:focus-visible {
+.firecoast-chat .record-mention-text button:hover,
+.firecoast-chat .record-mention-text button:focus-visible {
     background: rgba(246, 108, 64, 0.1);
     color: #d05832;
     outline: none;
@@ -774,13 +696,8 @@ body.fc-body {
 }
 
 @media (max-width: 768px) {
-    .fc-top-nav__inner {
-        padding: 0 1rem;
-        gap: 1rem;
-    }
-
-    .fc-main--chat {
-        padding: 1rem;
+    .fc-chat-layout {
+        gap: 1.25rem;
     }
 
     .fc-chat-panel__header {
