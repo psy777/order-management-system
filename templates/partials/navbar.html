@@ -1,0 +1,71 @@
+{% set shortcuts = nav_links or [] %}
+<nav class="bg-slate-900 text-white shadow">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex h-16 items-center justify-between">
+            <div class="flex items-center space-x-10">
+                <a href="/dashboard" id="nav-home-link" class="text-lg font-semibold tracking-wide">FireNotes OMS</a>
+                <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
+                    {% for link in shortcuts %}
+                        {% set is_active = active_nav == link.id %}
+                        <a
+                            href="{{ link.href }}"
+                            data-nav-id="{{ link.id }}"
+                            class="transition {{ 'text-orange-300' if is_active else 'hover:text-orange-300' }}"
+                            {% if is_active %}aria-current="page"{% endif %}
+                        >
+                            {{ link.label }}
+                        </a>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="flex items-center space-x-3 text-sm font-medium">
+                {% set settings_active = active_nav == 'settings' %}
+                <a href="/settings" class="transition {{ 'text-orange-300' if settings_active else 'hover:text-orange-300' }}">Settings</a>
+                <a href="#" id="nav-log-out" class="hover:text-orange-300 transition">Log Out</a>
+            </div>
+        </div>
+    </div>
+</nav>
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const brandLink = document.getElementById('nav-home-link');
+        if (brandLink) {
+            brandLink.addEventListener('click', (event) => {
+                event.preventDefault();
+                window.location.href = '/dashboard';
+            });
+        }
+
+        document.querySelectorAll('[data-nav-id]').forEach((navLink) => {
+            navLink.addEventListener('click', (event) => {
+                const shortcutId = navLink.dataset.navId;
+                if (shortcutId === 'orders' && typeof window.fireCoastNavigateTo === 'function') {
+                    event.preventDefault();
+                    window.fireCoastNavigateTo('dashboard');
+                }
+            });
+        });
+
+        const logoutLink = document.getElementById('nav-log-out');
+        if (logoutLink) {
+            logoutLink.addEventListener('click', async (event) => {
+                event.preventDefault();
+                if (window.fireCoastLogout) {
+                    window.fireCoastLogout();
+                    return;
+                }
+                try {
+                    const response = await fetch('/shutdown', { method: 'POST' });
+                    if (response.ok) {
+                        document.body.innerHTML = '<div class="min-h-screen flex items-center justify-center text-slate-700 text-lg">Application has been shut down. You can now close this tab.</div>';
+                    } else {
+                        alert('Failed to log out.');
+                    }
+                } catch (error) {
+                    console.error('Error logging out:', error);
+                    alert('Error attempting to log out.');
+                }
+            });
+        }
+    });
+</script>
