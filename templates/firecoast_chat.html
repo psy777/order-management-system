@@ -161,11 +161,20 @@
             let handleCopyResetTimer = null;
             const activeMentionTextRoots = [];
 
+            const scheduleFrame = (callback) => {
+                if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+                    window.requestAnimationFrame(callback);
+                } else {
+                    window.setTimeout(callback, 16);
+                }
+            };
+
             const mentionComposer = {
                 useMentionComponent: false,
                 root: null,
                 textareaComponent: null,
                 textComponent: null,
+                renderScheduled: false,
             };
 
             const cleanupMentionTextRoots = () => {
@@ -190,17 +199,15 @@
                 if (!mentionComposer.useMentionComponent || !mentionComposer.root || !mentionComposer.textareaComponent) {
                     return;
                 }
+                mentionComposer.renderScheduled = false;
                 mentionComposer.root.render(
                     window.React.createElement(mentionComposer.textareaComponent, {
                         value: state.composerValue,
                         onChange: (value) => {
-                            state.composerValue = value || '';
-                            requestAnimationFrame(() => {
-                                autoResizeInput();
-                            });
+                            setComposerValue(value);
                         },
-                        onSubmit: () => {
-                            sendMessage();
+                        onSubmit: (value) => {
+                            sendMessage(value);
                         },
                         disabled: state.composerDisabled,
                         rows: 1,
@@ -210,8 +217,27 @@
                         textareaClassName: 'fc-composer__mention-input',
                     })
                 );
-                requestAnimationFrame(() => {
+                scheduleFrame(() => {
                     autoResizeInput();
+                });
+            };
+
+            const scheduleMentionComposerRender = (options = {}) => {
+                if (!mentionComposer.useMentionComponent || !mentionComposer.root) {
+                    return;
+                }
+                const immediate = Boolean(options.immediate);
+                if (immediate) {
+                    mentionComposer.renderScheduled = false;
+                    renderMentionComposer();
+                    return;
+                }
+                if (mentionComposer.renderScheduled) {
+                    return;
+                }
+                mentionComposer.renderScheduled = true;
+                scheduleFrame(() => {
+                    renderMentionComposer();
                 });
             };
 
@@ -265,16 +291,28 @@
                 return inputEl ? inputEl.value || '' : '';
             };
 
-            const setComposerValue = (value) => {
-                const next = value || '';
+            function setComposerValue(value, options = {}) {
+                const next = value === null || value === undefined ? '' : String(value);
+                const forceRender = Boolean(options.forceRender);
+                const immediate = Boolean(options.immediate);
+                const previous = state.composerValue;
+                const hasChanged = previous !== next;
                 state.composerValue = next;
                 if (mentionComposer.useMentionComponent) {
-                    renderMentionComposer();
+                    if (mentionComposer.root && (hasChanged || forceRender)) {
+                        scheduleMentionComposerRender({ immediate });
+                    } else if (forceRender) {
+                        scheduleMentionComposerRender({ immediate });
+                    }
                 } else if (inputEl) {
                     inputEl.value = next;
                 }
-                autoResizeInput();
-            };
+                if (!options.skipResize) {
+                    scheduleFrame(() => {
+                        autoResizeInput();
+                    });
+                }
+            }
 
             const normalizePreview = (value) => {
                 if (value === null || value === undefined) {
@@ -962,7 +1000,7 @@
                 if (!enabled) {
                     state.pendingFiles = [];
                     renderAttachmentChips();
-                    setComposerValue('');
+                    setComposerValue('', { forceRender: true });
                 } else {
                     autoResizeInput();
                 }
@@ -1146,11 +1184,14 @@
                 }
             };
 
-            const sendMessage = async () => {
+            const sendMessage = async (overrideContent = undefined) => {
                 if (!state.activeNoteId || state.isSending) {
                     return;
                 }
-                const rawContent = getComposerValue();
+                const rawContent =
+                    overrideContent !== undefined && overrideContent !== null
+                        ? String(overrideContent)
+                        : getComposerValue();
                 const trimmed = normalizePreview(rawContent);
                 if (!trimmed && !state.pendingFiles.length) {
                     return;
@@ -1259,7 +1300,7 @@
                 inputEl.addEventListener('keydown', (event) => {
                     if (event.key === 'Enter' && !event.shiftKey) {
                         event.preventDefault();
-                        sendMessage();
+                        sendMessage(inputEl.value || '');
                     }
                 });
             }
