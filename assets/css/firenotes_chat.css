@@ -360,18 +360,17 @@
 }
 
 .fc-chat-panel__body {
+    position: relative;
     min-height: 0;
     height: 100%;
     max-height: 100%;
     background: #ffffff;
     overflow: hidden;
-    display: flex;
-    flex-direction: column;
 }
 
 .fc-chat-log {
-    flex: 1;
-    min-height: 0;
+    position: absolute;
+    inset: 0;
     padding: 1.5rem;
     overflow-y: auto;
     display: flex;
@@ -380,6 +379,7 @@
     gap: 1rem;
     background: transparent;
     scroll-behavior: smooth;
+    overscroll-behavior: contain;
 }
 
 .fc-chat-log::-webkit-scrollbar {
