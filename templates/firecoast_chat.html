@@ -33,21 +33,17 @@
 
     <main class="fc-main">
         <div class="fc-workspace">
-            <aside class="fc-sidebar" aria-label="Pinned messages">
-                <div class="fc-sidebar__header">
-                    <h1 class="fc-sidebar__title">DMs</h1>
+            <aside class="fc-sidebar" aria-label="Your notes">
+                <div class="fc-sidebar__search">
+                    <label class="fc-screen-reader-only" for="fc-thread-search">Search notes</label>
+                    <input id="fc-thread-search" class="fc-sidebar__search-input" type="search" placeholder="Search notes" autocomplete="off">
                 </div>
                 <div class="fc-sidebar__threads" id="fc-thread-list" role="list"></div>
                 <p id="fc-thread-empty" class="fc-sidebar__empty">Notes you send will show up here.</p>
             </aside>
             <section class="fc-conversation" aria-label="Conversation with @firecoast">
                 <header class="fc-conversation__header">
-                    <div class="fc-channel">
-                        <div class="fc-channel__avatar" aria-hidden="true">F</div>
-                        <div class="fc-channel__meta">
-                            <h2 class="fc-channel__title">@firecoast</h2>
-                        </div>
-                    </div>
+                    <h2 class="fc-conversation__title">@firecoast</h2>
                     <div class="fc-conversation__controls">
                         <div class="fc-search">
                             <label class="fc-screen-reader-only" for="fc-search-input">Search messages</label>
@@ -118,6 +114,7 @@
             const threadListEl = document.getElementById('fc-thread-list');
             const threadEmptyEl = document.getElementById('fc-thread-empty');
             const searchInput = document.getElementById('fc-search-input');
+            const threadSearchInput = document.getElementById('fc-thread-search');
             const state = {
                 messages: [],
                 isLoading: false,
@@ -125,6 +122,7 @@
                 error: null,
                 refreshTimer: null,
                 searchQuery: '',
+                threadQuery: '',
             };
 
             const MAX_COMPOSER_HEIGHT = 220;
@@ -217,180 +215,149 @@
                 }
             };
 
-            const createMetadataCard = (metadata, isUser) => {
+            const createMetadataDetails = (metadata) => {
                 if (!metadata || !metadata.action) {
                     return null;
                 }
-                const wrapper = document.createElement('div');
-                wrapper.className = 'fc-metadata-card' + (isUser ? ' fc-metadata-card--user' : '');
 
-                const title = document.createElement('div');
-                title.className = 'fc-metadata-card__title' + (isUser ? ' fc-metadata-card__title--user' : '');
+                const container = document.createElement('div');
+                container.className = 'fc-message__details';
+                let hasContent = false;
+
+                const addLine = (text) => {
+                    if (!text) {
+                        return;
+                    }
+                    const line = document.createElement('div');
+                    line.textContent = text;
+                    container.appendChild(line);
+                    hasContent = true;
+                };
+
+                const addList = (items) => {
+                    if (!items.length) {
+                        return;
+                    }
+                    const list = document.createElement('ul');
+                    list.className = 'fc-message__details-list';
+                    items.forEach((entry) => {
+                        const item = document.createElement('li');
+                        item.textContent = entry;
+                        list.appendChild(item);
+                    });
+                    container.appendChild(list);
+                    hasContent = true;
+                };
 
                 const addLink = (href, label) => {
+                    if (!href || !label) {
+                        return;
+                    }
                     const link = document.createElement('a');
-                    link.className = 'fc-metadata-link';
                     link.href = href;
                     link.textContent = label;
                     link.setAttribute('target', '_self');
-                    return link;
+                    container.appendChild(link);
+                    hasContent = true;
                 };
 
                 const action = metadata.action;
+
                 if (action === 'calendar_event_created') {
-                    title.textContent = 'Calendar event created';
-                    wrapper.appendChild(title);
-
-                    const subtitle = document.createElement('div');
-                    subtitle.className = 'fc-metadata-card__subtitle';
-                    subtitle.textContent = (metadata.event && metadata.event.title) || 'Event';
-                    wrapper.appendChild(subtitle);
-
-                    const metaLine = document.createElement('div');
-                    metaLine.className = 'fc-metadata-card__muted';
-                    metaLine.textContent = formatEventWindow(metadata.event || {});
-                    wrapper.appendChild(metaLine);
-
-                    wrapper.appendChild(addLink('/calendar', 'Open calendar →'));
-                    return wrapper;
+                    addLine('Calendar event saved');
+                    const event = metadata.event || {};
+                    if (event.title) {
+                        addLine(event.title);
+                    }
+                    const windowText = formatEventWindow(event);
+                    if (windowText) {
+                        addLine(windowText);
+                    }
+                    addLink('/calendar', 'Open calendar');
+                    return hasContent ? container : null;
                 }
 
                 if (action === 'reminder_created') {
-                    title.textContent = 'Reminder created';
-                    wrapper.appendChild(title);
-
-                    const subtitle = document.createElement('div');
-                    subtitle.className = 'fc-metadata-card__subtitle';
+                    addLine('Reminder saved');
                     const reminder = metadata.reminder || {};
-                    subtitle.textContent = reminder.title || 'Reminder';
-                    wrapper.appendChild(subtitle);
-
-                    const metaLine = document.createElement('div');
-                    metaLine.className = 'fc-metadata-card__muted';
-                    const due = reminder.due_at ? formatTimestamp(reminder.due_at, reminder.due_has_time) : 'No due date';
-                    metaLine.textContent = due;
-                    wrapper.appendChild(metaLine);
-
-                    wrapper.appendChild(addLink('/reminders', 'View reminders →'));
-                    return wrapper;
+                    if (reminder.title) {
+                        addLine(reminder.title);
+                    }
+                    const due = reminder.due_at
+                        ? formatTimestamp(reminder.due_at, reminder.due_has_time)
+                        : 'No due date';
+                    addLine(due);
+                    addLink('/reminders', 'Open reminders');
+                    return hasContent ? container : null;
                 }
 
                 if (action === 'password_lookup') {
-                    title.textContent = 'Saved passwords';
-                    wrapper.appendChild(title);
-
+                    addLine('Saved passwords');
                     const matches = Array.isArray(metadata.matches) ? metadata.matches : [];
-                    matches.slice(0, 5).forEach((entry) => {
-                        const row = document.createElement('div');
-                        row.className = 'fc-password-entry';
-
-                        const service = document.createElement('span');
-                        service.className = 'fc-password-entry__service';
-                        service.textContent = entry.service || 'Service';
-                        row.appendChild(service);
-
-                        const username = document.createElement('span');
-                        username.className = 'fc-password-entry__username';
-                        username.textContent = (entry.username || 'no user').toUpperCase();
-                        row.appendChild(username);
-
-                        const passwordLine = document.createElement('div');
-                        passwordLine.className = 'fc-password-entry__password';
-                        passwordLine.textContent = entry.password ? `Password: ${entry.password}` : 'No password saved';
-                        row.appendChild(passwordLine);
-
-                        wrapper.appendChild(row);
+                    const items = matches.slice(0, 5).map((entry) => {
+                        const service = entry.service || 'Service';
+                        const username = entry.username || 'Unknown user';
+                        const password = entry.password ? `Password: ${entry.password}` : 'No password saved';
+                        return `${service} • ${username} • ${password}`;
                     });
-
+                    addList(items);
                     if (matches.length > 5) {
-                        const more = document.createElement('div');
-                        more.className = 'fc-metadata-card__muted';
-                        more.textContent = `…and ${matches.length - 5} more saved credentials.`;
-                        wrapper.appendChild(more);
+                        addLine(`…and ${matches.length - 5} more saved credentials.`);
                     }
-
-                    wrapper.appendChild(addLink('/passwords', 'Open password vault →'));
-                    return wrapper;
+                    addLink('/passwords', 'Open password vault');
+                    return hasContent ? container : null;
                 }
 
                 if (action === 'report_run') {
-                    title.textContent = 'Report generated';
-                    wrapper.appendChild(title);
-
                     const report = metadata.report || {};
-                    const subtitle = document.createElement('div');
-                    subtitle.className = 'fc-metadata-card__subtitle';
-                    subtitle.textContent = report.name || report.id || 'Analytics report';
-                    wrapper.appendChild(subtitle);
-
+                    addLine('Report generated');
+                    if (report.name || report.id) {
+                        addLine(report.name || report.id);
+                    }
                     const summary = Array.isArray(report.summary) ? report.summary.slice(0, 4) : [];
                     if (summary.length) {
-                        const list = document.createElement('ul');
-                        summary.forEach((entry) => {
-                            const item = document.createElement('li');
-                            const label = entry.label || entry.id || 'Metric';
-                            const display = entry.display || entry.value;
-                            item.textContent = `${label}: ${display}`;
-                            list.appendChild(item);
-                        });
-                        wrapper.appendChild(list);
+                        addList(
+                            summary.map((entry) => {
+                                const label = entry.label || entry.id || 'Metric';
+                                const display = entry.display || entry.value;
+                                return display ? `${label}: ${display}` : label;
+                            })
+                        );
                     }
-
-                    wrapper.appendChild(addLink('/analytics', 'Open analytics →'));
-                    return wrapper;
+                    addLink('/analytics', 'Open analytics');
+                    return hasContent ? container : null;
                 }
 
                 if (action === 'report_list') {
-                    title.textContent = 'Available reports';
-                    wrapper.appendChild(title);
-
+                    addLine('Available reports');
                     const reports = Array.isArray(metadata.reports) ? metadata.reports : [];
                     if (reports.length) {
-                        const list = document.createElement('ul');
-                        reports.forEach((report) => {
-                            const item = document.createElement('li');
-                            const name = report.name ? ` — ${report.name}` : '';
-                            item.textContent = `${report.id}${name}`;
-                            list.appendChild(item);
-                        });
-                        wrapper.appendChild(list);
+                        addList(
+                            reports.map((report) => {
+                                const suffix = report.name ? ` — ${report.name}` : '';
+                                return `${report.id}${suffix}`;
+                            })
+                        );
                     } else {
-                        const empty = document.createElement('div');
-                        empty.className = 'fc-metadata-card__muted';
-                        empty.textContent = 'No saved analytics reports yet.';
-                        wrapper.appendChild(empty);
+                        addLine('No saved analytics reports yet.');
                     }
-                    return wrapper;
+                    return hasContent ? container : null;
                 }
 
                 if (action === 'error') {
-                    wrapper.classList.add('fc-metadata-card--error');
-                    title.textContent = 'Something went wrong';
-                    wrapper.appendChild(title);
-
-                    const message = document.createElement('div');
-                    message.textContent = metadata.reason || 'Unable to process the request.';
-                    wrapper.appendChild(message);
-                    return wrapper;
+                    addLine('Something went wrong');
+                    addLine(metadata.reason || 'Unable to process the request.');
+                    return hasContent ? container : null;
                 }
 
                 if (action === 'help') {
-                    title.textContent = 'Assistant capabilities';
-                    wrapper.appendChild(title);
-
-                    const list = document.createElement('ul');
-                    const entries = [
+                    addLine('Assistant capabilities');
+                    addList([
                         'Use .reminder to save follow-ups.',
                         'Use .event to schedule calendar blocks.',
                         'Ask @firecoast about reports or saved passwords.',
-                    ];
-                    entries.forEach((text) => {
-                        const item = document.createElement('li');
-                        item.textContent = text;
-                        list.appendChild(item);
-                    });
-                    wrapper.appendChild(list);
-                    return wrapper;
+                    ]);
+                    return hasContent ? container : null;
                 }
 
                 return null;
@@ -455,7 +422,7 @@
                 }
                 threadListEl.innerHTML = '';
 
-                const trimmedQuery = normalizePreview(state.searchQuery || '');
+                const trimmedQuery = normalizePreview(state.threadQuery || '');
                 const userMessages = state.messages.filter(
                     (message) => (message.author || '').toLowerCase() === 'user'
                 );
@@ -492,7 +459,7 @@
                 const author = (message.author || '').toLowerCase();
                 const isUser = author === 'user';
 
-                const wrapper = document.createElement('div');
+                const wrapper = document.createElement('article');
                 const messageId = message.id ? `message-${message.id}` : '';
                 if (messageId) {
                     wrapper.id = messageId;
@@ -504,31 +471,41 @@
                 avatar.textContent = isUser ? 'Y' : 'F';
                 avatar.setAttribute('aria-hidden', 'true');
 
-                const bubble = document.createElement('div');
-                bubble.className = 'fc-bubble ' + (isUser ? 'fc-bubble--user' : 'fc-bubble--assistant');
+                const body = document.createElement('div');
+                body.className = 'fc-message__body';
 
-                const meta = document.createElement('div');
-                meta.className = 'fc-bubble__meta';
+                const header = document.createElement('div');
+                header.className = 'fc-message__header';
                 const authorLabel = document.createElement('span');
+                authorLabel.className = 'fc-message__author';
                 authorLabel.textContent = isUser ? 'You' : '@firecoast';
-                const timestamp = document.createElement('span');
-                timestamp.textContent = formatTimestamp(message.created_at, true);
-                meta.appendChild(authorLabel);
-                meta.appendChild(timestamp);
-                bubble.appendChild(meta);
+                const timestamp = document.createElement('time');
+                timestamp.className = 'fc-message__timestamp';
+                if (message.created_at) {
+                    timestamp.dateTime = message.created_at;
+                }
+                const timestampText = formatTimestamp(message.created_at, true);
+                if (timestampText) {
+                    timestamp.textContent = timestampText;
+                }
+                header.appendChild(authorLabel);
+                header.appendChild(timestamp);
+                body.appendChild(header);
 
-                const text = document.createElement('div');
-                text.className = 'fc-message__text';
-                text.textContent = message.content || '';
-                bubble.appendChild(text);
+                if (message.content) {
+                    const text = document.createElement('div');
+                    text.className = 'fc-message__text';
+                    text.textContent = message.content;
+                    body.appendChild(text);
+                }
 
-                const metadataCard = createMetadataCard(message.metadata, isUser);
-                if (metadataCard) {
-                    bubble.appendChild(metadataCard);
+                const metadataDetails = createMetadataDetails(message.metadata);
+                if (metadataDetails) {
+                    body.appendChild(metadataDetails);
                 }
 
                 wrapper.appendChild(avatar);
-                wrapper.appendChild(bubble);
+                wrapper.appendChild(body);
 
                 return wrapper;
             };
@@ -692,6 +669,12 @@
                 searchInput.addEventListener('input', () => {
                     state.searchQuery = searchInput.value || '';
                     renderMessages();
+                });
+            }
+
+            if (threadSearchInput) {
+                threadSearchInput.addEventListener('input', () => {
+                    state.threadQuery = threadSearchInput.value || '';
                     renderThreads();
                 });
             }
