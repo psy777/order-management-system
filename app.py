@@ -89,6 +89,62 @@ UPLOAD_FOLDER = DATA_DIR
 UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = str(UPLOAD_FOLDER)
 
+DEFAULT_NAV_BRAND = {
+    'label': 'FireCoast OMS',
+    'href': '/dashboard',
+    'id': 'nav-home-link',
+}
+DEFAULT_NAV_LINKS = (
+    {'key': 'orders', 'label': 'Orders', 'href': '/orders', 'navigate_to': 'dashboard'},
+    {'key': 'contacts', 'label': 'Contacts', 'href': '/contacts'},
+    {'key': 'analytics', 'label': 'Analytics', 'href': '/analytics'},
+    {'key': 'passwords', 'label': 'Password Manager', 'href': '/passwords'},
+    {'key': 'reminders', 'label': 'Reminders', 'href': '/reminders'},
+    {'key': 'calendar', 'label': 'Calendar', 'href': '/calendar'},
+    {'key': 'firecoast', 'label': 'FireCoast Chat', 'href': '/firecoast'},
+)
+DEFAULT_NAV_ACTIONS = (
+    {'key': 'settings', 'label': 'Settings', 'href': '/settings'},
+    {'key': 'logout', 'label': 'Log Out', 'href': '#', 'logout': True},
+)
+
+
+def _clone_nav_items(items):
+    return [dict(item) for item in items]
+
+
+def _clone_nav_brand(brand):
+    base = dict(brand) if brand else {}
+    base.setdefault('label', DEFAULT_NAV_BRAND['label'])
+    base.setdefault('href', DEFAULT_NAV_BRAND['href'])
+    base.setdefault('id', DEFAULT_NAV_BRAND['id'])
+    return base
+
+
+def merge_nav_config(base_config=None, *, active_nav=None, brand=None, links=None, actions=None):
+    base_config = base_config or {}
+    config = dict(base_config)
+    config['brand'] = _clone_nav_brand(brand or base_config.get('brand') or DEFAULT_NAV_BRAND)
+    link_source = links if links is not None else base_config.get('links') or DEFAULT_NAV_LINKS
+    action_source = actions if actions is not None else base_config.get('actions') or DEFAULT_NAV_ACTIONS
+    config['links'] = _clone_nav_items(link_source)
+    config['actions'] = _clone_nav_items(action_source)
+    config['active'] = active_nav if active_nav is not None else base_config.get('active')
+    return config
+
+
+def render_nav_template(template_name, *, active_nav=None, nav_brand=None, nav_links=None, nav_actions=None, **context):
+    context = dict(context)
+    context['nav_config'] = merge_nav_config(
+        context.get('nav_config'),
+        active_nav=active_nav,
+        brand=nav_brand,
+        links=nav_links,
+        actions=nav_actions,
+    )
+    return render_template(template_name, **context)
+
+
 def read_json_file(file_path):
     if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
         return {}
@@ -4597,26 +4653,38 @@ def api_firecoast_chat():
 
 
 @app.route('/manage/customers')
-def manage_customers_page(): return render_template('manage_customers.html')
+def manage_customers_page():
+    return render_template('manage_customers.html')
+
+
 @app.route('/manage/items')
-def manage_items_page(): return render_template('manage_items.html')
+def manage_items_page():
+    return render_nav_template('manage_items.html', active_nav='settings')
+
+
 @app.route('/manage/packages')
-def manage_packages_page(): return render_template('manage_packages.html')
+def manage_packages_page():
+    return render_nav_template('manage_packages.html', active_nav='settings')
 
 @app.route('/firecoast')
 def firecoast_chat_page():
-    return render_template('firecoast_chat.html')
+    return render_nav_template('firecoast_chat.html', active_nav='firecoast')
 
 @app.route('/settings')
 def settings_page():
     timezones = pytz.all_timezones
     settings = read_json_file(SETTINGS_FILE)
     selected_timezone = settings.get('timezone', 'UTC')
-    return render_template('settings.html', timezones=timezones, selected_timezone=selected_timezone)
+    return render_nav_template(
+        'settings.html',
+        active_nav='settings',
+        timezones=timezones,
+        selected_timezone=selected_timezone,
+    )
 
 @app.route('/dashboard')
 def dashboard_page():
-    return render_template('admin.html')
+    return render_nav_template('admin.html', active_nav='dashboard')
 
 
 @app.route('/admin')
@@ -4625,30 +4693,30 @@ def legacy_admin_redirect():
 
 @app.route('/analytics')
 def analytics_page():
-    return render_template('analytics.html')
+    return render_nav_template('analytics.html', active_nav='analytics')
 
 @app.route('/contacts')
 def contacts_page():
-    return render_template('contacts.html')
+    return render_nav_template('contacts.html', active_nav='contacts')
 
 @app.route('/orders')
 def orders_page():
-    return render_template('orders.html')
+    return render_nav_template('orders.html', active_nav='orders')
 
 
 @app.route('/passwords')
 def passwords_page():
-    return render_template('passwords.html')
+    return render_nav_template('passwords.html', active_nav='passwords')
 
 
 @app.route('/reminders')
 def reminders_page():
-    return render_template('reminders.html')
+    return render_nav_template('reminders.html', active_nav='reminders')
 
 
 @app.route('/calendar')
 def calendar_page():
-    return render_template('calendar.html')
+    return render_nav_template('calendar.html', active_nav='calendar')
 
 @app.route('/api/export-data', methods=['GET'])
 def export_data():
@@ -4718,7 +4786,7 @@ def order_logs_page(order_id):
 
 @app.route('/order/<string:order_id>')
 def view_order_page(order_id):
-    return render_template('view_order.html', order_id=order_id)
+    return render_nav_template('view_order.html', order_id=order_id, active_nav='orders')
 
 @app.route('/favicon.ico')
 def favicon(): return send_from_directory(os.path.join(app.root_path, ''),'favicon.ico',mimetype='image/vnd.microsoft.icon')

@@ -1,0 +1,100 @@
+{% set config = nav_config or {} %}
+{% set brand = config.get('brand', {}) %}
+{% set brand_label = brand.get('label', 'FireCoast OMS') %}
+{% set brand_href = brand.get('href', '/dashboard') %}
+{% set brand_id = brand.get('id', 'nav-home-link') %}
+{% set current_path = request.path if request is defined else '' %}
+{% set links = config.get('links', [
+    {'key': 'orders', 'label': 'Orders', 'href': '/orders', 'navigate_to': 'dashboard'},
+    {'key': 'contacts', 'label': 'Contacts', 'href': '/contacts'},
+    {'key': 'analytics', 'label': 'Analytics', 'href': '/analytics'},
+    {'key': 'passwords', 'label': 'Password Manager', 'href': '/passwords'},
+    {'key': 'reminders', 'label': 'Reminders', 'href': '/reminders'},
+    {'key': 'calendar', 'label': 'Calendar', 'href': '/calendar'},
+    {'key': 'firecoast', 'label': 'FireCoast Chat', 'href': '/firecoast'}
+]) %}
+{% set actions = config.get('actions', [
+    {'key': 'settings', 'label': 'Settings', 'href': '/settings'},
+    {'key': 'logout', 'label': 'Log Out', 'href': '#', 'logout': True}
+]) %}
+{% set active_nav = config.get('active') %}
+<nav class="bg-slate-900 text-white shadow">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex h-16 items-center justify-between">
+            <div class="flex items-center space-x-10">
+                <a href="{{ brand_href }}" id="{{ brand_id }}" class="text-lg font-semibold tracking-wide">{{ brand_label }}</a>
+                <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
+                    {% for link in links %}
+                        {% set is_active = (active_nav == link.get('key')) or (current_path == link.get('href')) %}
+                        <a
+                            href="{{ link.get('href', '#') }}"
+                            id="nav-link-{{ link.get('key', loop.index0) }}"
+                            class="{{ 'text-orange-300 ' if is_active else '' }}hover:text-orange-300 transition"
+                            {% if link.get('navigate_to') %}data-nav-navigate-to="{{ link.get('navigate_to') }}"{% endif %}
+                            data-nav-key="{{ link.get('key', '') }}"
+                        >{{ link.get('label', '') }}</a>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="flex items-center space-x-3 text-sm font-medium">
+                {% for action in actions %}
+                    {% set is_active = (active_nav == action.get('key')) or (current_path == action.get('href')) %}
+                    {% set is_logout = action.get('logout') %}
+                    <a
+                        href="{{ action.get('href', '#') }}"
+                        id="{{ action.get('id', 'nav-action-' ~ action.get('key', loop.index0)) }}"
+                        class="{{ 'text-orange-300 ' if is_active else '' }}hover:text-orange-300 transition"
+                        {% if is_logout %}data-nav-logout="true"{% endif %}
+                        data-nav-key="{{ action.get('key', '') }}"
+                    >{{ action.get('label', '') }}</a>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</nav>
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const brandLinkId = {{ brand_id|tojson }};
+        const brandLink = document.getElementById(brandLinkId);
+        if (brandLink) {
+            brandLink.addEventListener('click', (event) => {
+                if (brandLink.getAttribute('href')) {
+                    return;
+                }
+                event.preventDefault();
+            });
+        }
+
+        document.querySelectorAll('[data-nav-navigate-to]').forEach((link) => {
+            link.addEventListener('click', (event) => {
+                const target = link.getAttribute('data-nav-navigate-to');
+                if (window.fireCoastNavigateTo && target) {
+                    event.preventDefault();
+                    window.fireCoastNavigateTo(target);
+                }
+            });
+        });
+
+        const logoutLink = document.querySelector('[data-nav-logout="true"]');
+        if (logoutLink) {
+            logoutLink.addEventListener('click', async (event) => {
+                event.preventDefault();
+                if (window.fireCoastLogout) {
+                    window.fireCoastLogout();
+                    return;
+                }
+                try {
+                    const response = await fetch('/shutdown', { method: 'POST' });
+                    if (response.ok) {
+                        document.body.innerHTML = '<div class="min-h-screen flex items-center justify-center text-slate-700 text-lg">Application has been shut down. You can now close this tab.</div>';
+                    } else {
+                        alert('Failed to log out.');
+                    }
+                } catch (error) {
+                    console.error('Error logging out:', error);
+                    alert('Error attempting to log out.');
+                }
+            });
+        }
+    });
+</script>
