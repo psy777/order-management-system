@@ -5,21 +5,21 @@ from pathlib import Path
 
 import pytest
 
-import app as firecoast_app
+import app as firenotes_app
 from services import backup as backup_service
 
 
 @pytest.fixture(autouse=True)
 def set_testing_flag():
-    original = firecoast_app.app.config.get('TESTING')
-    firecoast_app.app.config['TESTING'] = True
+    original = firenotes_app.app.config.get('TESTING')
+    firenotes_app.app.config['TESTING'] = True
     try:
         yield
     finally:
         if original is None:
-            firecoast_app.app.config.pop('TESTING', None)
+            firenotes_app.app.config.pop('TESTING', None)
         else:
-            firecoast_app.app.config['TESTING'] = original
+            firenotes_app.app.config['TESTING'] = original
 
 
 @pytest.fixture()
@@ -27,9 +27,9 @@ def temp_data_dir(tmp_path, monkeypatch):
     data_dir = tmp_path / 'data'
     data_dir.mkdir()
 
-    monkeypatch.setattr(firecoast_app, 'DATA_DIR', data_dir)
-    monkeypatch.setattr(firecoast_app, 'UPLOAD_FOLDER', data_dir)
-    firecoast_app.app.config['UPLOAD_FOLDER'] = str(data_dir)
+    monkeypatch.setattr(firenotes_app, 'DATA_DIR', data_dir)
+    monkeypatch.setattr(firenotes_app, 'UPLOAD_FOLDER', data_dir)
+    firenotes_app.app.config['UPLOAD_FOLDER'] = str(data_dir)
 
     monkeypatch.setattr(backup_service, 'ensure_data_root', lambda: data_dir)
 
@@ -92,7 +92,7 @@ def test_restore_backup_round_trip(temp_data_dir, reset_backup_module):
 def test_export_endpoint_returns_zip(temp_data_dir, monkeypatch, reset_backup_module):
     create_sample_data(temp_data_dir)
 
-    client = firecoast_app.app.test_client()
+    client = firenotes_app.app.test_client()
     response = client.get('/api/export-data')
     assert response.status_code == 200
     assert response.mimetype == 'application/zip'
@@ -102,7 +102,7 @@ def test_export_endpoint_returns_zip(temp_data_dir, monkeypatch, reset_backup_mo
 
 
 def test_import_endpoint_restores_data(temp_data_dir, monkeypatch, reset_backup_module):
-    client = firecoast_app.app.test_client()
+    client = firenotes_app.app.test_client()
 
     # Prepare original data
     create_sample_data(temp_data_dir)
@@ -122,7 +122,7 @@ def test_import_endpoint_restores_data(temp_data_dir, monkeypatch, reset_backup_
             'file': (io.BytesIO(fh.read()), 'backup.zip'),
         }
 
-    monkeypatch.setattr(firecoast_app, 'init_db', lambda: None)
+    monkeypatch.setattr(firenotes_app, 'init_db', lambda: None)
     response = client.post('/api/import-data', data=payload, content_type='multipart/form-data')
     assert response.status_code == 200
     assert (temp_data_dir / 'orders_manager.db').read_text() == 'db'

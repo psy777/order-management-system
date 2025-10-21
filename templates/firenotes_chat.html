@@ -3,23 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FireCoast DM</title>
+    <title>FireNotes DM</title>
     <link rel="icon" href="/favicon.ico" type="image/x-icon">
     <link rel="stylesheet" href="/assets/css/styles.css">
-    <link rel="stylesheet" href="/assets/css/firecoast_chat.css">
+    <link rel="stylesheet" href="/assets/css/firenotes_chat.css">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script type="text/babel" src="/assets/js/record_mentions.jsx"></script>
 </head>
-<body class="bg-slate-50 min-h-screen font-sans firecoast-chat">
+<body class="bg-slate-50 min-h-screen font-sans firenotes-chat">
     <a class="fc-screen-reader-only" href="#fc-chat-log">Skip to chat</a>
     <nav class="bg-slate-900 text-white shadow">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex h-16 items-center justify-between">
                 <div class="flex items-center space-x-10">
-                    <a id="nav-home-link" href="/dashboard" class="text-lg font-semibold tracking-wide" aria-label="Return to dashboard">FireCoast OMS</a>
+                    <a id="nav-home-link" href="/dashboard" class="text-lg font-semibold tracking-wide" aria-label="Return to dashboard">FireNotes OMS</a>
                     <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
                         <a href="/orders" class="hover:text-orange-300 transition">Orders</a>
                         <a href="/contacts" class="hover:text-orange-300 transition">Contacts</a>
@@ -27,7 +27,7 @@
                         <a href="/reminders" class="hover:text-orange-300 transition">Reminders</a>
                         <a href="/calendar" class="hover:text-orange-300 transition">Calendar</a>
                         <a href="/passwords" class="hover:text-orange-300 transition">Password Manager</a>
-                        <a href="/firecoast" class="text-orange-300">FireCoast Chat</a>
+                        <a href="/firenotes" class="text-orange-300">FireNotes Chat</a>
                     </div>
                 </div>
                 <div class="flex items-center space-x-3 text-sm font-medium">
@@ -158,6 +158,10 @@
                 composerValue: '',
                 composerDisabled: true,
             };
+            const pendingReactions = new Set();
+            const API_BASE = '/api/firenotes';
+            const REACTION_ENDPOINT = `${API_BASE}/chat/reactions`;
+            const REACTION_OPTIONS = ['👍', '✅', '🔥', '🎉', '❗'];
 
             const MAX_COMPOSER_HEIGHT = 220;
             let autoCreatingNote = false;
@@ -820,6 +824,140 @@
                 }
             };
 
+            const getReactionKey = (messageId, emoji) => `${messageId}:${emoji}`;
+
+            const isReactionPending = (messageId, emoji) => {
+                if (!messageId || !emoji) {
+                    return false;
+                }
+                return pendingReactions.has(getReactionKey(messageId, emoji));
+            };
+
+            const setReactionPending = (messageId, emoji, pending) => {
+                if (!messageId || !emoji) {
+                    return;
+                }
+                const key = getReactionKey(messageId, emoji);
+                if (pending) {
+                    pendingReactions.add(key);
+                } else {
+                    pendingReactions.delete(key);
+                }
+            };
+
+            const upsertMessage = (message) => {
+                if (!message || !message.id) {
+                    return;
+                }
+                const index = state.messages.findIndex((entry) => entry.id === message.id);
+                if (index >= 0) {
+                    const existing = state.messages[index];
+                    state.messages[index] = { ...existing, ...message };
+                } else {
+                    state.messages.push(message);
+                }
+            };
+
+            const handleReactionToggle = async (messageId, emoji) => {
+                if (!messageId || !emoji) {
+                    return;
+                }
+                if (isReactionPending(messageId, emoji)) {
+                    return;
+                }
+                setReactionPending(messageId, emoji, true);
+                renderMessages();
+                try {
+                    const response = await fetch(REACTION_ENDPOINT, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ message_id: messageId, emoji }),
+                    });
+                    if (!response.ok) {
+                        throw new Error('Failed to update reaction');
+                    }
+                    const payload = await response.json();
+                    if (payload && payload.message) {
+                        upsertMessage(payload.message);
+                        clearError();
+                    }
+                } catch (error) {
+                    console.error('Failed to toggle reaction', error);
+                    showError('Unable to update reaction.');
+                } finally {
+                    setReactionPending(messageId, emoji, false);
+                    renderMessages();
+                }
+            };
+
+            const createReactionButton = (message, emoji, summary) => {
+                if (!message || !message.id || !emoji) {
+                    return null;
+                }
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'fc-reaction';
+                const reacted = summary && summary.reacted;
+                const count = summary && Number.isFinite(summary.count) ? Number(summary.count) : 0;
+                button.textContent = count > 0 ? `${emoji} ${count}` : emoji;
+                button.setAttribute('aria-pressed', reacted ? 'true' : 'false');
+                if (reacted) {
+                    button.classList.add('is-active');
+                }
+                const pending = isReactionPending(message.id, emoji);
+                if (pending) {
+                    button.classList.add('is-pending');
+                    button.disabled = true;
+                }
+                button.addEventListener('click', () => {
+                    handleReactionToggle(message.id, emoji);
+                });
+                let description = `React with ${emoji}`;
+                if (summary && Array.isArray(summary.reactors) && summary.reactors.length) {
+                    description = `${emoji} reaction from ${summary.reactors.join(', ')}`;
+                }
+                button.title = description;
+                button.setAttribute('aria-label', description);
+                if (count === 0) {
+                    button.classList.add('fc-reaction--ghost');
+                }
+                return button;
+            };
+
+            const renderReactionRow = (message) => {
+                if (!message || !message.id) {
+                    return null;
+                }
+                const container = document.createElement('div');
+                container.className = 'fc-message__reactions';
+                const seen = new Set();
+                if (Array.isArray(message.reactions)) {
+                    message.reactions.forEach((reaction) => {
+                        if (!reaction || !reaction.emoji) {
+                            return;
+                        }
+                        seen.add(reaction.emoji);
+                        const button = createReactionButton(message, reaction.emoji, reaction);
+                        if (button) {
+                            container.appendChild(button);
+                        }
+                    });
+                }
+                REACTION_OPTIONS.forEach((emoji) => {
+                    if (seen.has(emoji)) {
+                        return;
+                    }
+                    const button = createReactionButton(message, emoji, null);
+                    if (button) {
+                        container.appendChild(button);
+                    }
+                });
+                if (!container.children.length) {
+                    return null;
+                }
+                return container;
+            };
+
             const createMessageElement = (message) => {
                 const author = (message.author || '').toLowerCase();
                 const isUser = author === 'user';
@@ -834,7 +972,7 @@
 
                 const authorLabel = document.createElement('span');
                 authorLabel.className = 'fc-message__author';
-                authorLabel.textContent = isUser ? 'You' : '@firecoast';
+                authorLabel.textContent = isUser ? 'You' : '@firenotes';
 
                 const timestamp = document.createElement('time');
                 timestamp.className = 'fc-message__timestamp';
@@ -889,6 +1027,11 @@
                 const metadataDetails = createMetadataDetails(message.metadata);
                 if (metadataDetails) {
                     body.appendChild(metadataDetails);
+                }
+
+                const reactionsRow = renderReactionRow(message);
+                if (reactionsRow) {
+                    body.appendChild(reactionsRow);
                 }
 
                 wrapper.appendChild(header);
@@ -1077,12 +1220,13 @@
                     renderMessages();
                 }
                 try {
-                    const response = await fetch(`/api/firecoast/chat?noteId=${encodeURIComponent(noteId)}&limit=400`);
+                    const response = await fetch(`${API_BASE}/chat?noteId=${encodeURIComponent(noteId)}&limit=400`);
                     if (!response.ok) {
                         throw new Error('Failed to load messages');
                     }
                     const payload = await response.json();
                     state.messages = Array.isArray(payload.messages) ? payload.messages : [];
+                    pendingReactions.clear();
                     if (payload.note) {
                         state.activeNote = payload.note;
                         state.activeNoteId = payload.note.id;
@@ -1123,7 +1267,7 @@
             };
 
             const createNote = async (title) => {
-                const response = await fetch('/api/firecoast/notes', {
+                const response = await fetch(`${API_BASE}/notes`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ title }),
@@ -1139,7 +1283,7 @@
             };
 
             const deleteNote = async (noteId) => {
-                const response = await fetch('/api/firecoast/notes', {
+                const response = await fetch(`${API_BASE}/notes`, {
                     method: 'DELETE',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ id: noteId }),
@@ -1156,7 +1300,7 @@
                     state.isLoadingNotes = true;
                 }
                 try {
-                    const response = await fetch('/api/firecoast/notes');
+                    const response = await fetch(`${API_BASE}/notes`);
                     if (!response.ok) {
                         throw new Error('Failed to load notes');
                     }
@@ -1212,12 +1356,12 @@
                         state.pendingFiles.forEach((item) => {
                             formData.append('attachments', item.file, item.file.name);
                         });
-                        response = await fetch('/api/firecoast/chat', {
+                        response = await fetch(`${API_BASE}/chat`, {
                             method: 'POST',
                             body: formData,
                         });
                     } else {
-                        response = await fetch('/api/firecoast/chat', {
+                        response = await fetch(`${API_BASE}/chat`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ note_id: state.activeNoteId, content: rawContent }),
@@ -1228,7 +1372,9 @@
                     }
                     const payload = await response.json();
                     const incoming = Array.isArray(payload.messages) ? payload.messages : [];
-                    state.messages = state.messages.concat(incoming);
+                    incoming.forEach((entry) => {
+                        upsertMessage(entry);
+                    });
                     if (payload.note) {
                         updateNoteFromResponse(payload.note);
                     }

@@ -607,6 +607,22 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_firecoast_chat_note ON firecoast_chat_messages(note_id, created_at)"
     )
 
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS firecoast_chat_reactions (
+            id TEXT PRIMARY KEY NOT NULL,
+            message_id TEXT NOT NULL,
+            emoji TEXT NOT NULL,
+            reactor TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(message_id, emoji, reactor)
+        );
+        """
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_firecoast_chat_reactions_message ON firecoast_chat_reactions(message_id)"
+    )
+
     cursor.execute("PRAGMA table_info('firecoast_chat_messages')")
     column_rows = cursor.fetchall()
     column_names = {row['name'] if isinstance(row, sqlite3.Row) else row[1] for row in column_rows}

@@ -512,7 +512,7 @@
     display: none;
 }
 
-.firecoast-chat .record-mention-textarea {
+.firenotes-chat .record-mention-textarea {
     position: relative;
     width: 100%;
     display: flex;
@@ -520,13 +520,13 @@
     gap: 0.5rem;
 }
 
-.firecoast-chat .record-mention-textarea > .relative,
-.firecoast-chat .record-mention-textarea .relative {
+.firenotes-chat .record-mention-textarea > .relative,
+.firenotes-chat .record-mention-textarea .relative {
     position: relative;
     display: block;
 }
 
-.firecoast-chat .record-mention-textarea__overlay {
+.firenotes-chat .record-mention-textarea__overlay {
     position: absolute;
     inset: 0;
     pointer-events: none;
@@ -544,39 +544,39 @@
     word-break: break-word;
 }
 
-.firecoast-chat .record-mention-textarea__overlay.border-slate-200 {
+.firenotes-chat .record-mention-textarea__overlay.border-slate-200 {
     border-color: #e2e8f0;
 }
 
-.firecoast-chat .record-mention-textarea__overlay.border-slate-300 {
+.firenotes-chat .record-mention-textarea__overlay.border-slate-300 {
     border-color: #cbd5f5;
 }
 
-.firecoast-chat .record-mention-textarea__overlay.border-orange-300 {
+.firenotes-chat .record-mention-textarea__overlay.border-orange-300 {
     border-color: #fbbf24;
 }
 
-.firecoast-chat .record-mention-textarea__overlay.bg-slate-100 {
+.firenotes-chat .record-mention-textarea__overlay.bg-slate-100 {
     background-color: #f1f5f9;
 }
 
-.firecoast-chat .record-mention-textarea__overlay.bg-white {
+.firenotes-chat .record-mention-textarea__overlay.bg-white {
     background-color: #ffffff;
 }
 
-.firecoast-chat .record-mention-textarea__overlay.shadow-sm {
+.firenotes-chat .record-mention-textarea__overlay.shadow-sm {
     box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
 }
 
-.firecoast-chat .record-mention-textarea__overlay.ring-2 {
+.firenotes-chat .record-mention-textarea__overlay.ring-2 {
     box-shadow: 0 0 0 4px rgba(251, 191, 36, 0.28);
 }
 
-.firecoast-chat .record-mention-textarea__overlay.ring-orange-200 {
+.firenotes-chat .record-mention-textarea__overlay.ring-orange-200 {
     box-shadow: 0 0 0 4px rgba(254, 215, 170, 0.4);
 }
 
-.firecoast-chat .record-mention-textarea__input {
+.firenotes-chat .record-mention-textarea__input {
     position: relative;
     z-index: 1;
     width: 100%;
@@ -592,20 +592,20 @@
     line-height: 1.5;
 }
 
-.firecoast-chat .record-mention-textarea__input::placeholder {
+.firenotes-chat .record-mention-textarea__input::placeholder {
     color: transparent;
 }
 
-.firecoast-chat .record-mention-textarea__input:focus {
+.firenotes-chat .record-mention-textarea__input:focus {
     outline: none;
     box-shadow: none;
 }
 
-.firecoast-chat .record-mention-textarea__input:disabled {
+.firenotes-chat .record-mention-textarea__input:disabled {
     cursor: not-allowed;
 }
 
-.firecoast-chat .record-mention-textarea__menu {
+.firenotes-chat .record-mention-textarea__menu {
     position: absolute;
     left: 0;
     right: 0;
@@ -614,7 +614,7 @@
     z-index: 30;
 }
 
-.firecoast-chat .record-mention-textarea__list {
+.firenotes-chat .record-mention-textarea__list {
     background: #ffffff;
     border: 1px solid #d0d5dd;
     border-radius: 12px;
@@ -622,7 +622,7 @@
     overflow: hidden;
 }
 
-.firecoast-chat .record-mention-textarea__header {
+.firenotes-chat .record-mention-textarea__header {
     background: #f8fafc;
     color: #475569;
     font-size: 12px;
@@ -630,33 +630,33 @@
     text-transform: uppercase;
 }
 
-.firecoast-chat .record-mention-textarea__option {
+.firenotes-chat .record-mention-textarea__option {
     border: none;
     color: #1f2933;
     border-radius: 8px;
 }
 
-.firecoast-chat .record-mention-textarea__option.is-active,
-.firecoast-chat .record-mention-textarea__option:hover {
+.firenotes-chat .record-mention-textarea__option.is-active,
+.firenotes-chat .record-mention-textarea__option:hover {
     background: rgba(246, 108, 64, 0.1);
     color: #d05832;
 }
 
-.firecoast-chat .record-mention-textarea__item-entity {
+.firenotes-chat .record-mention-textarea__item-entity {
     background: #f1f5f9;
     color: #475569;
 }
 
-.firecoast-chat .record-mention-textarea__refresh {
+.firenotes-chat .record-mention-textarea__refresh {
     color: #d05832;
 }
 
-.firecoast-chat .record-mention-text {
+.firenotes-chat .record-mention-text {
     color: inherit;
     font-size: inherit;
 }
 
-.firecoast-chat .record-mention-text button {
+.firenotes-chat .record-mention-text button {
     border: 1px solid #d0d5dd;
     border-radius: 999px;
     padding: 2px 8px;
@@ -666,8 +666,8 @@
     transition: background 0.15s ease, color 0.15s ease;
 }
 
-.firecoast-chat .record-mention-text button:hover,
-.firecoast-chat .record-mention-text button:focus-visible {
+.firenotes-chat .record-mention-text button:hover,
+.firenotes-chat .record-mention-text button:focus-visible {
     background: rgba(246, 108, 64, 0.1);
     color: #d05832;
     outline: none;
@@ -675,6 +675,60 @@
 
 .fc-message__text-content {
     display: inline;
+}
+
+.firenotes-chat .fc-message__reactions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-top: 0.75rem;
+}
+
+.firenotes-chat .fc-reaction {
+    align-items: center;
+    background: #f1f5f9;
+    border: 1px solid transparent;
+    border-radius: 9999px;
+    color: #1f2937;
+    cursor: pointer;
+    display: inline-flex;
+    font-size: 0.8125rem;
+    gap: 0.35rem;
+    line-height: 1.25rem;
+    padding: 0.15rem 0.65rem;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.firenotes-chat .fc-reaction.is-active {
+    background: rgba(249, 115, 22, 0.12);
+    border-color: rgba(249, 115, 22, 0.45);
+    color: #b45309;
+}
+
+.firenotes-chat .fc-reaction--ghost {
+    background: transparent;
+    border-color: rgba(148, 163, 184, 0.4);
+    color: #64748b;
+}
+
+.firenotes-chat .fc-reaction--ghost:hover,
+.firenotes-chat .fc-reaction--ghost:focus-visible {
+    background: rgba(148, 163, 184, 0.15);
+    color: #334155;
+}
+
+.firenotes-chat .fc-reaction.is-pending {
+    cursor: progress;
+    opacity: 0.6;
+}
+
+.firenotes-chat .fc-reaction:focus-visible {
+    outline: 2px solid rgba(249, 115, 22, 0.6);
+    outline-offset: 1px;
+}
+
+.firenotes-chat .fc-reaction:disabled {
+    cursor: not-allowed;
 }
 
 @media (max-width: 1024px) {
