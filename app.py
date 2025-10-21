@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import uuid
 import webbrowser
 from threading import Timer
@@ -158,50 +159,67 @@ def _infer_password_subject(text: str) -> str:
     return _normalize_password_subject(lowered)
 
 
+def _parse_json_column(value: Optional[str]) -> Optional[Any]:
+    if value in (None, ""):
+        return None
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return None
+
+
 def _serialize_chat_row(row: sqlite3.Row) -> Dict[str, Any]:
     if isinstance(row, sqlite3.Row):
-        keys = set(row.keys())
-        raw_metadata = row['metadata_json'] if 'metadata_json' in keys else None
-        created_at = row['created_at'] if 'created_at' in keys else None
-        message_id = row['id'] if 'id' in keys else None
-        author = row['author'] if 'author' in keys else None
-        content = row['content'] if 'content' in keys else None
-    else:
-        message_id, author, content, raw_metadata, created_at = row
-    metadata = None
-    if raw_metadata:
-        try:
-            metadata = json.loads(raw_metadata)
-        except json.JSONDecodeError:
-            metadata = {'raw': raw_metadata}
+        row = dict(row)
+    elif isinstance(row, tuple):
+        row = {
+            'id': row[0],
+            'author': row[1],
+            'content': row[2],
+            'metadata_json': row[3],
+            'created_at': row[4],
+        }
+    metadata = _parse_json_column(row.get('metadata_json'))
+    attachments = _parse_json_column(row.get('attachments_json')) or []
     return {
-        'id': message_id,
-        'author': author,
-        'content': content,
+        'id': row.get('id'),
+        'note_id': row.get('note_id'),
+        'author': row.get('author'),
+        'content': row.get('content'),
         'metadata': metadata,
-        'created_at': created_at,
+        'attachments': attachments,
+        'created_at': row.get('created_at'),
     }
 
 
 def _store_chat_message(
     conn: sqlite3.Connection,
+    note_id: str,
     author: str,
     content: str,
     *,
     metadata: Optional[Dict[str, Any]] = None,
+    attachments: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    message_id = str(uuid.uuid4())
+    if not note_id:
+        raise ValueError('note_id is required for chat messages')
     metadata_json = json.dumps(metadata) if metadata else None
+    attachments_json = json.dumps(attachments) if attachments else None
+    message_id = str(uuid.uuid4())
     conn.execute(
         """
-        INSERT INTO firecoast_chat_messages (id, author, content, metadata_json)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO firecoast_chat_messages (id, note_id, author, content, metadata_json, attachments_json)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (message_id, author, content, metadata_json),
+        (message_id, note_id, author, content, metadata_json, attachments_json),
+    )
+    conn.execute(
+        "UPDATE firecoast_notes SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (note_id,),
     )
     cursor = conn.execute(
         """
-        SELECT id, author, content, metadata_json, created_at
+        SELECT id, note_id, author, content, metadata_json, attachments_json, created_at
         FROM firecoast_chat_messages
         WHERE id = ?
         """,
@@ -211,20 +229,205 @@ def _store_chat_message(
     return _serialize_chat_row(row)
 
 
-def _list_chat_messages(conn: sqlite3.Connection, limit: int) -> List[Dict[str, Any]]:
+def _list_chat_messages(conn: sqlite3.Connection, note_id: str, limit: int) -> List[Dict[str, Any]]:
     limit = max(1, min(MAX_CHAT_HISTORY, limit))
     cursor = conn.execute(
         """
-        SELECT id, author, content, metadata_json, created_at
+        SELECT id, note_id, author, content, metadata_json, attachments_json, created_at
         FROM firecoast_chat_messages
-        ORDER BY datetime(created_at) DESC, rowid DESC
+        WHERE note_id = ?
+        ORDER BY datetime(created_at) ASC, rowid ASC
         LIMIT ?
         """,
-        (limit,),
+        (note_id, limit),
     )
-    rows = [_serialize_chat_row(row) for row in cursor.fetchall()]
-    rows.reverse()
-    return rows
+    return [_serialize_chat_row(row) for row in cursor.fetchall()]
+
+
+NOTE_HANDLE_SANITIZE_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _normalize_note_title(value: Optional[str]) -> str:
+    if value is None:
+        return 'Untitled note'
+    text = value.strip()
+    return text or 'Untitled note'
+
+
+def _generate_note_handle(conn: sqlite3.Connection, note_id: str, title: str) -> str:
+    base_slug = NOTE_HANDLE_SANITIZE_RE.sub('-', title.strip().lower()).strip('-')
+    if not base_slug:
+        base_slug = f'note-{note_id.split("-")[0]}'
+    candidate = f'firecoast-{base_slug}'
+    suffix = 2
+    while True:
+        row = conn.execute(
+            "SELECT entity_id FROM record_handles WHERE handle = ?",
+            (candidate,),
+        ).fetchone()
+        if not row or row['entity_id'] == note_id:
+            return candidate
+        candidate = f'firecoast-{base_slug}-{suffix}'
+        suffix += 1
+
+
+def _upsert_note_handle(conn: sqlite3.Connection, note_id: str, title: str) -> str:
+    handle = _generate_note_handle(conn, note_id, title)
+    search_blob = title.strip().lower()
+    conn.execute(
+        "DELETE FROM record_handles WHERE entity_type = 'firecoast_note' AND entity_id = ?",
+        (note_id,),
+    )
+    conn.execute(
+        """
+        INSERT INTO record_handles (handle, entity_type, entity_id, display_name, search_blob)
+        VALUES (?, 'firecoast_note', ?, ?, ?)
+        """,
+        (handle, note_id, title, search_blob),
+    )
+    return handle
+
+
+def _serialize_note_row(row: sqlite3.Row) -> Dict[str, Any]:
+    if isinstance(row, sqlite3.Row):
+        row = dict(row)
+    return {
+        'id': row.get('id'),
+        'title': row.get('title'),
+        'handle': row.get('handle'),
+        'created_at': row.get('created_at'),
+        'updated_at': row.get('updated_at'),
+        'last_message_preview': row.get('last_message_preview'),
+        'last_message_at': row.get('last_message_at'),
+    }
+
+
+def _get_note(conn: sqlite3.Connection, note_id: str) -> Optional[Dict[str, Any]]:
+    cursor = conn.execute(
+        """
+        SELECT
+            n.id,
+            n.title,
+            rh.handle,
+            n.created_at,
+            n.updated_at,
+            (
+                SELECT content
+                FROM firecoast_chat_messages m
+                WHERE m.note_id = n.id
+                ORDER BY datetime(m.created_at) DESC, m.rowid DESC
+                LIMIT 1
+            ) AS last_message_preview,
+            (
+                SELECT created_at
+                FROM firecoast_chat_messages m
+                WHERE m.note_id = n.id
+                ORDER BY datetime(m.created_at) DESC, m.rowid DESC
+                LIMIT 1
+            ) AS last_message_at
+        FROM firecoast_notes n
+        LEFT JOIN record_handles rh ON rh.entity_type = 'firecoast_note' AND rh.entity_id = n.id
+        WHERE n.id = ?
+        """,
+        (note_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None
+    return _serialize_note_row(row)
+
+
+def _create_note(conn: sqlite3.Connection, title: str) -> Dict[str, Any]:
+    note_id = str(uuid.uuid4())
+    normalized_title = _normalize_note_title(title)
+    conn.execute(
+        """
+        INSERT INTO firecoast_notes (id, title)
+        VALUES (?, ?)
+        """,
+        (note_id, normalized_title),
+    )
+    handle = _upsert_note_handle(conn, note_id, normalized_title)
+    note = _get_note(conn, note_id)
+    if note is not None:
+        note['handle'] = handle
+    return note or {'id': note_id, 'title': normalized_title, 'handle': handle}
+
+
+def _list_notes(conn: sqlite3.Connection, query: Optional[str], limit: int = 200) -> List[Dict[str, Any]]:
+    search_text = (query or '').strip().lower()
+    params: List[Any] = []
+    sql = [
+        """
+        SELECT
+            n.id,
+            n.title,
+            rh.handle,
+            n.created_at,
+            n.updated_at,
+            (
+                SELECT content
+                FROM firecoast_chat_messages m
+                WHERE m.note_id = n.id
+                ORDER BY datetime(m.created_at) DESC, m.rowid DESC
+                LIMIT 1
+            ) AS last_message_preview,
+            (
+                SELECT created_at
+                FROM firecoast_chat_messages m
+                WHERE m.note_id = n.id
+                ORDER BY datetime(m.created_at) DESC, m.rowid DESC
+                LIMIT 1
+            ) AS last_message_at
+        FROM firecoast_notes n
+        LEFT JOIN record_handles rh ON rh.entity_type = 'firecoast_note' AND rh.entity_id = n.id
+        """
+    ]
+    if search_text:
+        sql.append(
+            "WHERE (")
+        sql.append("lower(n.title) LIKE ?")
+        params.append(f'%{search_text}%')
+        sql.append(" OR lower(rh.handle) LIKE ?")
+        params.append(f'%{search_text}%')
+        sql.append(")")
+    sql.append("ORDER BY datetime(n.updated_at) DESC, datetime(n.created_at) DESC LIMIT ?")
+    params.append(max(1, limit))
+    cursor = conn.execute("\n".join(sql), params)
+    return [_serialize_note_row(row) for row in cursor.fetchall()]
+
+
+def _save_note_attachments(files: List[Any]) -> List[Dict[str, Any]]:
+    if not files:
+        return []
+    saved: List[Dict[str, Any]] = []
+    base_dir = Path(app.config['UPLOAD_FOLDER']) / 'firecoast'
+    base_dir.mkdir(parents=True, exist_ok=True)
+    for storage in files:
+        if not storage or not getattr(storage, 'filename', None):
+            continue
+        original_name = storage.filename
+        sanitized = secure_filename(original_name) or 'attachment'
+        unique_name = f"{uuid.uuid4().hex}_{sanitized}"
+        relative_path = os.path.join('firecoast', unique_name)
+        full_path = base_dir / unique_name
+        storage.save(full_path)
+        size = full_path.stat().st_size if full_path.exists() else None
+        content_type = storage.mimetype or 'application/octet-stream'
+        attachment_id = str(uuid.uuid4())
+        normalized_path = relative_path.replace('\\', '/')
+        saved.append(
+            {
+                'id': attachment_id,
+                'filename': original_name,
+                'path': normalized_path,
+                'url': f"/data/{normalized_path}",
+                'content_type': content_type,
+                'size': size,
+                'is_image': content_type.startswith('image/'),
+            }
+        )
+    return saved
 
 
 def _format_datetime_for_display(
@@ -279,11 +482,12 @@ def _format_event_window(event_payload: Dict[str, Any], timezone_name: str) -> s
         return f"{start_dt.strftime('%b %d, %Y %I:%M %p')} – {end_dt.strftime('%I:%M %p %Z')}"
     return f"{start_dt.strftime('%b %d, %Y %I:%M %p')} – {end_dt.strftime('%b %d, %Y %I:%M %p %Z')}"
 
-def _handle_event_command(conn: sqlite3.Connection, content: str) -> List[Dict[str, Any]]:
+def _handle_event_command(conn: sqlite3.Connection, note_id: str, content: str) -> List[Dict[str, Any]]:
     body = content[len('.event'):].strip()
     if not body:
         message = _store_chat_message(
             conn,
+            note_id,
             'assistant',
             "I need event details. Try `.event Team sync | tomorrow 3pm | tomorrow 4pm | HQ | bring deck`.",
             metadata={'action': 'error', 'context': 'event', 'reason': 'missing_details'},
@@ -324,10 +528,11 @@ def _handle_event_command(conn: sqlite3.Connection, content: str) -> List[Dict[s
             'action': 'calendar_event_created',
             'event': event_payload,
         }
-        return [_store_chat_message(conn, 'assistant', message_text, metadata=metadata)]
+        return [_store_chat_message(conn, note_id, 'assistant', message_text, metadata=metadata)]
     except (ValueError, RecordValidationError) as exc:
         message = _store_chat_message(
             conn,
+            note_id,
             'assistant',
             f"I couldn't create that event: {exc}",
             metadata={'action': 'error', 'context': 'event', 'reason': str(exc)},
@@ -348,11 +553,12 @@ def _format_reminder_due(reminder_payload: Dict[str, Any]) -> str:
     return f"due {label}" if label else 'no due date'
 
 
-def _handle_reminder_command(conn: sqlite3.Connection, content: str) -> List[Dict[str, Any]]:
+def _handle_reminder_command(conn: sqlite3.Connection, note_id: str, content: str) -> List[Dict[str, Any]]:
     body = content[len('.reminder'):].strip()
     if not body:
         message = _store_chat_message(
             conn,
+            note_id,
             'assistant',
             "Let's add a reminder. Try `.reminder Follow up | next Monday 9am | include tracking link`.",
             metadata={'action': 'error', 'context': 'reminder', 'reason': 'missing_details'},
@@ -383,10 +589,11 @@ def _handle_reminder_command(conn: sqlite3.Connection, content: str) -> List[Dic
             'action': 'reminder_created',
             'reminder': reminder_payload,
         }
-        return [_store_chat_message(conn, 'assistant', message_text, metadata=metadata)]
+        return [_store_chat_message(conn, note_id, 'assistant', message_text, metadata=metadata)]
     except (ValueError, RecordValidationError) as exc:
         message = _store_chat_message(
             conn,
+            note_id,
             'assistant',
             f"I couldn't save that reminder: {exc}",
             metadata={'action': 'error', 'context': 'reminder', 'reason': str(exc)},
@@ -436,12 +643,13 @@ def _summarize_report_result(result: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _list_reports_message(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+def _list_reports_message(conn: sqlite3.Connection, note_id: str) -> List[Dict[str, Any]]:
     engine = get_analytics_engine()
     definitions = engine.list_report_definitions(conn)
     if not definitions:
         message = _store_chat_message(
             conn,
+            note_id,
             'assistant',
             "I couldn't find any analytics reports.",
             metadata={'action': 'report_list', 'reports': []},
@@ -451,7 +659,7 @@ def _list_reports_message(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
     for definition in definitions:
         lines.append(f"- {definition['id']}: {definition.get('name', '')}")
     metadata = {'action': 'report_list', 'reports': definitions}
-    message = _store_chat_message(conn, 'assistant', "\n".join(lines), metadata=metadata)
+    message = _store_chat_message(conn, note_id, 'assistant', "\n".join(lines), metadata=metadata)
     return [message]
 
 
@@ -459,10 +667,12 @@ def _run_report_via_chat(
     conn: sqlite3.Connection,
     report_id: str,
     context_text: str,
+    *,
+    note_id: str,
 ) -> List[Dict[str, Any]]:
     report_id = report_id.strip()
     if not report_id:
-        return _list_reports_message(conn)
+        return _list_reports_message(conn, note_id)
     params: Dict[str, Any] = {}
     start_value, end_value = _extract_date_filters(context_text)
     if start_value:
@@ -476,6 +686,7 @@ def _run_report_via_chat(
     except KeyError:
         message = _store_chat_message(
             conn,
+            note_id,
             'assistant',
             f"I don't know a report named '{report_id}'. Try `.report list` for options.",
             metadata={'action': 'error', 'context': 'report', 'requested': report_id},
@@ -484,6 +695,7 @@ def _run_report_via_chat(
     except ValueError as exc:
         message = _store_chat_message(
             conn,
+            note_id,
             'assistant',
             f"I couldn't run that report: {exc}",
             metadata={'action': 'error', 'context': 'report', 'requested': report_id},
@@ -491,25 +703,26 @@ def _run_report_via_chat(
         return [message]
     summary_text = _summarize_report_result(result)
     metadata = {'action': 'report_run', 'report': result, 'params': params}
-    message = _store_chat_message(conn, 'assistant', summary_text, metadata=metadata)
+    message = _store_chat_message(conn, note_id, 'assistant', summary_text, metadata=metadata)
     return [message]
 
 
-def _handle_report_command(conn: sqlite3.Connection, content: str) -> List[Dict[str, Any]]:
+def _handle_report_command(conn: sqlite3.Connection, note_id: str, content: str) -> List[Dict[str, Any]]:
     body = content[len('.report'):].strip()
     if not body or body.lower() in {'list', 'help'}:
-        return _list_reports_message(conn)
+        return _list_reports_message(conn, note_id)
     tokens = body.split(None, 1)
     report_id = tokens[0]
     remainder = tokens[1] if len(tokens) > 1 else ''
-    return _run_report_via_chat(conn, report_id, remainder)
+    return _run_report_via_chat(conn, report_id, remainder, note_id=note_id)
 
 
-def _handle_password_lookup(conn: sqlite3.Connection, text: str) -> List[Dict[str, Any]]:
+def _handle_password_lookup(conn: sqlite3.Connection, note_id: str, text: str) -> List[Dict[str, Any]]:
     subject = _infer_password_subject(text)
     if not subject:
         message = _store_chat_message(
             conn,
+            note_id,
             'assistant',
             "Let me know which service you'd like me to look up.",
             metadata={'action': 'password_lookup', 'query': '', 'matches': []},
@@ -532,6 +745,7 @@ def _handle_password_lookup(conn: sqlite3.Connection, text: str) -> List[Dict[st
     if not matches:
         message = _store_chat_message(
             conn,
+            note_id,
             'assistant',
             f"I couldn't find anything for \"{subject}\" in the password vault.",
             metadata={'action': 'password_lookup', 'query': subject, 'matches': []},
@@ -552,11 +766,11 @@ def _handle_password_lookup(conn: sqlite3.Connection, text: str) -> List[Dict[st
         'query': subject,
         'matches': matches,
     }
-    message = _store_chat_message(conn, 'assistant', "\n".join(preview_lines), metadata=metadata)
+    message = _store_chat_message(conn, note_id, 'assistant', "\n".join(preview_lines), metadata=metadata)
     return [message]
 
 
-def _firecoast_help(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+def _firecoast_help(conn: sqlite3.Connection, note_id: str) -> List[Dict[str, Any]]:
     help_text = "\n".join(
         [
             "Here's what I can do:",
@@ -566,34 +780,35 @@ def _firecoast_help(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
             "• `@firecoast what's my password for Example` to retrieve saved credentials.",
         ]
     )
-    message = _store_chat_message(conn, 'assistant', help_text, metadata={'action': 'help'})
+    message = _store_chat_message(conn, note_id, 'assistant', help_text, metadata={'action': 'help'})
     return [message]
 
 
-def _handle_firecoast_mention(conn: sqlite3.Connection, content: str) -> List[Dict[str, Any]]:
+def _handle_firecoast_mention(conn: sqlite3.Connection, note_id: str, content: str) -> List[Dict[str, Any]]:
     text = content[len('@firecoast'):].strip()
     if not text:
-        return _firecoast_help(conn)
+        return _firecoast_help(conn, note_id)
     lowered = text.lower()
     if 'password' in lowered:
-        return _handle_password_lookup(conn, text)
+        return _handle_password_lookup(conn, note_id, text)
     if REPORT_LIST_RE.search(text):
-        return _list_reports_message(conn)
+        return _list_reports_message(conn, note_id)
     report_match = REPORT_ID_RE.search(text)
     if report_match:
         report_id = report_match.group('report')
         remainder = text[report_match.end():]
-        return _run_report_via_chat(conn, report_id, remainder)
+        return _run_report_via_chat(conn, report_id, remainder, note_id=note_id)
     if lowered.startswith('run '):
         tokens = text.split(None, 2)
         if len(tokens) >= 2:
             report_id = tokens[1]
             remainder = tokens[2] if len(tokens) > 2 else ''
-            return _run_report_via_chat(conn, report_id, remainder)
+            return _run_report_via_chat(conn, report_id, remainder, note_id=note_id)
     if 'help' in lowered or 'what can you do' in lowered:
-        return _firecoast_help(conn)
+        return _firecoast_help(conn, note_id)
     fallback = _store_chat_message(
         conn,
+        note_id,
         'assistant',
         "I'm here! Ask for `.report list`, saved passwords, reminders, or events whenever you need them.",
         metadata={'action': 'fallback'},
@@ -608,15 +823,18 @@ def _handle_chat_message(conn: sqlite3.Connection, message: Dict[str, Any]) -> L
     content = (message.get('content') or '').strip()
     if not content:
         return []
+    note_id = message.get('note_id') or ''
+    if not note_id:
+        return []
     lowered = content.lower()
     if lowered.startswith('.event'):
-        return _handle_event_command(conn, content)
+        return _handle_event_command(conn, note_id, content)
     if lowered.startswith('.reminder'):
-        return _handle_reminder_command(conn, content)
+        return _handle_reminder_command(conn, note_id, content)
     if lowered.startswith('.report'):
-        return _handle_report_command(conn, content)
+        return _handle_report_command(conn, note_id, content)
     if lowered.startswith('@firecoast'):
-        return _handle_firecoast_mention(conn, content)
+        return _handle_firecoast_mention(conn, note_id, content)
     return []
 
 PHONE_CLEAN_RE = re.compile(r"\D+")
@@ -4178,25 +4396,84 @@ def password_entry_detail(entry_id):
     return jsonify(entry)
 
 
+@app.route('/api/firecoast/notes', methods=['GET', 'POST', 'PATCH'])
+def api_firecoast_notes():
+    conn = get_db_connection()
+    try:
+        if request.method == 'GET':
+            query = request.args.get('q') or request.args.get('query')
+            notes = _list_notes(conn, query, limit=200)
+            return jsonify({'notes': notes})
+        payload = request.get_json(force=True, silent=True) or {}
+        if request.method == 'POST':
+            title = payload.get('title') or payload.get('name')
+            note = _create_note(conn, title or '')
+            conn.commit()
+            return jsonify({'note': note}), 201
+        note_id = (payload.get('id') or payload.get('note_id') or payload.get('noteId') or '').strip()
+        if not note_id:
+            return jsonify({'message': 'note_id is required.'}), 400
+        note = _get_note(conn, note_id)
+        if not note:
+            return jsonify({'message': 'Note not found.'}), 404
+        title = payload.get('title')
+        if title is not None:
+            normalized_title = _normalize_note_title(title)
+            conn.execute(
+                "UPDATE firecoast_notes SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (normalized_title, note_id),
+            )
+            _upsert_note_handle(conn, note_id, normalized_title)
+            note = _get_note(conn, note_id)
+        conn.commit()
+        return jsonify({'note': note})
+    except Exception as exc:
+        conn.rollback()
+        app.logger.exception("Failed to process FireCoast notes request: %s", exc)
+        return jsonify({'message': 'Unable to process notes request.'}), 500
+    finally:
+        conn.close()
+
+
 @app.route('/api/firecoast/chat', methods=['GET', 'POST'])
 def api_firecoast_chat():
     conn = get_db_connection()
     try:
         if request.method == 'GET':
+            note_id = (request.args.get('noteId') or request.args.get('note_id') or '').strip()
+            if not note_id:
+                return jsonify({'message': 'noteId is required.'}), 400
             limit_param = request.args.get('limit') or request.args.get('pageSize')
             try:
                 limit_value = int(limit_param) if limit_param is not None else 100
             except ValueError:
                 limit_value = 100
-            messages = _list_chat_messages(conn, limit_value)
-            return jsonify({'messages': messages})
+            messages = _list_chat_messages(conn, note_id, limit_value)
+            note = _get_note(conn, note_id)
+            return jsonify({'messages': messages, 'note': note})
 
-        payload = request.get_json(force=True, silent=True) or {}
-        content = (payload.get('content') or '').strip()
-        if not content:
-            return jsonify({'message': 'content is required.'}), 400
-        author = (payload.get('author') or 'user').strip().lower() or 'user'
-        stored = _store_chat_message(conn, author, content)
+        attachments: List[Dict[str, Any]] = []
+        author = 'user'
+        note_id = ''
+        content = ''
+        if request.content_type and 'multipart/form-data' in request.content_type:
+            note_id = (request.form.get('note_id') or request.form.get('noteId') or '').strip()
+            content = (request.form.get('content') or '').strip()
+            author = (request.form.get('author') or 'user').strip().lower() or 'user'
+            attachments = _save_note_attachments(request.files.getlist('attachments'))
+        else:
+            payload = request.get_json(force=True, silent=True) or {}
+            note_id = (payload.get('note_id') or payload.get('noteId') or '').strip()
+            content = (payload.get('content') or '').strip()
+            author = (payload.get('author') or 'user').strip().lower() or 'user'
+        if not note_id:
+            return jsonify({'message': 'note_id is required.'}), 400
+        note = _get_note(conn, note_id)
+        if not note:
+            return jsonify({'message': 'Note not found.'}), 404
+        if not content and not attachments:
+            return jsonify({'message': 'Add a note or attachment before sending.'}), 400
+        stored = _store_chat_message(conn, note_id, author, content, attachments=attachments or None)
         responses: List[Dict[str, Any]] = []
         if author == 'user':
             try:
@@ -4204,13 +4481,15 @@ def api_firecoast_chat():
             except (ValueError, RecordValidationError) as exc:
                 error_message = _store_chat_message(
                     conn,
+                    note_id,
                     'assistant',
                     f"Something went wrong: {exc}",
                     metadata={'action': 'error', 'reason': str(exc)},
                 )
                 responses = [error_message]
         conn.commit()
-        return jsonify({'messages': [stored] + responses})
+        refreshed_note = _get_note(conn, note_id)
+        return jsonify({'messages': [stored] + responses, 'note': refreshed_note})
     except Exception as exc:
         conn.rollback()
         app.logger.exception("Failed to process FireCoast chat request: %s", exc)

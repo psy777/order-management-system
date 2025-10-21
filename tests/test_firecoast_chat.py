@@ -1,3 +1,4 @@
+import io
 import json
 import pathlib
 import sys
@@ -44,12 +45,24 @@ def configure_chat_environment(tmp_path, monkeypatch):
     yield
 
 
+def _create_note(client, title='New note'):
+    response = client.post('/api/firecoast/notes', json={'title': title})
+    assert response.status_code == 201
+    payload = response.get_json()
+    assert 'note' in payload
+    return payload['note']
+
+
 def test_chat_creates_reminder_entry(configure_chat_environment):
     client = firecoast_app.app.test_client()
+    note = _create_note(client, 'Ops note')
 
     response = client.post(
         '/api/firecoast/chat',
-        json={'content': '.reminder Follow up | 2030-01-01 09:00 | send weekly report'},
+        json={
+            'note_id': note['id'],
+            'content': '.reminder Follow up | 2030-01-01 09:00 | send weekly report',
+        },
     )
     assert response.status_code == 200
     payload = response.get_json()
@@ -81,10 +94,11 @@ def test_password_lookup_responds_with_matches(configure_chat_environment):
         }
     ])
     client = firecoast_app.app.test_client()
+    note = _create_note(client, 'Vault note')
 
     response = client.post(
         '/api/firecoast/chat',
-        json={'content': "@firecoast what's my password for example"},
+        json={'note_id': note['id'], 'content': "@firecoast what's my password for example"},
     )
     assert response.status_code == 200
     data = response.get_json()
@@ -96,11 +110,12 @@ def test_password_lookup_responds_with_matches(configure_chat_environment):
 
 def test_chat_history_returns_messages_in_order(configure_chat_environment):
     client = firecoast_app.app.test_client()
+    note = _create_note(client, 'Chrono note')
 
-    client.post('/api/firecoast/chat', json={'content': 'First note'})
-    client.post('/api/firecoast/chat', json={'content': 'Second note'})
+    client.post('/api/firecoast/chat', json={'note_id': note['id'], 'content': 'First note'})
+    client.post('/api/firecoast/chat', json={'note_id': note['id'], 'content': 'Second note'})
 
-    response = client.get('/api/firecoast/chat?limit=5')
+    response = client.get(f"/api/firecoast/chat?noteId={note['id']}&limit=5")
     assert response.status_code == 200
     data = response.get_json()
     messages = data['messages']
@@ -108,3 +123,52 @@ def test_chat_history_returns_messages_in_order(configure_chat_environment):
     assert len(user_messages) >= 2
     assert user_messages[-2]['content'] == 'First note'
     assert user_messages[-1]['content'] == 'Second note'
+
+
+def test_attachments_are_persisted(configure_chat_environment):
+    client = firecoast_app.app.test_client()
+    note = _create_note(client, 'Files note')
+
+    data = {
+        'note_id': note['id'],
+        'content': 'Uploads included',
+        'attachments': [
+            (io.BytesIO(b'hello world'), 'hello.txt'),
+            (io.BytesIO(b'\x89PNG\r\n\x1a\nPNGDATA'), 'preview.png', 'image/png'),
+        ],
+    }
+
+    response = client.post('/api/firecoast/chat', data=data, content_type='multipart/form-data')
+    assert response.status_code == 200
+    payload = response.get_json()
+    message = payload['messages'][0]
+    attachments = message['attachments']
+    assert len(attachments) == 2
+    names = {attachment['filename'] for attachment in attachments}
+    assert {'hello.txt', 'preview.png'} <= names
+    assert any(attachment['is_image'] for attachment in attachments)
+
+
+def test_notes_endpoint_updates_titles_and_handles(configure_chat_environment):
+    client = firecoast_app.app.test_client()
+    note = _create_note(client, 'Initial name')
+
+    list_response = client.get('/api/firecoast/notes')
+    assert list_response.status_code == 200
+    listed_ids = {entry['id'] for entry in list_response.get_json()['notes']}
+    assert note['id'] in listed_ids
+
+    update_response = client.patch('/api/firecoast/notes', json={'id': note['id'], 'title': 'Renamed note'})
+    assert update_response.status_code == 200
+    updated = update_response.get_json()['note']
+    assert updated['title'] == 'Renamed note'
+
+    conn = get_db_connection()
+    try:
+        row = conn.execute(
+            "SELECT handle FROM record_handles WHERE entity_type = 'firecoast_note' AND entity_id = ?",
+            (note['id'],),
+        ).fetchone()
+        assert row is not None
+    finally:
+        conn.close()

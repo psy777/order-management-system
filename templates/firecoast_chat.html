@@ -31,40 +31,42 @@
         </div>
     </nav>
 
-    <main class="fc-main">
-        <div class="fc-workspace">
-            <aside class="fc-sidebar" aria-label="Your notes">
-                <div class="fc-sidebar__search">
-                    <label class="fc-screen-reader-only" for="fc-thread-search">Search notes</label>
-                    <input id="fc-thread-search" class="fc-sidebar__search-input" type="search" placeholder="Search notes" autocomplete="off">
+    <main class="fc-main fc-main--chat">
+        <div class="fc-chat-layout">
+            <aside class="fc-notes" aria-label="Notes">
+                <div class="fc-notes__search">
+                    <label class="fc-screen-reader-only" for="fc-note-search">Search or create note</label>
+                    <input id="fc-note-search" class="fc-notes__search-input" type="search" placeholder="Search or create note" autocomplete="off">
                 </div>
-                <div class="fc-sidebar__threads" id="fc-thread-list" role="list"></div>
-                <p id="fc-thread-empty" class="fc-sidebar__empty">Notes you send will show up here.</p>
+                <div id="fc-note-list" class="fc-notes__list" role="listbox" aria-label="Saved notes"></div>
+                <p id="fc-no-notes" class="fc-notes__empty" hidden></p>
             </aside>
-            <section class="fc-conversation" aria-label="Conversation with @firecoast">
-                <header class="fc-conversation__header">
-                    <h2 class="fc-conversation__title">@firecoast</h2>
-                    <div class="fc-conversation__controls">
-                        <div class="fc-search">
-                            <label class="fc-screen-reader-only" for="fc-search-input">Search messages</label>
-                            <input id="fc-search-input" class="fc-search__input" type="search" placeholder="Search" autocomplete="off">
-                        </div>
-                        <button type="button" id="fc-refresh" class="fc-refresh-button" aria-label="Refresh conversation">
-                            <span class="fc-refresh-button__icon" aria-hidden="true">↺</span>
+            <section class="fc-chat-panel" aria-label="Note conversation">
+                <header class="fc-chat-panel__header">
+                    <h1 id="fc-note-title" class="fc-chat-panel__title">@FireCoast</h1>
+                    <div class="fc-chat-panel__actions">
+                        <label class="fc-screen-reader-only" for="fc-message-search">Search this note</label>
+                        <input id="fc-message-search" class="fc-chat-search" type="search" placeholder="Search this note" autocomplete="off">
+                        <button type="button" id="fc-refresh" class="fc-icon-button" aria-label="Refresh note">
+                            <span aria-hidden="true">↺</span>
                         </button>
                     </div>
                 </header>
-                <div class="fc-conversation__body">
+                <div class="fc-chat-panel__body">
                     <div id="fc-chat-log" class="fc-chat-log" role="log" aria-live="polite" aria-busy="false"></div>
                 </div>
-                <footer class="fc-chat-footer">
-                    <p id="fc-error" class="fc-error" role="status" aria-live="assertive" hidden></p>
-                    <div class="fc-composer">
-                        <label for="fc-input" class="fc-screen-reader-only">Message @firecoast</label>
-                        <textarea id="fc-input" class="fc-textarea" placeholder="Message @firecoast" rows="1"></textarea>
-                        <button type="button" id="fc-send" class="fc-send-button" disabled>
-                            <span class="fc-send-button__icon" aria-hidden="true">↩</span>
-                        </button>
+                <footer class="fc-chat-panel__footer">
+                    <p id="fc-error" class="fc-chat-error" role="status" aria-live="assertive" hidden></p>
+                    <div class="fc-composer" data-disabled="true">
+                        <div id="fc-attachment-chips" class="fc-composer__attachments" aria-live="polite"></div>
+                        <label class="fc-screen-reader-only" for="fc-input">Write a message</label>
+                        <textarea id="fc-input" class="fc-composer__input" placeholder="Write a message" rows="1" disabled></textarea>
+                        <div class="fc-composer__actions">
+                            <input type="file" id="fc-attachment-input" class="fc-composer__file-input" multiple hidden>
+                            <button type="button" id="fc-attach-button" class="fc-icon-button" aria-label="Add files" disabled>
+                                <span aria-hidden="true">＋</span>
+                            </button>
+                        </div>
                     </div>
                 </footer>
             </section>
@@ -106,26 +108,43 @@
 
     <script>
         (function () {
-            const logEl = document.getElementById('fc-chat-log');
-            const inputEl = document.getElementById('fc-input');
-            const sendButton = document.getElementById('fc-send');
+            const notesListEl = document.getElementById('fc-note-list');
+            const noteSearchEl = document.getElementById('fc-note-search');
+            const noteEmptyEl = document.getElementById('fc-no-notes');
+            const noteTitleEl = document.getElementById('fc-note-title');
+            const chatLogEl = document.getElementById('fc-chat-log');
+            const messageSearchEl = document.getElementById('fc-message-search');
             const refreshButton = document.getElementById('fc-refresh');
+            const inputEl = document.getElementById('fc-input');
+            const attachmentInputEl = document.getElementById('fc-attachment-input');
+            const attachmentButtonEl = document.getElementById('fc-attach-button');
+            const attachmentChipsEl = document.getElementById('fc-attachment-chips');
+            const composerEl = document.querySelector('.fc-composer');
             const errorEl = document.getElementById('fc-error');
-            const threadListEl = document.getElementById('fc-thread-list');
-            const threadEmptyEl = document.getElementById('fc-thread-empty');
-            const searchInput = document.getElementById('fc-search-input');
-            const threadSearchInput = document.getElementById('fc-thread-search');
+
             const state = {
+                notes: [],
                 messages: [],
-                isLoading: false,
+                activeNoteId: '',
+                activeNote: null,
+                noteSearch: '',
+                messageSearch: '',
+                isLoadingNotes: false,
+                isLoadingMessages: false,
                 isSending: false,
+                pendingFiles: [],
                 error: null,
-                refreshTimer: null,
-                searchQuery: '',
-                threadQuery: '',
             };
 
             const MAX_COMPOSER_HEIGHT = 220;
+            let autoCreatingNote = false;
+
+            const normalizePreview = (value) => {
+                if (value === null || value === undefined) {
+                    return '';
+                }
+                return String(value).replace(/\s+/g, ' ').trim();
+            };
 
             const formatTimestamp = (value, withTime = true) => {
                 if (!value) {
@@ -133,7 +152,7 @@
                 }
                 const date = new Date(value);
                 if (Number.isNaN(date.getTime())) {
-                    return value;
+                    return '';
                 }
                 const options = withTime
                     ? { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }
@@ -166,331 +185,291 @@
                 return `${formatTimestamp(start.toISOString(), true)} – ${formatTimestamp(end.toISOString(), true)}`;
             };
 
-            const normalizePreview = (value) => {
-                if (!value) {
-                    return '';
+            const setBusy = (value) => {
+                if (!chatLogEl) {
+                    return;
                 }
-                return String(value).replace(/\s+/g, ' ').trim();
+                chatLogEl.setAttribute('aria-busy', value ? 'true' : 'false');
             };
 
-            const matchesSearch = (message, query) => {
-                if (!query) {
-                    return true;
+            const showError = (message) => {
+                state.error = message;
+                if (!errorEl) {
+                    return;
                 }
-                const lowered = query.toLowerCase();
-                const content = normalizePreview(message.content || '').toLowerCase();
-                if (content.includes(lowered)) {
-                    return true;
-                }
-                try {
-                    const metadataText = JSON.stringify(message.metadata || {});
-                    if (metadataText && metadataText.toLowerCase().includes(lowered)) {
-                        return true;
-                    }
-                } catch (error) {
-                    console.debug('Unable to stringify message metadata for search', error);
-                }
-                return false;
-            };
-
-            const clearError = () => {
-                state.error = null;
-                if (errorEl) {
+                if (message) {
+                    errorEl.hidden = false;
+                    errorEl.textContent = message;
+                } else {
                     errorEl.hidden = true;
                     errorEl.textContent = '';
                 }
             };
 
-            const showError = (message) => {
-                state.error = message;
-                if (errorEl) {
-                    errorEl.hidden = !message;
-                    errorEl.textContent = message || '';
+            const clearError = () => showError('');
+
+            const renderNoteTitle = (note) => {
+                if (!noteTitleEl) {
+                    return;
                 }
+                if (!note) {
+                    noteTitleEl.textContent = '@—';
+                    noteTitleEl.title = 'No note selected';
+                    return;
+                }
+                noteTitleEl.textContent = `@${note.title}`;
+                noteTitleEl.title = note.title;
             };
 
-            const setBusy = (isBusy) => {
-                if (logEl) {
-                    logEl.setAttribute('aria-busy', String(isBusy));
+            const sortNotes = () => {
+                state.notes.sort((a, b) => {
+                    const left = new Date(a.updated_at || a.last_message_at || a.created_at || 0).getTime();
+                    const right = new Date(b.updated_at || b.last_message_at || b.created_at || 0).getTime();
+                    return right - left;
+                });
+            };
+
+            const matchesNoteSearch = (note, query) => {
+                if (!query) {
+                    return true;
                 }
+                const lowered = query.toLowerCase();
+                const fields = [note.title, note.handle, note.last_message_preview];
+                return fields.some((field) => normalizePreview(field || '').toLowerCase().includes(lowered));
+            };
+
+            const renderNotes = () => {
+                if (!notesListEl) {
+                    return;
+                }
+                const trimmedQuery = normalizePreview(state.noteSearch || '');
+                const loweredQuery = trimmedQuery.toLowerCase();
+                notesListEl.innerHTML = '';
+                sortNotes();
+                const filtered = loweredQuery
+                    ? state.notes.filter((note) => matchesNoteSearch(note, loweredQuery))
+                    : state.notes.slice();
+
+                if (!filtered.length) {
+                    if (noteEmptyEl) {
+                        noteEmptyEl.hidden = false;
+                        noteEmptyEl.textContent = trimmedQuery
+                            ? `Press Enter to create "${trimmedQuery}"`
+                            : 'Create a note to get started.';
+                    }
+                    return;
+                }
+
+                if (noteEmptyEl) {
+                    noteEmptyEl.hidden = true;
+                    noteEmptyEl.textContent = '';
+                }
+
+                const fragment = document.createDocumentFragment();
+                filtered.forEach((note) => {
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = 'fc-note' + (note.id === state.activeNoteId ? ' fc-note--active' : '');
+                    button.setAttribute('data-note-id', note.id);
+                    button.setAttribute('role', 'option');
+                    button.setAttribute('aria-selected', note.id === state.activeNoteId ? 'true' : 'false');
+
+                    const title = document.createElement('div');
+                    title.className = 'fc-note__title';
+                    title.textContent = note.title;
+
+                    const preview = document.createElement('div');
+                    preview.className = 'fc-note__preview';
+                    const previewText = normalizePreview(note.last_message_preview || '');
+                    preview.textContent = previewText.length > 90 ? `${previewText.slice(0, 87)}…` : previewText;
+
+                    const timestamp = document.createElement('time');
+                    timestamp.className = 'fc-note__timestamp';
+                    const stampValue = note.updated_at || note.last_message_at || note.created_at;
+                    const stampLabel = formatTimestamp(stampValue, true);
+                    if (stampLabel) {
+                        timestamp.dateTime = stampValue;
+                        timestamp.textContent = stampLabel;
+                    }
+
+                    button.appendChild(title);
+                    button.appendChild(preview);
+                    button.appendChild(timestamp);
+                    button.addEventListener('click', () => {
+                        selectNote(note.id, { focusComposer: true });
+                    });
+                    fragment.appendChild(button);
+                });
+
+                notesListEl.appendChild(fragment);
+            };
+
+            const renderAttachmentChips = () => {
+                if (!attachmentChipsEl) {
+                    return;
+                }
+                attachmentChipsEl.innerHTML = '';
+                if (!state.pendingFiles.length) {
+                    attachmentChipsEl.hidden = true;
+                    return;
+                }
+                attachmentChipsEl.hidden = false;
+                const fragment = document.createDocumentFragment();
+                state.pendingFiles.forEach((item) => {
+                    const chip = document.createElement('div');
+                    chip.className = 'fc-chip';
+                    chip.textContent = item.file.name;
+
+                    const removeButton = document.createElement('button');
+                    removeButton.type = 'button';
+                    removeButton.className = 'fc-chip__remove';
+                    removeButton.setAttribute('aria-label', `Remove ${item.file.name}`);
+                    removeButton.textContent = '×';
+                    removeButton.addEventListener('click', () => {
+                        removePendingFile(item.id);
+                    });
+                    chip.appendChild(removeButton);
+                    fragment.appendChild(chip);
+                });
+                attachmentChipsEl.appendChild(fragment);
             };
 
             const createMetadataDetails = (metadata) => {
-                if (!metadata || !metadata.action) {
+                if (!metadata || typeof metadata !== 'object') {
                     return null;
                 }
-
                 const container = document.createElement('div');
-                container.className = 'fc-message__details';
-                let hasContent = false;
-
-                const addLine = (text) => {
-                    if (!text) {
-                        return;
-                    }
-                    const line = document.createElement('div');
-                    line.textContent = text;
-                    container.appendChild(line);
-                    hasContent = true;
-                };
-
-                const addList = (items) => {
-                    if (!items.length) {
-                        return;
-                    }
-                    const list = document.createElement('ul');
-                    list.className = 'fc-message__details-list';
-                    items.forEach((entry) => {
-                        const item = document.createElement('li');
-                        item.textContent = entry;
-                        list.appendChild(item);
-                    });
-                    container.appendChild(list);
-                    hasContent = true;
-                };
-
-                const addLink = (href, label) => {
-                    if (!href || !label) {
-                        return;
-                    }
-                    const link = document.createElement('a');
-                    link.href = href;
-                    link.textContent = label;
-                    link.setAttribute('target', '_self');
-                    container.appendChild(link);
-                    hasContent = true;
-                };
-
+                container.className = 'fc-message__meta';
                 const action = metadata.action;
 
-                if (action === 'calendar_event_created') {
-                    addLine('Calendar event saved');
-                    const event = metadata.event || {};
-                    if (event.title) {
-                        addLine(event.title);
-                    }
-                    const windowText = formatEventWindow(event);
-                    if (windowText) {
-                        addLine(windowText);
-                    }
-                    addLink('/calendar', 'Open calendar');
-                    return hasContent ? container : null;
+                if (action === 'calendar_event_created' && metadata.event) {
+                    const heading = document.createElement('div');
+                    heading.className = 'fc-message__meta-heading';
+                    heading.textContent = 'Calendar event';
+                    const body = document.createElement('div');
+                    body.className = 'fc-message__meta-body';
+                    const event = metadata.event;
+                    const lines = [
+                        event.title,
+                        formatEventWindow(event),
+                        normalizePreview(event.location || ''),
+                    ].filter(Boolean);
+                    body.textContent = lines.join(' • ');
+                    container.appendChild(heading);
+                    container.appendChild(body);
+                    return container;
                 }
 
-                if (action === 'reminder_created') {
-                    addLine('Reminder saved');
-                    const reminder = metadata.reminder || {};
-                    if (reminder.title) {
-                        addLine(reminder.title);
+                if (action === 'reminder_created' && metadata.reminder) {
+                    const heading = document.createElement('div');
+                    heading.className = 'fc-message__meta-heading';
+                    heading.textContent = 'Reminder';
+                    const body = document.createElement('div');
+                    body.className = 'fc-message__meta-body';
+                    const reminder = metadata.reminder;
+                    const parts = [reminder.title];
+                    if (reminder.due_at) {
+                        const dueLabel = formatTimestamp(reminder.due_at, Boolean(reminder.due_has_time));
+                        if (dueLabel) {
+                            parts.push(`due ${dueLabel}`);
+                        }
                     }
-                    const due = reminder.due_at
-                        ? formatTimestamp(reminder.due_at, reminder.due_has_time)
-                        : 'No due date';
-                    addLine(due);
-                    addLink('/reminders', 'Open reminders');
-                    return hasContent ? container : null;
+                    if (reminder.notes) {
+                        parts.push(reminder.notes);
+                    }
+                    body.textContent = parts.join(' • ');
+                    container.appendChild(heading);
+                    container.appendChild(body);
+                    return container;
                 }
 
                 if (action === 'password_lookup') {
-                    addLine('Saved passwords');
-                    const matches = Array.isArray(metadata.matches) ? metadata.matches : [];
-                    const items = matches.slice(0, 5).map((entry) => {
-                        const service = entry.service || 'Service';
-                        const username = entry.username || 'Unknown user';
-                        const password = entry.password ? `Password: ${entry.password}` : 'No password saved';
-                        return `${service} • ${username} • ${password}`;
+                    const heading = document.createElement('div');
+                    heading.className = 'fc-message__meta-heading';
+                    heading.textContent = 'Passwords';
+                    const list = document.createElement('ul');
+                    list.className = 'fc-message__meta-list';
+                    (metadata.matches || []).slice(0, 5).forEach((match) => {
+                        const item = document.createElement('li');
+                        const service = match.service || 'Service';
+                        const username = match.username || '—';
+                        const passwordValue = match.password || '—';
+                        item.textContent = `${service}: ${username} / ${passwordValue}`;
+                        list.appendChild(item);
                     });
-                    addList(items);
-                    if (matches.length > 5) {
-                        addLine(`…and ${matches.length - 5} more saved credentials.`);
-                    }
-                    addLink('/passwords', 'Open password vault');
-                    return hasContent ? container : null;
+                    container.appendChild(heading);
+                    container.appendChild(list);
+                    return container;
                 }
 
-                if (action === 'report_run') {
-                    const report = metadata.report || {};
-                    addLine('Report generated');
-                    if (report.name || report.id) {
-                        addLine(report.name || report.id);
-                    }
-                    const summary = Array.isArray(report.summary) ? report.summary.slice(0, 4) : [];
-                    if (summary.length) {
-                        addList(
-                            summary.map((entry) => {
-                                const label = entry.label || entry.id || 'Metric';
-                                const display = entry.display || entry.value;
-                                return display ? `${label}: ${display}` : label;
-                            })
-                        );
-                    }
-                    addLink('/analytics', 'Open analytics');
-                    return hasContent ? container : null;
+                if (action === 'report_list' && Array.isArray(metadata.reports)) {
+                    const heading = document.createElement('div');
+                    heading.className = 'fc-message__meta-heading';
+                    heading.textContent = 'Available reports';
+                    const list = document.createElement('ul');
+                    list.className = 'fc-message__meta-list';
+                    metadata.reports.slice(0, 6).forEach((report) => {
+                        const item = document.createElement('li');
+                        item.textContent = `${report.id}: ${report.name || ''}`.trim();
+                        list.appendChild(item);
+                    });
+                    container.appendChild(heading);
+                    container.appendChild(list);
+                    return container;
                 }
 
-                if (action === 'report_list') {
-                    addLine('Available reports');
-                    const reports = Array.isArray(metadata.reports) ? metadata.reports : [];
-                    if (reports.length) {
-                        addList(
-                            reports.map((report) => {
-                                const suffix = report.name ? ` — ${report.name}` : '';
-                                return `${report.id}${suffix}`;
-                            })
-                        );
-                    } else {
-                        addLine('No saved analytics reports yet.');
-                    }
-                    return hasContent ? container : null;
-                }
-
-                if (action === 'error') {
-                    addLine('Something went wrong');
-                    addLine(metadata.reason || 'Unable to process the request.');
-                    return hasContent ? container : null;
-                }
-
-                if (action === 'help') {
-                    addLine('Assistant capabilities');
-                    addList([
-                        'Use .reminder to save follow-ups.',
-                        'Use .event to schedule calendar blocks.',
-                        'Ask @firecoast about reports or saved passwords.',
-                    ]);
-                    return hasContent ? container : null;
+                if (action === 'report_run' && metadata.report) {
+                    const heading = document.createElement('div');
+                    heading.className = 'fc-message__meta-heading';
+                    heading.textContent = metadata.report.name || metadata.report.id || 'Report';
+                    const list = document.createElement('ul');
+                    list.className = 'fc-message__meta-list';
+                    (metadata.report.summary || []).slice(0, 5).forEach((entry) => {
+                        const item = document.createElement('li');
+                        const label = entry.label || entry.id;
+                        const value = entry.display || entry.value;
+                        item.textContent = `${label}: ${value}`;
+                        list.appendChild(item);
+                    });
+                    container.appendChild(heading);
+                    container.appendChild(list);
+                    return container;
                 }
 
                 return null;
             };
 
-            const scrollToMessage = (targetId) => {
-                if (!targetId) {
-                    return;
-                }
-                const element = document.getElementById(targetId);
-                if (!element) {
-                    return;
-                }
-                element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                element.classList.add('fc-message--active');
-                window.setTimeout(() => {
-                    element.classList.remove('fc-message--active');
-                }, 1200);
-            };
-
-            const createThreadButton = (message) => {
-                const button = document.createElement('button');
-                button.type = 'button';
-                button.className = 'fc-thread';
-                const messageId = message.id ? `message-${message.id}` : '';
-                if (messageId) {
-                    button.setAttribute('data-target', messageId);
-                }
-
-                const title = document.createElement('div');
-                title.className = 'fc-thread__title';
-                title.textContent = 'You';
-
-                const preview = document.createElement('div');
-                preview.className = 'fc-thread__preview';
-                const previewText = normalizePreview(message.content || '') || 'Untitled note';
-                preview.textContent = previewText.length > 80 ? `${previewText.slice(0, 77)}…` : previewText;
-
-                const timestamp = document.createElement('time');
-                timestamp.className = 'fc-thread__timestamp';
-                if (message.created_at) {
-                    timestamp.dateTime = message.created_at;
-                    timestamp.textContent = formatTimestamp(message.created_at, true);
-                }
-
-                button.appendChild(title);
-                button.appendChild(preview);
-                button.appendChild(timestamp);
-                button.addEventListener('click', () => {
-                    const target = button.getAttribute('data-target');
-                    if (target) {
-                        scrollToMessage(target);
-                    }
-                });
-
-                return button;
-            };
-
-            const renderThreads = () => {
-                if (!threadListEl) {
-                    return;
-                }
-                threadListEl.innerHTML = '';
-
-                const trimmedQuery = normalizePreview(state.threadQuery || '');
-                const userMessages = state.messages.filter(
-                    (message) => (message.author || '').toLowerCase() === 'user'
-                );
-                const source = trimmedQuery
-                    ? userMessages.filter((message) => matchesSearch(message, trimmedQuery))
-                    : userMessages;
-
-                if (!source.length) {
-                    if (threadEmptyEl) {
-                        threadEmptyEl.hidden = false;
-                        threadEmptyEl.textContent = trimmedQuery
-                            ? 'No matches yet.'
-                            : 'Notes you send will show up here.';
-                    }
-                    return;
-                }
-
-                if (threadEmptyEl) {
-                    threadEmptyEl.hidden = true;
-                    threadEmptyEl.textContent = 'Notes you send will show up here.';
-                }
-
-                const sorted = source
-                    .slice()
-                    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
-                const fragment = document.createDocumentFragment();
-                sorted.slice(0, 40).forEach((message) => {
-                    fragment.appendChild(createThreadButton(message));
-                });
-                threadListEl.appendChild(fragment);
-            };
-
-            const renderMessage = (message) => {
+            const createMessageElement = (message) => {
                 const author = (message.author || '').toLowerCase();
                 const isUser = author === 'user';
-
                 const wrapper = document.createElement('article');
-                const messageId = message.id ? `message-${message.id}` : '';
-                if (messageId) {
-                    wrapper.id = messageId;
+                wrapper.className = 'fc-message' + (isUser ? ' fc-message--user' : ' fc-message--assistant');
+                if (message.id) {
+                    wrapper.id = `message-${message.id}`;
                 }
-                wrapper.className = 'fc-message ' + (isUser ? 'fc-message--user' : 'fc-message--assistant');
-
-                const avatar = document.createElement('div');
-                avatar.className = 'fc-avatar ' + (isUser ? 'fc-avatar--user' : 'fc-avatar--assistant');
-                avatar.textContent = isUser ? 'Y' : 'F';
-                avatar.setAttribute('aria-hidden', 'true');
-
-                const body = document.createElement('div');
-                body.className = 'fc-message__body';
 
                 const header = document.createElement('div');
                 header.className = 'fc-message__header';
+
                 const authorLabel = document.createElement('span');
                 authorLabel.className = 'fc-message__author';
                 authorLabel.textContent = isUser ? 'You' : '@firecoast';
+
                 const timestamp = document.createElement('time');
                 timestamp.className = 'fc-message__timestamp';
                 if (message.created_at) {
                     timestamp.dateTime = message.created_at;
+                    const stampLabel = formatTimestamp(message.created_at, true);
+                    if (stampLabel) {
+                        timestamp.textContent = stampLabel;
+                    }
                 }
-                const timestampText = formatTimestamp(message.created_at, true);
-                if (timestampText) {
-                    timestamp.textContent = timestampText;
-                }
+
                 header.appendChild(authorLabel);
                 header.appendChild(timestamp);
-                body.appendChild(header);
+
+                const body = document.createElement('div');
+                body.className = 'fc-message__body';
 
                 if (message.content) {
                     const text = document.createElement('div');
@@ -499,93 +478,106 @@
                     body.appendChild(text);
                 }
 
+                if (Array.isArray(message.attachments) && message.attachments.length) {
+                    const attachments = document.createElement('div');
+                    attachments.className = 'fc-message__attachments';
+                    message.attachments.forEach((attachment) => {
+                        if (attachment.is_image) {
+                            const figure = document.createElement('figure');
+                            figure.className = 'fc-message__attachment fc-message__attachment--image';
+                            const img = document.createElement('img');
+                            img.src = attachment.url;
+                            img.alt = attachment.filename || 'Image attachment';
+                            figure.appendChild(img);
+                            attachments.appendChild(figure);
+                        } else {
+                            const link = document.createElement('a');
+                            link.className = 'fc-message__attachment';
+                            link.href = attachment.url;
+                            link.target = '_blank';
+                            link.rel = 'noopener noreferrer';
+                            link.textContent = attachment.filename || 'Download file';
+                            attachments.appendChild(link);
+                        }
+                    });
+                    body.appendChild(attachments);
+                }
+
                 const metadataDetails = createMetadataDetails(message.metadata);
                 if (metadataDetails) {
                     body.appendChild(metadataDetails);
                 }
 
-                wrapper.appendChild(avatar);
+                wrapper.appendChild(header);
                 wrapper.appendChild(body);
-
                 return wrapper;
             };
 
-            const renderMessages = () => {
-                if (!logEl) {
-                    return;
+            const matchesMessageSearch = (message, query) => {
+                if (!query) {
+                    return true;
                 }
-                logEl.innerHTML = '';
-
-                if (state.isLoading) {
-                    setBusy(true);
-                    const loading = document.createElement('div');
-                    loading.className = 'fc-loading-state';
-                    loading.textContent = 'Loading your conversation…';
-                    logEl.appendChild(loading);
-                    return;
+                const lowered = query.toLowerCase();
+                const content = normalizePreview(message.content || '').toLowerCase();
+                if (content.includes(lowered)) {
+                    return true;
                 }
-
-                setBusy(false);
-
-                const trimmedQuery = normalizePreview(state.searchQuery || '');
-                const visibleMessages = trimmedQuery
-                    ? state.messages.filter((message) => matchesSearch(message, trimmedQuery))
-                    : state.messages.slice();
-
-                if (!visibleMessages.length) {
-                    const empty = document.createElement('div');
-                    empty.className = 'fc-empty-state' + (trimmedQuery ? ' fc-empty-state--search' : '');
-                    const text = document.createElement('p');
-                    text.textContent = trimmedQuery
-                        ? `No messages matched "${trimmedQuery}".`
-                        : 'Drop a note to start the thread.';
-                    empty.appendChild(text);
-                    logEl.appendChild(empty);
-                    return;
-                }
-
-                const fragments = document.createDocumentFragment();
-                visibleMessages.forEach((message) => {
-                    fragments.appendChild(renderMessage(message));
-                });
-                logEl.appendChild(fragments);
-                if (!trimmedQuery) {
-                    logEl.scrollTop = logEl.scrollHeight;
-                }
-            };
-
-            const updateSendButton = () => {
-                if (!sendButton || !inputEl) {
-                    return;
-                }
-                const trimmed = inputEl.value.trim();
-                sendButton.disabled = !trimmed || state.isSending;
-            };
-
-            const loadMessages = async (options = {}) => {
-                const silent = Boolean(options.silent);
-                if (!silent) {
-                    state.isLoading = true;
-                    renderMessages();
+                if (Array.isArray(message.attachments)) {
+                    if (message.attachments.some((attachment) => (attachment.filename || '').toLowerCase().includes(lowered))) {
+                        return true;
+                    }
                 }
                 try {
-                    const response = await fetch('/api/firecoast/chat?limit=200');
-                    if (!response.ok) {
-                        throw new Error('Failed to load conversation');
+                    const metadataText = JSON.stringify(message.metadata || {});
+                    if (metadataText && metadataText.toLowerCase().includes(lowered)) {
+                        return true;
                     }
-                    const payload = await response.json();
-                    const incoming = Array.isArray(payload.messages) ? payload.messages : [];
-                    state.messages = incoming;
-                    clearError();
                 } catch (error) {
-                    console.error('Failed to load messages', error);
-                    if (!silent) {
-                        showError('Unable to load your messages.');
-                    }
-                } finally {
-                    state.isLoading = false;
-                    renderMessages();
-                    renderThreads();
+                    console.debug('Unable to search metadata', error);
+                }
+                return false;
+            };
+
+            const renderMessages = () => {
+                if (!chatLogEl) {
+                    return;
+                }
+                chatLogEl.innerHTML = '';
+                if (!state.activeNoteId) {
+                    const empty = document.createElement('div');
+                    empty.className = 'fc-chat-placeholder';
+                    empty.textContent = 'Create a note to start chatting.';
+                    chatLogEl.appendChild(empty);
+                    return;
+                }
+                if (state.isLoadingMessages) {
+                    setBusy(true);
+                    const loading = document.createElement('div');
+                    loading.className = 'fc-chat-placeholder';
+                    loading.textContent = 'Loading note…';
+                    chatLogEl.appendChild(loading);
+                    return;
+                }
+                setBusy(false);
+                const trimmedQuery = normalizePreview(state.messageSearch || '');
+                const lowered = trimmedQuery.toLowerCase();
+                const visible = lowered
+                    ? state.messages.filter((message) => matchesMessageSearch(message, lowered))
+                    : state.messages.slice();
+                if (!visible.length) {
+                    const empty = document.createElement('div');
+                    empty.className = 'fc-chat-placeholder';
+                    empty.textContent = lowered ? 'No matches in this note.' : 'Drop a thought to get started.';
+                    chatLogEl.appendChild(empty);
+                    return;
+                }
+                const fragment = document.createDocumentFragment();
+                visible.forEach((message) => {
+                    fragment.appendChild(createMessageElement(message));
+                });
+                chatLogEl.appendChild(fragment);
+                if (!lowered) {
+                    chatLogEl.scrollTop = chatLogEl.scrollHeight;
                 }
             };
 
@@ -594,57 +586,293 @@
                     return;
                 }
                 inputEl.style.height = 'auto';
-                const targetHeight = Math.min(MAX_COMPOSER_HEIGHT, inputEl.scrollHeight);
+                const targetHeight = Math.min(MAX_COMPOSER_HEIGHT, inputEl.scrollHeight || 0);
                 inputEl.style.height = `${Math.max(targetHeight, 44)}px`;
             };
 
-            const sendMessage = async () => {
+            const setComposerEnabled = (enabled) => {
+                if (!inputEl || !attachmentButtonEl || !composerEl) {
+                    return;
+                }
+                inputEl.disabled = !enabled;
+                attachmentButtonEl.disabled = !enabled;
+                composerEl.setAttribute('data-disabled', enabled ? 'false' : 'true');
+                if (!enabled) {
+                    inputEl.value = '';
+                    state.pendingFiles = [];
+                    renderAttachmentChips();
+                }
+            };
+
+            const updateComposerAvailability = () => {
+                const enabled = Boolean(state.activeNoteId);
+                setComposerEnabled(enabled);
+                if (enabled) {
+                    autoResizeInput();
+                }
+            };
+
+            const resetComposer = () => {
                 if (!inputEl) {
                     return;
                 }
-                const content = inputEl.value.trim();
-                if (!content || state.isSending) {
+                inputEl.value = '';
+                state.pendingFiles = [];
+                autoResizeInput();
+                renderAttachmentChips();
+            };
+
+            const updateNoteFromResponse = (note) => {
+                if (!note || !note.id) {
+                    return;
+                }
+                const existingIndex = state.notes.findIndex((entry) => entry.id === note.id);
+                if (existingIndex >= 0) {
+                    state.notes[existingIndex] = { ...state.notes[existingIndex], ...note };
+                } else {
+                    state.notes.push(note);
+                }
+                sortNotes();
+                if (note.id === state.activeNoteId) {
+                    state.activeNote = note;
+                    renderNoteTitle(note);
+                }
+                renderNotes();
+            };
+
+            const removePendingFile = (id) => {
+                state.pendingFiles = state.pendingFiles.filter((item) => item.id !== id);
+                renderAttachmentChips();
+            };
+
+            const addPendingFiles = (fileList) => {
+                if (!fileList || !fileList.length) {
+                    return;
+                }
+                const files = Array.from(fileList);
+                files.forEach((file) => {
+                    const id = `file-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+                    state.pendingFiles.push({ id, file });
+                });
+                renderAttachmentChips();
+            };
+
+            const loadMessages = async (noteId, options = {}) => {
+                if (!noteId) {
+                    return;
+                }
+                const silent = Boolean(options.silent);
+                if (!silent) {
+                    state.isLoadingMessages = true;
+                    renderMessages();
+                }
+                try {
+                    const response = await fetch(`/api/firecoast/chat?noteId=${encodeURIComponent(noteId)}&limit=400`);
+                    if (!response.ok) {
+                        throw new Error('Failed to load messages');
+                    }
+                    const payload = await response.json();
+                    state.messages = Array.isArray(payload.messages) ? payload.messages : [];
+                    if (payload.note) {
+                        state.activeNote = payload.note;
+                        state.activeNoteId = payload.note.id;
+                        updateNoteFromResponse(payload.note);
+                    }
+                    clearError();
+                } catch (error) {
+                    console.error('Failed to load messages', error);
+                    showError('Unable to load this note.');
+                } finally {
+                    state.isLoadingMessages = false;
+                    renderMessages();
+                }
+            };
+
+            const selectNote = async (noteId, options = {}) => {
+                if (!noteId) {
+                    return;
+                }
+                state.activeNoteId = noteId;
+                state.activeNote = state.notes.find((note) => note.id === noteId) || null;
+                state.messageSearch = '';
+                if (messageSearchEl) {
+                    messageSearchEl.value = '';
+                }
+                renderNoteTitle(state.activeNote);
+                renderNotes();
+                updateComposerAvailability();
+                renderAttachmentChips();
+                renderMessages();
+                await loadMessages(noteId, { silent: options.silent });
+                if (options.focusComposer && inputEl) {
+                    inputEl.focus();
+                }
+            };
+
+            const createNote = async (title) => {
+                const response = await fetch('/api/firecoast/notes', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title }),
+                });
+                if (!response.ok) {
+                    throw new Error('Failed to create note');
+                }
+                const payload = await response.json();
+                if (payload.note) {
+                    state.notes.push(payload.note);
+                    sortNotes();
+                    renderNotes();
+                }
+                return payload.note;
+            };
+
+            const loadNotes = async (options = {}) => {
+                const silent = Boolean(options.silent);
+                if (!silent) {
+                    state.isLoadingNotes = true;
+                }
+                try {
+                    const response = await fetch('/api/firecoast/notes');
+                    if (!response.ok) {
+                        throw new Error('Failed to load notes');
+                    }
+                    const payload = await response.json();
+                    state.notes = Array.isArray(payload.notes) ? payload.notes : [];
+                    sortNotes();
+                    renderNotes();
+                    if (!state.activeNoteId && state.notes.length) {
+                        await selectNote(state.notes[0].id, { focusComposer: true, silent: true });
+                    }
+                    if (!state.notes.length && !autoCreatingNote) {
+                        autoCreatingNote = true;
+                        try {
+                            const note = await createNote('New note');
+                            if (note) {
+                                await selectNote(note.id, { focusComposer: true });
+                            }
+                        } catch (error) {
+                            console.error('Failed to create default note', error);
+                        } finally {
+                            autoCreatingNote = false;
+                        }
+                    }
+                } catch (error) {
+                    console.error('Failed to load notes', error);
+                    showError('Unable to load notes.');
+                } finally {
+                    state.isLoadingNotes = false;
+                }
+            };
+
+            const sendMessage = async () => {
+                if (!state.activeNoteId || state.isSending) {
+                    return;
+                }
+                const rawContent = inputEl ? inputEl.value : '';
+                const trimmed = normalizePreview(rawContent);
+                if (!trimmed && !state.pendingFiles.length) {
                     return;
                 }
                 state.isSending = true;
-                updateSendButton();
                 clearError();
-
                 try {
-                    const response = await fetch('/api/firecoast/chat', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ content }),
-                    });
+                    let response;
+                    if (state.pendingFiles.length) {
+                        const formData = new FormData();
+                        formData.append('note_id', state.activeNoteId);
+                        formData.append('content', rawContent);
+                        state.pendingFiles.forEach((item) => {
+                            formData.append('attachments', item.file, item.file.name);
+                        });
+                        response = await fetch('/api/firecoast/chat', {
+                            method: 'POST',
+                            body: formData,
+                        });
+                    } else {
+                        response = await fetch('/api/firecoast/chat', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ note_id: state.activeNoteId, content: rawContent }),
+                        });
+                    }
                     if (!response.ok) {
-                        throw new Error('Chat request failed');
+                        throw new Error('Message failed');
                     }
                     const payload = await response.json();
                     const incoming = Array.isArray(payload.messages) ? payload.messages : [];
                     state.messages = state.messages.concat(incoming);
-                    inputEl.value = '';
-                    autoResizeInput();
-                    updateSendButton();
-                    clearError();
+                    if (payload.note) {
+                        updateNoteFromResponse(payload.note);
+                    }
+                    resetComposer();
                     renderMessages();
-                    renderThreads();
+                    clearError();
                 } catch (error) {
                     console.error('Failed to send message', error);
-                    showError('Unable to send that message. Please try again.');
+                    showError('Unable to send that message.');
                 } finally {
                     state.isSending = false;
-                    updateSendButton();
-                    if (logEl) {
-                        logEl.scrollTop = logEl.scrollHeight;
+                    if (chatLogEl) {
+                        chatLogEl.scrollTop = chatLogEl.scrollHeight;
+                    }
+                    if (attachmentInputEl) {
+                        attachmentInputEl.value = '';
                     }
                 }
             };
 
+            if (noteSearchEl) {
+                noteSearchEl.addEventListener('input', () => {
+                    state.noteSearch = noteSearchEl.value || '';
+                    renderNotes();
+                });
+                noteSearchEl.addEventListener('keydown', async (event) => {
+                    if (event.key === 'Enter') {
+                        event.preventDefault();
+                        const trimmed = normalizePreview(noteSearchEl.value || '');
+                        if (!trimmed) {
+                            return;
+                        }
+                        const existing = state.notes.find((note) => note.title.toLowerCase() === trimmed.toLowerCase());
+                        if (existing) {
+                            await selectNote(existing.id, { focusComposer: true });
+                            return;
+                        }
+                        try {
+                            const note = await createNote(trimmed);
+                            noteSearchEl.value = '';
+                            state.noteSearch = '';
+                            renderNotes();
+                            if (note) {
+                                await selectNote(note.id, { focusComposer: true });
+                            }
+                        } catch (error) {
+                            console.error('Failed to create note', error);
+                            showError('Unable to create that note.');
+                        }
+                    }
+                });
+            }
+
+            if (messageSearchEl) {
+                messageSearchEl.addEventListener('input', () => {
+                    state.messageSearch = messageSearchEl.value || '';
+                    renderMessages();
+                });
+            }
+
+            if (refreshButton) {
+                refreshButton.addEventListener('click', () => {
+                    if (state.activeNoteId) {
+                        loadMessages(state.activeNoteId, { silent: false });
+                    }
+                });
+            }
+
             if (inputEl) {
-                autoResizeInput();
                 inputEl.addEventListener('input', () => {
                     autoResizeInput();
-                    updateSendButton();
                 });
                 inputEl.addEventListener('keydown', (event) => {
                     if (event.key === 'Enter' && !event.shiftKey) {
@@ -652,42 +880,26 @@
                         sendMessage();
                     }
                 });
-                updateSendButton();
             }
 
-            if (sendButton) {
-                sendButton.addEventListener('click', sendMessage);
-            }
-
-            if (refreshButton) {
-                refreshButton.addEventListener('click', () => {
-                    loadMessages();
+            if (attachmentButtonEl) {
+                attachmentButtonEl.addEventListener('click', () => {
+                    if (attachmentInputEl && !attachmentButtonEl.disabled) {
+                        attachmentInputEl.click();
+                    }
                 });
             }
 
-            if (searchInput) {
-                searchInput.addEventListener('input', () => {
-                    state.searchQuery = searchInput.value || '';
-                    renderMessages();
+            if (attachmentInputEl) {
+                attachmentInputEl.addEventListener('change', (event) => {
+                    addPendingFiles(event.target.files);
                 });
             }
 
-            if (threadSearchInput) {
-                threadSearchInput.addEventListener('input', () => {
-                    state.threadQuery = threadSearchInput.value || '';
-                    renderThreads();
-                });
-            }
-
-            renderThreads();
-            loadMessages();
-            state.refreshTimer = window.setInterval(() => loadMessages({ silent: true }), 25000);
-
-            window.addEventListener('beforeunload', () => {
-                if (state.refreshTimer) {
-                    window.clearInterval(state.refreshTimer);
-                }
-            });
+            renderNotes();
+            renderMessages();
+            renderAttachmentChips();
+            loadNotes();
         })();
     </script>
 </body>
