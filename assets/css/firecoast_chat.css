@@ -574,69 +574,107 @@ body.fc-body {
     display: none;
 }
 
-.fc-mention-menu {
-    position: absolute;
-    left: 0;
-    bottom: calc(100% + 8px);
-    width: min(320px, 100%);
-    background: #ffffff;
-    border: 1px solid rgba(148, 163, 184, 0.35);
-    border-radius: 12px;
-    box-shadow: 0 12px 32px rgba(15, 23, 42, 0.16);
-    padding: 0.4rem 0;
+.fc-composer__input-wrapper {
+    position: relative;
     display: flex;
-    flex-direction: column;
-    max-height: 260px;
-    overflow-y: auto;
-    z-index: 5;
+    align-items: stretch;
+    width: 100%;
 }
 
-.fc-mention-menu[hidden] {
+.fc-composer__mention-root {
+    flex: 1 1 auto;
+    width: 100%;
+}
+
+.fc-composer__mention-root[hidden] {
     display: none;
 }
 
-.fc-mention-menu--empty {
-    padding: 0.9rem 1rem;
-    color: #64748b;
-    font-size: 0.85rem;
-}
-
-.fc-mention-menu__item {
+.fc-body .record-mention-textarea {
     width: 100%;
+}
+
+.fc-body .record-mention-textarea__overlay {
+    border: 1px solid #d0d5dd;
+    border-radius: 12px;
+    background: #ffffff;
+    color: #1f2933;
+    min-height: 44px;
+    font-size: 15px;
+    line-height: 1.5;
+}
+
+.fc-body .record-mention-textarea__input {
+    min-height: 44px;
+    padding: 12px 16px;
+    border-radius: 12px;
+}
+
+.fc-body .record-mention-textarea__menu {
+    position: absolute;
+}
+
+.fc-body .record-mention-textarea__list {
+    background: #ffffff;
+    border: 1px solid #d0d5dd;
+    border-radius: 12px;
+    box-shadow: 0 16px 40px rgba(15, 23, 42, 0.18);
+    overflow: hidden;
+}
+
+.fc-body .record-mention-textarea__header {
+    background: #f8fafc;
+    color: #475569;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.fc-body .record-mention-textarea__option {
     border: none;
-    background: transparent;
-    padding: 0.55rem 1rem;
-    text-align: left;
-    display: flex;
-    flex-direction: column;
-    gap: 0.15rem;
-    cursor: pointer;
-    color: #1f2937;
-    font: inherit;
+    color: #1f2933;
+    border-radius: 8px;
 }
 
-.fc-mention-menu__item:hover,
-.fc-mention-menu__item:focus,
-.fc-mention-menu__item--active {
-    background: rgba(59, 130, 246, 0.1);
-    outline: none;
+.fc-body .record-mention-textarea__option.is-active,
+.fc-body .record-mention-textarea__option:hover {
+    background: rgba(246, 108, 64, 0.1);
+    color: #d05832;
 }
 
-.fc-mention-menu__primary {
-    font-weight: 600;
-    font-size: 0.9rem;
-}
-
-.fc-mention-menu__handle {
-    font-size: 0.78rem;
+.fc-body .record-mention-textarea__item-entity {
+    background: #f1f5f9;
     color: #475569;
 }
 
-.fc-mention-menu__entity {
-    font-size: 0.72rem;
-    color: #94a3b8;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
+.fc-body .record-mention-textarea__refresh {
+    color: #d05832;
+}
+
+.fc-body .record-mention-text {
+    color: inherit;
+    font-size: inherit;
+}
+
+.fc-body .record-mention-text button {
+    border: 1px solid #d0d5dd;
+    border-radius: 999px;
+    padding: 2px 8px;
+    background: #f8fafc;
+    color: #1f2933;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.fc-body .record-mention-text button:hover,
+.fc-body .record-mention-text button:focus-visible {
+    background: rgba(246, 108, 64, 0.1);
+    color: #d05832;
+    outline: none;
+}
+
+.fc-message__text-content {
+    display: inline;
 }
 
 @media (max-width: 1024px) {
