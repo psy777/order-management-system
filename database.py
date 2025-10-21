@@ -499,6 +499,39 @@ def init_db():
     )
     cursor.execute("CREATE TABLE IF NOT EXISTS order_status_history (history_id INTEGER PRIMARY KEY AUTOINCREMENT, order_id TEXT NOT NULL, status TEXT NOT NULL, status_date TEXT NOT NULL, FOREIGN KEY (order_id) REFERENCES orders (order_id) ON DELETE CASCADE);")
     cursor.execute("CREATE TABLE IF NOT EXISTS order_logs (log_id INTEGER PRIMARY KEY AUTOINCREMENT, order_id TEXT NOT NULL, timestamp TEXT DEFAULT CURRENT_TIMESTAMP, user TEXT, action TEXT NOT NULL, details TEXT, note TEXT, attachment_path TEXT, FOREIGN KEY (order_id) REFERENCES orders (order_id) ON DELETE CASCADE);")
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS order_log_attachments (
+            attachment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            log_id INTEGER NOT NULL,
+            file_path TEXT NOT NULL,
+            original_filename TEXT,
+            uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (log_id) REFERENCES order_logs (log_id) ON DELETE CASCADE
+        );
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_order_log_attachments_log ON order_log_attachments(log_id)")
+
+    cursor.execute(
+        "SELECT log_id, attachment_path FROM order_logs WHERE attachment_path IS NOT NULL AND attachment_path != ''"
+    )
+    legacy_attachments = cursor.fetchall()
+    for legacy in legacy_attachments:
+        log_id = legacy["log_id"]
+        attachment_path = legacy["attachment_path"]
+        if not attachment_path:
+            continue
+        existing_row = cursor.execute(
+            "SELECT 1 FROM order_log_attachments WHERE log_id = ? LIMIT 1",
+            (log_id,),
+        ).fetchone()
+        if existing_row:
+            continue
+        cursor.execute(
+            "INSERT INTO order_log_attachments (log_id, file_path) VALUES (?, ?)",
+            (log_id, attachment_path),
+        )
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS order_contact_links (
             order_id TEXT NOT NULL,

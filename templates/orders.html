@@ -432,7 +432,7 @@ const OrderLogsSection = ({ orderId, canEdit, allContacts = [], onContactsChange
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [action, setAction] = useState('Manual Entry');
     const [details, setDetails] = useState('');
-    const [attachment, setAttachment] = useState(null);
+    const [attachments, setAttachments] = useState([]);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [errorMessage, setErrorMessage] = useState(null);
     const fileInputRef = useRef(null);
@@ -440,7 +440,7 @@ const OrderLogsSection = ({ orderId, canEdit, allContacts = [], onContactsChange
     const resetModalState = () => {
         setAction('Manual Entry');
         setDetails('');
-        setAttachment(null);
+        setAttachments([]);
         setIsSubmitting(false);
         setErrorMessage(null);
         if (fileInputRef.current) {
@@ -470,8 +470,12 @@ const OrderLogsSection = ({ orderId, canEdit, allContacts = [], onContactsChange
         const formData = new FormData();
         formData.append('action', action);
         formData.append('details', details);
-        if (attachment) {
-            formData.append('attachment', attachment);
+        if (attachments.length > 0) {
+            attachments.forEach(file => {
+                if (file) {
+                    formData.append('attachments', file);
+                }
+            });
         }
 
         try {
@@ -544,9 +548,23 @@ const OrderLogsSection = ({ orderId, canEdit, allContacts = [], onContactsChange
                                 <input
                                     ref={fileInputRef}
                                     type="file"
-                                    onChange={event => setAttachment(event.target.files[0] || null)}
+                                    multiple
+                                    onChange={event => {
+                                        const files = Array.from(event.target.files || []);
+                                        setAttachments(files);
+                                    }}
                                     className="mt-1 block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-orange-50 file:text-orange-700 hover:file:bg-orange-100"
                                 />
+                                {attachments.length > 0 && (
+                                    <ul className="mt-2 space-y-1 text-sm text-slate-600">
+                                        {attachments.map((file, index) => (
+                                            <li key={`${file.name}-${index}`} className="flex items-center gap-2">
+                                                <span className="inline-flex items-center rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-700">{index + 1}</span>
+                                                <span className="truncate">{file.name}</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
                             </div>
                             {errorMessage && <p className="text-sm text-red-600">{errorMessage}</p>}
                             <div className="flex justify-end gap-3 pt-2">
@@ -579,7 +597,7 @@ const OrderLogsSection = ({ orderId, canEdit, allContacts = [], onContactsChange
                                     <th className="px-4 py-3">Timestamp</th>
                                     <th className="px-4 py-3">Action</th>
                                     <th className="px-4 py-3">Details</th>
-                                    <th className="px-4 py-3">Attachment</th>
+                                    <th className="px-4 py-3">Attachments</th>
                                     {canEdit && <th className="px-4 py-3"><span className="sr-only">Actions</span></th>}
                                 </tr>
                             </thead>
@@ -600,8 +618,21 @@ const OrderLogsSection = ({ orderId, canEdit, allContacts = [], onContactsChange
                                             )}
                                         </td>
                                         <td className="px-4 py-3">
-                                            {log.attachment_path ? (
-                                                <a href={`/data/${log.attachment_path}`} target="_blank" className="text-orange-600 hover:underline">View File</a>
+                                            {log.attachments && log.attachments.length > 0 ? (
+                                                <ul className="space-y-1">
+                                                    {log.attachments.map((attachment, index) => (
+                                                        <li key={attachment.id || `${attachment.path}-${index}`}>
+                                                            <a
+                                                                href={`/data/${attachment.path}`}
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                                className="text-orange-600 hover:underline"
+                                                            >
+                                                                {attachment.name || 'Download'}
+                                                            </a>
+                                                        </li>
+                                                    ))}
+                                                </ul>
                                             ) : (
                                                 <span className="text-slate-400">—</span>
                                             )}
