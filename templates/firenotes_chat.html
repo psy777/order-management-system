@@ -15,28 +15,7 @@
 </head>
 <body class="bg-slate-50 min-h-screen font-sans firenotes-chat">
     <a class="fc-screen-reader-only" href="#fc-chat-log">Skip to chat</a>
-    <nav class="bg-slate-900 text-white shadow">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="flex h-16 items-center justify-between">
-                <div class="flex items-center space-x-10">
-                    <a id="nav-home-link" href="/dashboard" class="text-lg font-semibold tracking-wide" aria-label="Return to dashboard">FireNotes OMS</a>
-                    <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
-                        <a href="/orders" class="hover:text-orange-300 transition">Orders</a>
-                        <a href="/contacts" class="hover:text-orange-300 transition">Contacts</a>
-                        <a href="/analytics" class="hover:text-orange-300 transition">Analytics</a>
-                        <a href="/reminders" class="hover:text-orange-300 transition">Reminders</a>
-                        <a href="/calendar" class="hover:text-orange-300 transition">Calendar</a>
-                        <a href="/passwords" class="hover:text-orange-300 transition">Password Manager</a>
-                        <a href="/firenotes" class="text-orange-300">FireNotes Chat</a>
-                    </div>
-                </div>
-                <div class="flex items-center space-x-3 text-sm font-medium">
-                    <a href="/settings" class="hover:text-orange-300 transition">Settings</a>
-                    <a id="nav-log-out" href="#" class="hover:text-orange-300 transition">Log Out</a>
-                </div>
-            </div>
-        </div>
-    </nav>
+    {% include 'partials/navbar.html' %}
 
     <main class="py-8">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -97,38 +76,6 @@
         </div>
     </main>
 
-    <script>
-        (function () {
-            const logoutLink = document.getElementById('nav-log-out');
-            const brandLink = document.getElementById('nav-home-link');
-            if (brandLink) {
-                brandLink.addEventListener('click', (event) => {
-                    event.preventDefault();
-                    window.location.href = '/dashboard';
-                });
-            }
-            if (logoutLink) {
-                logoutLink.addEventListener('click', async (event) => {
-                    event.preventDefault();
-                    if (window.fireCoastLogout) {
-                        window.fireCoastLogout();
-                        return;
-                    }
-                    try {
-                        const response = await fetch('/shutdown', { method: 'POST' });
-                        if (response.ok) {
-                            document.body.innerHTML = '<div class="min-h-screen flex items-center justify-center text-slate-700 text-lg">Application has been shut down. You can now close this tab.</div>';
-                        } else {
-                            alert('Failed to log out.');
-                        }
-                    } catch (error) {
-                        console.error('Error logging out:', error);
-                        alert('Error attempting to log out.');
-                    }
-                });
-            }
-        })();
-    </script>
 
     <script>
         (function () {

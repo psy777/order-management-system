@@ -8,27 +8,7 @@
     <link rel="stylesheet" href="/assets/css/styles.css">
 </head>
 <body class="bg-slate-50 min-h-screen font-sans">
-    <nav class="bg-slate-900 text-white shadow">
-        <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="flex h-16 items-center justify-between">
-                <div class="flex items-center space-x-10">
-                    <a href="/dashboard" class="text-lg font-semibold tracking-wide">FireNotes OMS</a>
-                    <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
-                        <a href="/orders" class="hover:text-orange-300 transition">Orders</a>
-                        <a href="/contacts" class="hover:text-orange-300 transition">Contacts</a>
-                        <a href="/analytics" class="hover:text-orange-300 transition">Analytics</a>
-                        <a href="/reminders" class="hover:text-orange-300 transition">Reminders</a>
-                        <a href="/calendar" class="hover:text-orange-300 transition">Calendar</a>
-                        <a href="/passwords" class="hover:text-orange-300 transition">Password Manager</a>
-                    </div>
-                </div>
-                <div class="flex items-center space-x-3 text-sm font-medium">
-                    <a href="/settings" class="text-orange-300">Settings</a>
-                    <a href="/logout" class="hover:text-orange-300 transition">Log Out</a>
-                </div>
-            </div>
-        </div>
-    </nav>
+    {% include 'partials/navbar.html' %}
 
     <main class="py-10">
         <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">

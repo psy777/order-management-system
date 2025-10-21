@@ -88,6 +88,61 @@ DATA_DIR = DATA_ROOT
 SETTINGS_FILE = DATA_DIR / 'settings.json'
 PASSWORDS_FILE = DATA_DIR / 'passwords.json'
 
+NAV_SHORTCUT_CATALOG = [
+    (
+        'orders',
+        {
+            'label': 'Orders',
+            'href': '/orders',
+        },
+    ),
+    (
+        'contacts',
+        {
+            'label': 'Contacts',
+            'href': '/contacts',
+        },
+    ),
+    (
+        'analytics',
+        {
+            'label': 'Analytics',
+            'href': '/analytics',
+        },
+    ),
+    (
+        'reminders',
+        {
+            'label': 'Reminders',
+            'href': '/reminders',
+        },
+    ),
+    (
+        'calendar',
+        {
+            'label': 'Calendar',
+            'href': '/calendar',
+        },
+    ),
+    (
+        'passwords',
+        {
+            'label': 'Password Manager',
+            'href': '/passwords',
+        },
+    ),
+    (
+        'firenotes',
+        {
+            'label': 'FireNotes Chat',
+            'href': '/firenotes',
+        },
+    ),
+]
+
+NAV_SHORTCUT_REGISTRY = {key: dict(value, id=key) for key, value in NAV_SHORTCUT_CATALOG}
+DEFAULT_NAV_SHORTCUT_IDS = ['orders', 'contacts', 'analytics', 'reminders', 'calendar', 'passwords']
+
 UPLOAD_FOLDER = DATA_DIR
 UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = str(UPLOAD_FOLDER)
@@ -118,6 +173,41 @@ def read_password_entries():
 
 def write_password_entries(entries):
     write_json_file(PASSWORDS_FILE, {"entries": entries})
+
+
+def _load_settings_dict() -> Dict[str, Any]:
+    settings_blob = read_json_file(SETTINGS_FILE)
+    return settings_blob if isinstance(settings_blob, dict) else {}
+
+
+def _coerce_nav_shortcut_ids(candidate: Any) -> List[str]:
+    if not isinstance(candidate, list):
+        return []
+    filtered: List[str] = []
+    seen = set()
+    for raw_value in candidate:
+        if not isinstance(raw_value, str):
+            continue
+        shortcut_id = raw_value.strip()
+        if shortcut_id in NAV_SHORTCUT_REGISTRY and shortcut_id not in seen:
+            filtered.append(shortcut_id)
+            seen.add(shortcut_id)
+    return filtered
+
+
+def get_selected_nav_shortcut_ids(settings: Optional[Dict[str, Any]] = None) -> List[str]:
+    settings_dict = settings or _load_settings_dict()
+    saved = _coerce_nav_shortcut_ids(settings_dict.get('nav_shortcuts'))
+    return saved if saved else list(DEFAULT_NAV_SHORTCUT_IDS)
+
+
+def get_navigation_shortcuts(settings: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    shortcut_ids = get_selected_nav_shortcut_ids(settings=settings)
+    return [dict(NAV_SHORTCUT_REGISTRY[shortcut_id]) for shortcut_id in shortcut_ids if shortcut_id in NAV_SHORTCUT_REGISTRY]
+
+
+def get_available_nav_shortcuts() -> List[Dict[str, Any]]:
+    return [dict(NAV_SHORTCUT_REGISTRY[key]) for key, _ in NAV_SHORTCUT_CATALOG]
 
 
 def _fetch_attachments_for_logs(cursor, log_ids: List[int]) -> Dict[int, List[Dict[str, Any]]]:
@@ -4675,11 +4765,37 @@ def send_order_email_route():
         app.logger.error(traceback.format_exc())
         return jsonify({"message": f"Failed to send email: {str(e)}"}), 500
 
+@app.route('/api/navigation', methods=['GET'])
+def get_navigation_settings():
+    settings = _load_settings_dict()
+    selected = get_selected_nav_shortcut_ids(settings=settings)
+    return jsonify({
+        'available': get_available_nav_shortcuts(),
+        'selected': selected,
+    })
+
+
+@app.route('/api/navigation', methods=['POST'])
+def update_navigation_settings():
+    payload = request.get_json(silent=True) or {}
+    requested_shortcuts = payload.get('selected')
+    selected_shortcuts = _coerce_nav_shortcut_ids(requested_shortcuts)
+    if not selected_shortcuts:
+        selected_shortcuts = list(DEFAULT_NAV_SHORTCUT_IDS)
+
+    settings = _load_settings_dict()
+    settings['nav_shortcuts'] = selected_shortcuts
+    write_json_file(SETTINGS_FILE, settings)
+
+    return jsonify({
+        'available': get_available_nav_shortcuts(),
+        'selected': selected_shortcuts,
+    }), 200
+
+
 @app.route('/api/settings', methods=['GET'])
 def get_settings():
-    settings = read_json_file(SETTINGS_FILE)
-    if not isinstance(settings, dict):
-        settings = {}
+    settings = _load_settings_dict()
 
     defaults = {
         "company_name": "FireNotes OMS",
@@ -4695,6 +4811,7 @@ def get_settings():
         "invoice_brand_color": "#f97316",
         "invoice_logo_data_url": "",
         "invoice_footer": "",
+        "nav_shortcuts": DEFAULT_NAV_SHORTCUT_IDS,
     }
 
     updated = False
@@ -4708,15 +4825,20 @@ def get_settings():
 
     return jsonify(settings)
 
+
+def render_with_navigation(template_name: str, active_nav: Optional[str] = None, **context):
+    settings = _load_settings_dict()
+    context.setdefault('nav_links', get_navigation_shortcuts(settings=settings))
+    context.setdefault('active_nav', active_nav)
+    return render_template(template_name, **context)
+
 @app.route('/api/settings', methods=['POST'])
 def update_settings():
     new_settings_payload = request.json
     if not new_settings_payload:
         return jsonify({"message": "Request must be JSON"}), 400
     
-    existing_settings = read_json_file(SETTINGS_FILE)
-    if not isinstance(existing_settings, dict):
-        existing_settings = {}
+    existing_settings = _load_settings_dict()
 
     existing_settings['company_name'] = new_settings_payload.get('company_name', existing_settings.get('company_name'))
     existing_settings['default_shipping_zip_code'] = new_settings_payload.get('default_shipping_zip_code', existing_settings.get('default_shipping_zip_code'))
@@ -4735,9 +4857,7 @@ def update_timezone_settings():
     if not payload or 'timezone' not in payload:
         return jsonify({"message": "Invalid request"}), 400
 
-    settings = read_json_file(SETTINGS_FILE)
-    if not isinstance(settings, dict):
-        settings = {}
+    settings = _load_settings_dict()
     settings['timezone'] = payload['timezone']
     write_json_file(SETTINGS_FILE, settings)
 
@@ -4757,9 +4877,7 @@ def update_email_settings():
     if not email_address or not app_password:
         return jsonify({"message": "Email address and App Password are required."}), 400
 
-    existing_settings = read_json_file(SETTINGS_FILE)
-    if not isinstance(existing_settings, dict):
-        existing_settings = {}
+    existing_settings = _load_settings_dict()
 
     existing_settings['email_address'] = email_address
     existing_settings['app_password'] = app_password
@@ -4777,9 +4895,7 @@ def update_invoice_settings():
     if invoice_payload is None:
         return jsonify({"message": "Request must be JSON"}), 400
 
-    existing_settings = read_json_file(SETTINGS_FILE)
-    if not isinstance(existing_settings, dict):
-        existing_settings = {}
+    existing_settings = _load_settings_dict()
 
     for key in ('invoice_business_name', 'invoice_business_details'):
         if key in invoice_payload:
@@ -5080,27 +5196,34 @@ def api_firenotes_chat_forward():
 
 
 @app.route('/manage/customers')
-def manage_customers_page(): return render_template('manage_customers.html')
+def manage_customers_page():
+    return render_with_navigation('manage_customers.html', active_nav='settings')
+
+
 @app.route('/manage/items')
-def manage_items_page(): return render_template('manage_items.html')
+def manage_items_page():
+    return render_with_navigation('manage_items.html', active_nav='settings')
+
+
 @app.route('/manage/packages')
-def manage_packages_page(): return render_template('manage_packages.html')
+def manage_packages_page():
+    return render_with_navigation('manage_packages.html', active_nav='settings')
 
 @app.route('/firenotes')
 @app.route('/firecoast')
 def firenotes_chat_page():
-    return render_template('firenotes_chat.html')
+    return render_with_navigation('firenotes_chat.html', active_nav='firenotes')
 
 @app.route('/settings')
 def settings_page():
     timezones = pytz.all_timezones
-    settings = read_json_file(SETTINGS_FILE)
+    settings = _load_settings_dict()
     selected_timezone = settings.get('timezone', 'UTC')
-    return render_template('settings.html', timezones=timezones, selected_timezone=selected_timezone)
+    return render_with_navigation('settings.html', timezones=timezones, selected_timezone=selected_timezone, active_nav='settings')
 
 @app.route('/dashboard')
 def dashboard_page():
-    return render_template('admin.html')
+    return render_with_navigation('admin.html')
 
 
 @app.route('/admin')
@@ -5109,30 +5232,30 @@ def legacy_admin_redirect():
 
 @app.route('/analytics')
 def analytics_page():
-    return render_template('analytics.html')
+    return render_with_navigation('analytics.html', active_nav='analytics')
 
 @app.route('/contacts')
 def contacts_page():
-    return render_template('contacts.html')
+    return render_with_navigation('contacts.html', active_nav='contacts')
 
 @app.route('/orders')
 def orders_page():
-    return render_template('orders.html')
+    return render_with_navigation('orders.html', active_nav='orders')
 
 
 @app.route('/passwords')
 def passwords_page():
-    return render_template('passwords.html')
+    return render_with_navigation('passwords.html', active_nav='passwords')
 
 
 @app.route('/reminders')
 def reminders_page():
-    return render_template('reminders.html')
+    return render_with_navigation('reminders.html', active_nav='reminders')
 
 
 @app.route('/calendar')
 def calendar_page():
-    return render_template('calendar.html')
+    return render_with_navigation('calendar.html', active_nav='calendar')
 
 @app.route('/api/export-data', methods=['GET'])
 def export_data():
@@ -5198,11 +5321,11 @@ def import_data():
 
 @app.route('/order-logs/<string:order_id>')
 def order_logs_page(order_id):
-    return render_template('order_logs.html', order_id=order_id)
+    return render_with_navigation('order_logs.html', order_id=order_id, active_nav='orders')
 
 @app.route('/order/<string:order_id>')
 def view_order_page(order_id):
-    return render_template('view_order.html', order_id=order_id)
+    return render_with_navigation('view_order.html', order_id=order_id, active_nav='orders')
 
 @app.route('/favicon.ico')
 def favicon(): return send_from_directory(os.path.join(app.root_path, ''),'favicon.ico',mimetype='image/vnd.microsoft.icon')

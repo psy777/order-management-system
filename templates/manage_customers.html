@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Manage Contacts - Order Manager</title>
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <script src="https://cdn.tailwindcss.com"></script>
     <link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png">
     <link rel="icon" href="/favicon.ico" type="image/x-icon">
     <link rel="manifest" href="/assets/site.webmanifest">
@@ -25,8 +26,9 @@
         textarea { resize: vertical; }
     </style>
 </head>
-<body>
-    <div class="container mt-4">
+<body class="bg-slate-50 min-h-screen font-sans">
+    {% include 'partials/navbar.html' %}
+    <div class="container mt-6">
         <a href="/settings" target="_top" class="back-to-settings-button">&larr; Back to Settings</a>
         <h1>Manage Contacts</h1>
         <hr>
