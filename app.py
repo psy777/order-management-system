@@ -39,6 +39,7 @@ from database import (
     init_db,
     ensure_contact_handle,
     ensure_order_record_handle,
+    ensure_record_handle_schema,
     generate_unique_contact_handle,
 )
 from data_paths import DATA_ROOT, ensure_data_root
@@ -600,6 +601,7 @@ def _generate_note_handle(conn: sqlite3.Connection, note_id: str, title: str) ->
 
 
 def _upsert_note_handle(conn: sqlite3.Connection, note_id: str, title: str) -> str:
+    ensure_record_handle_schema(conn)
     handle = _generate_note_handle(conn, note_id, title)
     search_blob = title.strip().lower()
     conn.execute(

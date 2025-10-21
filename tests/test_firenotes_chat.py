@@ -79,6 +79,34 @@ def test_init_db_upgrades_record_handles_schema(configure_chat_environment):
     assert note['title'] == 'Schema upgrade note'
 
 
+def test_note_creation_self_heals_record_handles(configure_chat_environment, monkeypatch):
+    conn = get_db_connection()
+    try:
+        conn.execute('DROP TABLE record_handles')
+        conn.execute(
+            'CREATE TABLE record_handles (handle TEXT PRIMARY KEY, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL)'
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(firenotes_app, '_db_bootstrapped', True)
+
+    client = firenotes_app.app.test_client()
+    response = client.post('/api/firenotes/notes', json={'title': 'Self-healing note'})
+    assert response.status_code == 201
+    payload = response.get_json()
+    assert payload['note']['title'] == 'Self-healing note'
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.execute('PRAGMA table_info(record_handles)')
+        columns = {row[1] for row in cursor.fetchall()}
+        assert {'display_name', 'search_blob', 'created_at', 'updated_at'} <= columns
+    finally:
+        conn.close()
+
+
 def test_chat_creates_reminder_entry(configure_chat_environment):
     client = firenotes_app.app.test_client()
     note = _create_note(client, 'Ops note')

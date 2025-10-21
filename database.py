@@ -42,6 +42,49 @@ def _generate_unique_handle(cursor: sqlite3.Cursor, preferred_text: str) -> str:
         suffix += 1
 
 
+def ensure_record_handle_schema(conn: sqlite3.Connection) -> None:
+    """Ensure the record_handles directory has the expected schema."""
+
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS record_handles (
+            handle TEXT PRIMARY KEY,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            display_name TEXT,
+            search_blob TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+    cursor.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_record_handles_entity ON record_handles(entity_type, entity_id)"
+    )
+
+    cursor.execute("PRAGMA table_info(record_handles)")
+    columns = []
+    for row in cursor.fetchall():
+        if isinstance(row, sqlite3.Row):
+            columns.append(row["name"])
+        else:
+            columns.append(row[1])
+    column_set = set(columns)
+    if "display_name" not in column_set:
+        cursor.execute("ALTER TABLE record_handles ADD COLUMN display_name TEXT")
+    if "search_blob" not in column_set:
+        cursor.execute("ALTER TABLE record_handles ADD COLUMN search_blob TEXT")
+    if "created_at" not in column_set:
+        cursor.execute(
+            "ALTER TABLE record_handles ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP"
+        )
+    if "updated_at" not in column_set:
+        cursor.execute(
+            "ALTER TABLE record_handles ADD COLUMN updated_at TEXT DEFAULT CURRENT_TIMESTAMP"
+        )
+
+
 def ensure_contact_handle(cursor: sqlite3.Cursor, contact_id: str, fallback_text: str = "") -> Optional[str]:
     cursor.execute(
         "SELECT handle, company_name, contact_name FROM contacts WHERE id = ?",
@@ -533,33 +576,7 @@ def init_db():
         );
     """)
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS record_handles (
-            handle TEXT PRIMARY KEY,
-            entity_type TEXT NOT NULL,
-            entity_id TEXT NOT NULL,
-            display_name TEXT,
-            search_blob TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-    """)
-    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_record_handles_entity ON record_handles(entity_type, entity_id)")
-
-    cursor.execute("PRAGMA table_info(record_handles)")
-    record_handle_columns = {row[1] for row in cursor.fetchall()}
-    if 'display_name' not in record_handle_columns:
-        cursor.execute("ALTER TABLE record_handles ADD COLUMN display_name TEXT")
-    if 'search_blob' not in record_handle_columns:
-        cursor.execute("ALTER TABLE record_handles ADD COLUMN search_blob TEXT")
-    if 'created_at' not in record_handle_columns:
-        cursor.execute(
-            "ALTER TABLE record_handles ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP"
-        )
-    if 'updated_at' not in record_handle_columns:
-        cursor.execute(
-            "ALTER TABLE record_handles ADD COLUMN updated_at TEXT DEFAULT CURRENT_TIMESTAMP"
-        )
+    ensure_record_handle_schema(conn)
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS record_mentions (
