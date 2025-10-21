@@ -389,6 +389,51 @@ def _create_note(conn: sqlite3.Connection, title: str) -> Dict[str, Any]:
     return note or {'id': note_id, 'title': normalized_title, 'handle': handle}
 
 
+def _delete_note(conn: sqlite3.Connection, note_id: str) -> None:
+    if not note_id:
+        return
+    cursor = conn.execute(
+        "SELECT attachments_json FROM firecoast_chat_messages WHERE note_id = ?",
+        (note_id,),
+    )
+    attachment_paths: List[str] = []
+    for row in cursor.fetchall():
+        try:
+            raw = row['attachments_json'] if isinstance(row, sqlite3.Row) else row[0]
+        except (KeyError, IndexError, TypeError):
+            raw = None
+        attachments = _parse_json_column(raw)
+        if isinstance(attachments, list):
+            for attachment in attachments:
+                if isinstance(attachment, dict):
+                    path_value = attachment.get('path') or ''
+                    if path_value:
+                        attachment_paths.append(str(path_value))
+    conn.execute("DELETE FROM firecoast_chat_messages WHERE note_id = ?", (note_id,))
+    conn.execute("DELETE FROM firecoast_notes WHERE id = ?", (note_id,))
+    conn.execute(
+        "DELETE FROM record_handles WHERE entity_type = 'firecoast_note' AND entity_id = ?",
+        (note_id,),
+    )
+    conn.execute(
+        "DELETE FROM record_mentions WHERE context_entity_type = 'firecoast_note' AND context_entity_id = ?",
+        (note_id,),
+    )
+    conn.execute(
+        "DELETE FROM record_mentions WHERE mentioned_entity_type = 'firecoast_note' AND mentioned_entity_id = ?",
+        (note_id,),
+    )
+    base_dir = Path(app.config['UPLOAD_FOLDER']).resolve()
+    for relative_path in attachment_paths:
+        normalized = str(relative_path).replace('\\', '/').lstrip('/')
+        candidate = (base_dir / normalized).resolve()
+        try:
+            if candidate.exists() and candidate.is_file() and base_dir in candidate.parents:
+                candidate.unlink()
+        except Exception:
+            app.logger.debug('Failed to remove attachment for note %s: %s', note_id, candidate)
+
+
 def _list_notes(conn: sqlite3.Connection, query: Optional[str], limit: int = 200) -> List[Dict[str, Any]]:
     search_text = (query or '').strip().lower()
     params: List[Any] = []
@@ -4431,7 +4476,7 @@ def password_entry_detail(entry_id):
     return jsonify(entry)
 
 
-@app.route('/api/firecoast/notes', methods=['GET', 'POST', 'PATCH'])
+@app.route('/api/firecoast/notes', methods=['GET', 'POST', 'PATCH', 'DELETE'])
 def api_firecoast_notes():
     conn = get_db_connection()
     try:
@@ -4445,6 +4490,24 @@ def api_firecoast_notes():
             note = _create_note(conn, title or '')
             conn.commit()
             return jsonify({'note': note}), 201
+        if request.method == 'DELETE':
+            note_id = (
+                payload.get('id')
+                or payload.get('note_id')
+                or payload.get('noteId')
+                or request.args.get('id')
+                or request.args.get('note_id')
+                or request.args.get('noteId')
+                or ''
+            ).strip()
+            if not note_id:
+                return jsonify({'message': 'note_id is required.'}), 400
+            note = _get_note(conn, note_id)
+            if not note:
+                return jsonify({'message': 'Note not found.'}), 404
+            _delete_note(conn, note_id)
+            conn.commit()
+            return jsonify({'message': 'Note deleted.'})
         note_id = (payload.get('id') or payload.get('note_id') or payload.get('noteId') or '').strip()
         if not note_id:
             return jsonify({'message': 'note_id is required.'}), 400

@@ -207,3 +207,61 @@ def test_note_mentions_are_synced(configure_chat_environment):
         assert 'ops-team' in handles
     finally:
         conn.close()
+
+
+def test_note_handles_available_in_directory(configure_chat_environment):
+    client = firecoast_app.app.test_client()
+    note = _create_note(client, 'Directory note')
+
+    response = client.get('/api/records/handles?entity_types=firecoast_note')
+    assert response.status_code == 200
+    payload = response.get_json()
+    handles = {entry['handle'] for entry in payload.get('handles', [])}
+    assert note.get('handle') in handles
+
+
+def test_delete_note_removes_history_and_files(configure_chat_environment):
+    client = firecoast_app.app.test_client()
+    note = _create_note(client, 'Disposable note')
+
+    data = {
+        'note_id': note['id'],
+        'content': 'Attach for deletion',
+        'attachments': [
+            (io.BytesIO(b'temporary'), 'temp.txt'),
+        ],
+    }
+    response = client.post('/api/firecoast/chat', data=data, content_type='multipart/form-data')
+    assert response.status_code == 200
+    payload = response.get_json()
+    attachments = payload['messages'][0]['attachments']
+    assert attachments
+    attachment_path = attachments[0]['path']
+    file_path = pathlib.Path(firecoast_app.app.config['UPLOAD_FOLDER']) / attachment_path
+    assert file_path.exists()
+
+    delete_response = client.delete('/api/firecoast/notes', json={'id': note['id']})
+    assert delete_response.status_code == 200
+
+    conn = get_db_connection()
+    try:
+        assert conn.execute('SELECT 1 FROM firecoast_notes WHERE id = ?', (note['id'],)).fetchone() is None
+        assert conn.execute('SELECT 1 FROM firecoast_chat_messages WHERE note_id = ?', (note['id'],)).fetchone() is None
+        assert (
+            conn.execute(
+                "SELECT 1 FROM record_handles WHERE entity_type = 'firecoast_note' AND entity_id = ?",
+                (note['id'],),
+            ).fetchone()
+            is None
+        )
+        assert (
+            conn.execute(
+                "SELECT 1 FROM record_mentions WHERE context_entity_type = 'firecoast_note' AND context_entity_id = ?",
+                (note['id'],),
+            ).fetchone()
+            is None
+        )
+    finally:
+        conn.close()
+
+    assert not file_path.exists()

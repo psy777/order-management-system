@@ -43,12 +43,18 @@
             </aside>
             <section class="fc-chat-panel" aria-label="Note conversation">
                 <header class="fc-chat-panel__header">
-                    <h1 id="fc-note-title" class="fc-chat-panel__title">Untitled note</h1>
+                    <div class="fc-chat-panel__title-group">
+                        <h1 id="fc-note-title" class="fc-chat-panel__title">Untitled note</h1>
+                        <button type="button" id="fc-note-handle" class="fc-note-handle" hidden></button>
+                    </div>
                     <div class="fc-chat-panel__actions">
                         <label class="fc-screen-reader-only" for="fc-message-search">Search this note</label>
                         <input id="fc-message-search" class="fc-chat-search" type="search" placeholder="Search this note" autocomplete="off">
                         <button type="button" id="fc-refresh" class="fc-icon-button" aria-label="Refresh note">
                             <span aria-hidden="true">↺</span>
+                        </button>
+                        <button type="button" id="fc-delete-note" class="fc-icon-button fc-icon-button--danger" aria-label="Delete note">
+                            <span aria-hidden="true">🗑</span>
                         </button>
                     </div>
                 </header>
@@ -67,6 +73,7 @@
                                 <span aria-hidden="true">＋</span>
                             </button>
                         </div>
+                        <div id="fc-mention-menu" class="fc-mention-menu" hidden></div>
                     </div>
                 </footer>
             </section>
@@ -112,14 +119,17 @@
             const noteSearchEl = document.getElementById('fc-note-search');
             const noteEmptyEl = document.getElementById('fc-no-notes');
             const noteTitleEl = document.getElementById('fc-note-title');
+            const noteHandleButton = document.getElementById('fc-note-handle');
             const chatLogEl = document.getElementById('fc-chat-log');
             const messageSearchEl = document.getElementById('fc-message-search');
             const refreshButton = document.getElementById('fc-refresh');
+            const deleteButton = document.getElementById('fc-delete-note');
             const inputEl = document.getElementById('fc-input');
             const attachmentInputEl = document.getElementById('fc-attachment-input');
             const attachmentButtonEl = document.getElementById('fc-attach-button');
             const attachmentChipsEl = document.getElementById('fc-attachment-chips');
             const composerEl = document.querySelector('.fc-composer');
+            const mentionMenuEl = document.getElementById('fc-mention-menu');
             const errorEl = document.getElementById('fc-error');
 
             const state = {
@@ -138,6 +148,22 @@
 
             const MAX_COMPOSER_HEIGHT = 220;
             let autoCreatingNote = false;
+            const MENTION_RESULT_LIMIT = 8;
+
+            const mentionDirectory = {
+                entries: [],
+                isLoading: false,
+            };
+
+            const mentionState = {
+                open: false,
+                query: '',
+                triggerIndex: -1,
+                results: [],
+                activeIndex: 0,
+            };
+
+            let handleCopyResetTimer = null;
 
             const normalizePreview = (value) => {
                 if (value === null || value === undefined) {
@@ -185,6 +211,212 @@
                 return `${formatTimestamp(start.toISOString(), true)} – ${formatTimestamp(end.toISOString(), true)}`;
             };
 
+            const mentionTriggerPattern = /(^|[\s.,;:()[\]{}<>])@([a-z0-9_.-]*)$/i;
+
+            const refreshMentionDirectory = async () => {
+                if (mentionDirectory.isLoading) {
+                    return mentionDirectory.entries;
+                }
+                mentionDirectory.isLoading = true;
+                try {
+                    const response = await fetch('/api/records/handles?entity_types=contact,firecoast_note');
+                    if (!response.ok) {
+                        throw new Error('Failed to load handles');
+                    }
+                    const payload = await response.json();
+                    mentionDirectory.entries = Array.isArray(payload.handles) ? payload.handles : [];
+                } catch (error) {
+                    console.error('Failed to refresh mention handles', error);
+                } finally {
+                    mentionDirectory.isLoading = false;
+                    updateMentionResults();
+                }
+                return mentionDirectory.entries;
+            };
+
+            const ensureMentionDirectory = async () => {
+                if (mentionDirectory.entries.length || mentionDirectory.isLoading) {
+                    return mentionDirectory.entries;
+                }
+                return refreshMentionDirectory();
+            };
+
+            const filterMentionResults = (query) => {
+                const lowered = (query || '').toLowerCase();
+                const entries = mentionDirectory.entries || [];
+                if (!lowered) {
+                    return entries.slice(0, MENTION_RESULT_LIMIT);
+                }
+                const matches = entries.filter((entry) => {
+                    if (!entry) {
+                        return false;
+                    }
+                    const handle = (entry.handle || '').toLowerCase();
+                    const display = (entry.displayName || '').toLowerCase();
+                    return handle.includes(lowered) || display.includes(lowered);
+                });
+                return matches.slice(0, MENTION_RESULT_LIMIT);
+            };
+
+            const updateMentionResults = () => {
+                if (!mentionState.open) {
+                    return;
+                }
+                mentionState.results = filterMentionResults(mentionState.query);
+                if (mentionState.activeIndex >= mentionState.results.length) {
+                    mentionState.activeIndex = Math.max(mentionState.results.length - 1, 0);
+                }
+                renderMentionMenu();
+            };
+
+            const closeMentionMenu = () => {
+                mentionState.open = false;
+                mentionState.query = '';
+                mentionState.triggerIndex = -1;
+                mentionState.results = [];
+                mentionState.activeIndex = 0;
+                if (mentionMenuEl) {
+                    mentionMenuEl.hidden = true;
+                    mentionMenuEl.innerHTML = '';
+                    mentionMenuEl.classList.remove('fc-mention-menu--empty');
+                }
+            };
+
+            const renderMentionMenu = () => {
+                if (!mentionMenuEl) {
+                    return;
+                }
+                mentionMenuEl.innerHTML = '';
+                if (!mentionState.open) {
+                    mentionMenuEl.hidden = true;
+                    mentionMenuEl.classList.remove('fc-mention-menu--empty');
+                    return;
+                }
+                if (!mentionState.results.length) {
+                    mentionMenuEl.hidden = false;
+                    mentionMenuEl.classList.add('fc-mention-menu--empty');
+                    mentionMenuEl.textContent = mentionState.query
+                        ? 'No matches found.'
+                        : 'Start typing to @mention notes or contacts.';
+                    return;
+                }
+                mentionMenuEl.hidden = false;
+                mentionMenuEl.classList.remove('fc-mention-menu--empty');
+                const fragment = document.createDocumentFragment();
+                mentionState.results.forEach((entry, index) => {
+                    if (!entry) {
+                        return;
+                    }
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = 'fc-mention-menu__item' + (index === mentionState.activeIndex ? ' fc-mention-menu__item--active' : '');
+                    button.setAttribute('data-handle', entry.handle || '');
+
+                    const primary = document.createElement('span');
+                    primary.className = 'fc-mention-menu__primary';
+                    primary.textContent = entry.displayName || entry.handle || '';
+                    button.appendChild(primary);
+
+                    const handleLabel = document.createElement('span');
+                    handleLabel.className = 'fc-mention-menu__handle';
+                    handleLabel.textContent = entry.handle ? `@${entry.handle}` : '';
+                    button.appendChild(handleLabel);
+
+                    if (entry.entityType) {
+                        const entity = document.createElement('span');
+                        entity.className = 'fc-mention-menu__entity';
+                        entity.textContent = entry.entityType.replace(/_/g, ' ');
+                        button.appendChild(entity);
+                    }
+
+                    button.addEventListener('mousedown', (event) => {
+                        event.preventDefault();
+                        applyMentionSelection(entry);
+                    });
+                    button.addEventListener('mouseenter', () => {
+                        mentionState.activeIndex = index;
+                        renderMentionMenu();
+                    });
+
+                    fragment.appendChild(button);
+                });
+                mentionMenuEl.appendChild(fragment);
+                const active = mentionMenuEl.querySelector('.fc-mention-menu__item--active');
+                if (active && typeof active.scrollIntoView === 'function') {
+                    active.scrollIntoView({ block: 'nearest' });
+                }
+            };
+
+            const applyMentionSelection = (entry) => {
+                if (!entry || !entry.handle || !inputEl) {
+                    return;
+                }
+                const handle = `@${entry.handle}`;
+                const caret = typeof inputEl.selectionStart === 'number' ? inputEl.selectionStart : 0;
+                const selectionEnd = typeof inputEl.selectionEnd === 'number' ? inputEl.selectionEnd : caret;
+                const start = mentionState.triggerIndex >= 0 ? mentionState.triggerIndex : caret;
+                const before = inputEl.value.slice(0, start);
+                const after = inputEl.value.slice(Math.max(caret, selectionEnd));
+                let insertion = handle;
+                if (!after || !/^[\s.,!?)/]/.test(after)) {
+                    insertion += ' ';
+                }
+                inputEl.value = `${before}${insertion}${after}`;
+                const nextCaret = before.length + insertion.length;
+                inputEl.setSelectionRange(nextCaret, nextCaret);
+                autoResizeInput();
+                closeMentionMenu();
+            };
+
+            const applyActiveMentionSelection = () => {
+                if (!mentionState.open || !mentionState.results.length) {
+                    return;
+                }
+                const entry = mentionState.results[mentionState.activeIndex];
+                if (entry) {
+                    applyMentionSelection(entry);
+                }
+            };
+
+            const moveMentionSelection = (delta) => {
+                if (!mentionState.open || !mentionState.results.length) {
+                    return;
+                }
+                const total = mentionState.results.length;
+                mentionState.activeIndex = (mentionState.activeIndex + delta + total) % total;
+                renderMentionMenu();
+            };
+
+            const handleMentionDetection = async () => {
+                if (!inputEl || inputEl.disabled) {
+                    closeMentionMenu();
+                    return;
+                }
+                const caret = typeof inputEl.selectionStart === 'number' ? inputEl.selectionStart : null;
+                const selectionEnd = typeof inputEl.selectionEnd === 'number' ? inputEl.selectionEnd : null;
+                if (caret === null || selectionEnd === null || caret !== selectionEnd) {
+                    closeMentionMenu();
+                    return;
+                }
+                const before = inputEl.value.slice(0, caret);
+                const match = mentionTriggerPattern.exec(before);
+                if (!match) {
+                    if (mentionState.open) {
+                        closeMentionMenu();
+                    }
+                    return;
+                }
+                await ensureMentionDirectory();
+                const triggerIndex = match.index + match[1].length;
+                const query = match[2] || '';
+                mentionState.open = true;
+                mentionState.triggerIndex = triggerIndex;
+                mentionState.query = query;
+                mentionState.activeIndex = 0;
+                mentionState.results = filterMentionResults(query);
+                renderMentionMenu();
+            };
+
             const setBusy = (value) => {
                 if (!chatLogEl) {
                     return;
@@ -208,6 +440,29 @@
 
             const clearError = () => showError('');
 
+            const updateNoteHandleButton = (handle) => {
+                if (!noteHandleButton) {
+                    return;
+                }
+                window.clearTimeout(handleCopyResetTimer);
+                handleCopyResetTimer = null;
+                if (!handle) {
+                    noteHandleButton.hidden = true;
+                    noteHandleButton.dataset.handle = '';
+                    noteHandleButton.textContent = '';
+                    noteHandleButton.classList.remove('is-copied');
+                    noteHandleButton.disabled = true;
+                    noteHandleButton.title = '';
+                    return;
+                }
+                noteHandleButton.hidden = false;
+                noteHandleButton.disabled = false;
+                noteHandleButton.dataset.handle = handle;
+                noteHandleButton.textContent = handle;
+                noteHandleButton.classList.remove('is-copied');
+                noteHandleButton.title = 'Copy note handle';
+            };
+
             const renderNoteTitle = (note) => {
                 if (!noteTitleEl) {
                     return;
@@ -216,6 +471,7 @@
                     noteTitleEl.textContent = 'Untitled note';
                     noteTitleEl.title = 'Select a note to view messages';
                     noteTitleEl.removeAttribute('data-handle');
+                    updateNoteHandleButton('');
                     return;
                 }
                 const label = normalizePreview(note.title || '') || 'Untitled note';
@@ -227,6 +483,7 @@
                 } else {
                     noteTitleEl.removeAttribute('data-handle');
                 }
+                updateNoteHandleButton(handle);
             };
 
             const sortNotes = () => {
@@ -258,22 +515,69 @@
                     ? state.notes.filter((note) => matchesNoteSearch(note, loweredQuery))
                     : state.notes.slice();
 
-                if (!filtered.length) {
+                const hasQuery = Boolean(trimmedQuery);
+                const exactMatch = hasQuery
+                    ? state.notes.some((note) => normalizePreview(note.title || '').toLowerCase() === loweredQuery)
+                    : false;
+                const createSuggestion = hasQuery && !exactMatch;
+
+                if (!filtered.length && !createSuggestion) {
                     if (noteEmptyEl) {
                         noteEmptyEl.hidden = false;
                         noteEmptyEl.textContent = trimmedQuery
-                            ? `Press Enter to create "${trimmedQuery}"`
+                            ? `No notes match "${trimmedQuery}". Press Enter to create it.`
                             : 'Create a note to get started.';
                     }
                     return;
                 }
 
                 if (noteEmptyEl) {
-                    noteEmptyEl.hidden = true;
-                    noteEmptyEl.textContent = '';
+                    if (createSuggestion && !filtered.length) {
+                        noteEmptyEl.hidden = false;
+                        noteEmptyEl.textContent = `Press Enter or click below to create "${trimmedQuery}".`;
+                    } else {
+                        noteEmptyEl.hidden = true;
+                        noteEmptyEl.textContent = '';
+                    }
                 }
 
                 const fragment = document.createDocumentFragment();
+
+                if (createSuggestion) {
+                    const createButton = document.createElement('button');
+                    createButton.type = 'button';
+                    createButton.className = 'fc-note fc-note--create';
+                    createButton.setAttribute('data-create-note', trimmedQuery);
+
+                    const title = document.createElement('div');
+                    title.className = 'fc-note__title';
+                    title.textContent = `Create "${trimmedQuery}"`;
+
+                    const hint = document.createElement('div');
+                    hint.className = 'fc-note__preview';
+                    hint.textContent = 'Start a fresh note with this title.';
+
+                    createButton.appendChild(title);
+                    createButton.appendChild(hint);
+                    createButton.addEventListener('click', async () => {
+                        try {
+                            const note = await createNote(trimmedQuery);
+                            if (noteSearchEl) {
+                                noteSearchEl.value = '';
+                            }
+                            state.noteSearch = '';
+                            renderNotes();
+                            if (note) {
+                                await selectNote(note.id, { focusComposer: true });
+                            }
+                        } catch (error) {
+                            console.error('Failed to create note', error);
+                            showError('Unable to create that note.');
+                        }
+                    });
+                    fragment.appendChild(createButton);
+                }
+
                 filtered.forEach((note) => {
                     const button = document.createElement('button');
                     button.type = 'button';
@@ -291,6 +595,15 @@
                     const previewText = normalizePreview(note.last_message_preview || '');
                     preview.textContent = previewText.length > 90 ? `${previewText.slice(0, 87)}…` : previewText;
 
+                    const meta = document.createElement('div');
+                    meta.className = 'fc-note__meta';
+                    if (note.handle) {
+                        const handle = document.createElement('span');
+                        handle.className = 'fc-note__handle';
+                        handle.textContent = `@${note.handle}`;
+                        meta.appendChild(handle);
+                    }
+
                     const timestamp = document.createElement('time');
                     timestamp.className = 'fc-note__timestamp';
                     const stampValue = note.updated_at || note.last_message_at || note.created_at;
@@ -301,8 +614,15 @@
                     }
 
                     button.appendChild(title);
-                    button.appendChild(preview);
-                    button.appendChild(timestamp);
+                    if (previewText) {
+                        button.appendChild(preview);
+                    }
+                    if (meta.childElementCount) {
+                        meta.appendChild(timestamp);
+                        button.appendChild(meta);
+                    } else if (stampLabel) {
+                        button.appendChild(timestamp);
+                    }
                     button.addEventListener('click', () => {
                         selectNote(note.id, { focusComposer: true });
                     });
@@ -332,7 +652,7 @@
                     removeButton.type = 'button';
                     removeButton.className = 'fc-chip__remove';
                     removeButton.setAttribute('aria-label', `Remove ${item.file.name}`);
-                    removeButton.textContent = '×';
+                    removeButton.textContent = 'Remove';
                     removeButton.addEventListener('click', () => {
                         removePendingFile(item.id);
                     });
@@ -341,6 +661,82 @@
                 });
                 attachmentChipsEl.appendChild(fragment);
             };
+
+            if (noteHandleButton) {
+                noteHandleButton.addEventListener('click', async () => {
+                    const handle = noteHandleButton.dataset.handle || '';
+                    if (!handle) {
+                        return;
+                    }
+                    try {
+                        if (navigator.clipboard && navigator.clipboard.writeText) {
+                            await navigator.clipboard.writeText(handle);
+                        } else {
+                            const helper = document.createElement('textarea');
+                            helper.value = handle;
+                            helper.setAttribute('readonly', '');
+                            helper.style.position = 'fixed';
+                            helper.style.opacity = '0';
+                            document.body.appendChild(helper);
+                            helper.select();
+                            document.execCommand('copy');
+                            document.body.removeChild(helper);
+                        }
+                        window.clearTimeout(handleCopyResetTimer);
+                        noteHandleButton.classList.add('is-copied');
+                        noteHandleButton.textContent = 'Copied';
+                        handleCopyResetTimer = window.setTimeout(() => {
+                            updateNoteHandleButton(handle);
+                        }, 1400);
+                    } catch (error) {
+                        console.error('Failed to copy handle', error);
+                        window.prompt('Copy handle', handle);
+                    }
+                });
+            }
+
+            if (deleteButton) {
+                deleteButton.disabled = true;
+                deleteButton.setAttribute('aria-disabled', 'true');
+                deleteButton.addEventListener('click', async () => {
+                    if (!state.activeNoteId) {
+                        return;
+                    }
+                    const active = state.notes.find((note) => note.id === state.activeNoteId);
+                    const label = normalizePreview(active ? active.title : '') || 'this note';
+                    const confirmed = window.confirm(`Delete "${label}"? This will remove all messages and files.`);
+                    if (!confirmed) {
+                        return;
+                    }
+                    deleteButton.disabled = true;
+                    deleteButton.setAttribute('aria-disabled', 'true');
+                    try {
+                        await deleteNote(state.activeNoteId);
+                        const removedId = state.activeNoteId;
+                        state.notes = state.notes.filter((note) => note.id !== removedId);
+                        state.activeNoteId = '';
+                        state.activeNote = null;
+                        state.messages = [];
+                        renderMessages();
+                        renderNoteTitle(null);
+                        renderNotes();
+                        state.pendingFiles = [];
+                        renderAttachmentChips();
+                        closeMentionMenu();
+                        clearError();
+                        await refreshMentionDirectory();
+                        updateComposerAvailability();
+                        if (state.notes.length) {
+                            await selectNote(state.notes[0].id, { focusComposer: true });
+                        }
+                    } catch (error) {
+                        console.error('Failed to delete note', error);
+                        showError('Unable to delete this note.');
+                    } finally {
+                        updateComposerAvailability();
+                    }
+                });
+            }
 
             const createMetadataDetails = (metadata) => {
                 if (!metadata || typeof metadata !== 'object') {
@@ -605,10 +1001,15 @@
                 inputEl.disabled = !enabled;
                 attachmentButtonEl.disabled = !enabled;
                 composerEl.setAttribute('data-disabled', enabled ? 'false' : 'true');
+                if (deleteButton) {
+                    deleteButton.disabled = !enabled;
+                    deleteButton.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+                }
                 if (!enabled) {
                     inputEl.value = '';
                     state.pendingFiles = [];
                     renderAttachmentChips();
+                    closeMentionMenu();
                 }
             };
 
@@ -628,6 +1029,7 @@
                 state.pendingFiles = [];
                 autoResizeInput();
                 renderAttachmentChips();
+                closeMentionMenu();
             };
 
             const updateNoteFromResponse = (note) => {
@@ -635,10 +1037,14 @@
                     return;
                 }
                 const existingIndex = state.notes.findIndex((entry) => entry.id === note.id);
+                let handleChanged = false;
                 if (existingIndex >= 0) {
-                    state.notes[existingIndex] = { ...state.notes[existingIndex], ...note };
+                    const existing = state.notes[existingIndex];
+                    handleChanged = (existing.handle || '') !== (note.handle || '');
+                    state.notes[existingIndex] = { ...existing, ...note };
                 } else {
                     state.notes.push(note);
+                    handleChanged = Boolean(note.handle);
                 }
                 sortNotes();
                 if (note.id === state.activeNoteId) {
@@ -646,6 +1052,9 @@
                     renderNoteTitle(note);
                 }
                 renderNotes();
+                if (handleChanged) {
+                    refreshMentionDirectory();
+                }
             };
 
             const removePendingFile = (id) => {
@@ -710,6 +1119,7 @@
                 renderNotes();
                 updateComposerAvailability();
                 renderAttachmentChips();
+                closeMentionMenu();
                 renderMessages();
                 await loadMessages(noteId, { silent: options.silent });
                 if (options.focusComposer && inputEl) {
@@ -728,11 +1138,21 @@
                 }
                 const payload = await response.json();
                 if (payload.note) {
-                    state.notes.push(payload.note);
-                    sortNotes();
-                    renderNotes();
+                    updateNoteFromResponse(payload.note);
                 }
                 return payload.note;
+            };
+
+            const deleteNote = async (noteId) => {
+                const response = await fetch('/api/firecoast/notes', {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: noteId }),
+                });
+                if (!response.ok) {
+                    throw new Error('Failed to delete note');
+                }
+                return response.json();
             };
 
             const loadNotes = async (options = {}) => {
@@ -749,6 +1169,7 @@
                     state.notes = Array.isArray(payload.notes) ? payload.notes : [];
                     sortNotes();
                     renderNotes();
+                    await refreshMentionDirectory();
                     if (!state.activeNoteId && state.notes.length) {
                         await selectNote(state.notes[0].id, { focusComposer: true, silent: true });
                     }
@@ -881,12 +1302,49 @@
             if (inputEl) {
                 inputEl.addEventListener('input', () => {
                     autoResizeInput();
+                    handleMentionDetection();
                 });
                 inputEl.addEventListener('keydown', (event) => {
+                    if (mentionState.open) {
+                        if (event.key === 'ArrowDown') {
+                            event.preventDefault();
+                            moveMentionSelection(1);
+                            return;
+                        }
+                        if (event.key === 'ArrowUp') {
+                            event.preventDefault();
+                            moveMentionSelection(-1);
+                            return;
+                        }
+                        if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') {
+                            event.preventDefault();
+                            applyActiveMentionSelection();
+                            return;
+                        }
+                        if (event.key === 'Escape') {
+                            event.preventDefault();
+                            closeMentionMenu();
+                            return;
+                        }
+                    }
                     if (event.key === 'Enter' && !event.shiftKey) {
                         event.preventDefault();
                         sendMessage();
                     }
+                });
+                inputEl.addEventListener('keyup', (event) => {
+                    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) {
+                        handleMentionDetection();
+                    }
+                });
+                inputEl.addEventListener('click', () => {
+                    handleMentionDetection();
+                });
+                inputEl.addEventListener('focus', () => {
+                    handleMentionDetection();
+                });
+                inputEl.addEventListener('blur', () => {
+                    closeMentionMenu();
                 });
             }
 
