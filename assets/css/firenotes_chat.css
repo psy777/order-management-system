@@ -14,6 +14,8 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    padding-top: 2rem;
+    padding-bottom: 2rem;
 }
 
 .fc-chat-wrapper {
@@ -42,6 +44,10 @@
     gap: 1.75rem;
     height: 100%;
     min-height: max(540px, calc(100vh - 12rem));
+}
+
+.fc-chat-layout > * {
+    min-height: 0;
 }
 
 .fc-notes {
@@ -214,13 +220,14 @@
 }
 
 .fc-chat-panel {
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
     background: #ffffff;
     border: 1px solid #d7dde8;
     border-radius: 12px;
     box-shadow: 0 24px 48px -28px rgba(15, 23, 42, 0.32);
     min-height: 0;
+    overflow: hidden;
 }
 
 .fc-chat-panel__header {
@@ -344,20 +351,24 @@
 }
 
 .fc-chat-panel__body {
-    flex: 1;
     min-height: 0;
-    display: flex;
     background: #ffffff;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
 }
 
 .fc-chat-log {
     flex: 1;
+    min-height: 0;
     padding: 1.5rem;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
+    justify-content: flex-end;
     gap: 1rem;
     background: transparent;
+    scroll-behavior: smooth;
 }
 
 .fc-chat-log::-webkit-scrollbar {
@@ -772,10 +783,6 @@
     padding: 1rem 1.5rem 1.5rem;
     border-top: 1px solid #e2e8f0;
     background: #f8fafc;
-    flex-shrink: 0;
-    position: sticky;
-    bottom: 0;
-    z-index: 5;
 }
 
 .fc-chat-error {
