@@ -150,6 +150,13 @@
             const mentionRootEl = document.getElementById('fc-mention-root');
             const errorEl = document.getElementById('fc-error');
 
+            const API_BASE = '/api/firenotes';
+            const REACTION_ENDPOINT = `${API_BASE}/chat/reactions`;
+            const MESSAGE_ENDPOINT = `${API_BASE}/chat/messages`;
+            const FORWARD_ENDPOINT = `${API_BASE}/chat/forward`;
+            const REACTION_OPTIONS = ['👍', '✅', '🔥', '🎉', '❗'];
+            const QUICK_REACTIONS_LIMIT = 3;
+
             const state = {
                 notes: [],
                 messages: [],
@@ -248,13 +255,6 @@
                 }, 0);
                 return popover;
             };
-            const API_BASE = '/api/firenotes';
-            const REACTION_ENDPOINT = `${API_BASE}/chat/reactions`;
-            const MESSAGE_ENDPOINT = `${API_BASE}/chat/messages`;
-            const FORWARD_ENDPOINT = `${API_BASE}/chat/forward`;
-            const REACTION_OPTIONS = ['👍', '✅', '🔥', '🎉', '❗'];
-            const QUICK_REACTIONS_LIMIT = 3;
-
             const MAX_COMPOSER_HEIGHT = 220;
             let autoCreatingNote = false;
             const mentionEntityTypes = null;
@@ -276,6 +276,12 @@
                 textareaComponent: null,
                 textComponent: null,
                 renderScheduled: false,
+            };
+
+            const mentionDirectory = {
+                handles: [],
+                isLoading: false,
+                error: null,
             };
 
             const cleanupMentionTextRoots = () => {
@@ -383,6 +389,36 @@
                 }
                 mentionComposer.root = window.ReactDOM.createRoot(mentionRootEl);
                 renderMentionComposer();
+            };
+
+            const refreshMentionDirectory = async () => {
+                mentionDirectory.isLoading = true;
+                mentionDirectory.error = null;
+                try {
+                    const params = new URLSearchParams();
+                    if (mentionEntityTypes && Array.isArray(mentionEntityTypes) && mentionEntityTypes.length) {
+                        params.set('entity_types', mentionEntityTypes.join(','));
+                    } else if (typeof mentionEntityTypes === 'string' && mentionEntityTypes.trim()) {
+                        params.set('entity_types', mentionEntityTypes.trim());
+                    }
+                    const query = params.toString();
+                    const response = await fetch(query ? `/api/records/handles?${query}` : '/api/records/handles');
+                    if (!response.ok) {
+                        throw new Error('Failed to load mention handles');
+                    }
+                    const payload = await response.json();
+                    const handles = Array.isArray(payload.handles) ? payload.handles : [];
+                    mentionDirectory.handles = handles;
+                    if (mentionComposer.useMentionComponent) {
+                        refreshMentionHandles();
+                    }
+                } catch (error) {
+                    mentionDirectory.error = error;
+                    console.debug('Unable to refresh mention directory', error);
+                } finally {
+                    mentionDirectory.isLoading = false;
+                }
+                return mentionDirectory.handles;
             };
 
             const getComposerValue = () => {
