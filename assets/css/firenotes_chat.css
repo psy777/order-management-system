@@ -379,7 +379,6 @@
     overflow-y: auto;
     overflow-x: hidden;
     display: block;
-    scroll-behavior: smooth;
     overscroll-behavior: contain;
     scrollbar-gutter: stable both-edges;
     scrollbar-width: thin;

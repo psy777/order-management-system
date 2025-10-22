@@ -128,35 +128,14 @@
                 if (!scrollPort) {
                     return;
                 }
-                const performScroll = () => {
-                    const maxScrollTop = Math.max(0, scrollPort.scrollHeight - scrollPort.clientHeight);
-                    const currentTop = scrollPort.scrollTop || 0;
-                    if (Math.abs(currentTop - maxScrollTop) <= 1) {
-                        return false;
-                    }
-                    if (typeof scrollPort.scrollTo === 'function') {
-                        scrollPort.scrollTo({ top: maxScrollTop, behavior: 'auto' });
-                    } else {
-                        scrollPort.scrollTop = maxScrollTop;
-                    }
-                    return true;
-                };
-                const queueFinalCheck = () => {
-                    if (typeof queueMicrotask === 'function') {
-                        queueMicrotask(performScroll);
-                    } else {
-                        setTimeout(performScroll, 0);
-                    }
-                };
-                performScroll();
-                if (typeof requestAnimationFrame === 'function') {
-                    requestAnimationFrame(() => {
-                        performScroll();
-                        queueFinalCheck();
-                    });
-                } else {
-                    queueFinalCheck();
+                const maxScrollTop = Math.max(0, scrollPort.scrollHeight - scrollPort.clientHeight);
+                scrollPort.scrollTop = maxScrollTop;
+                if (scrollPort.scrollTop === maxScrollTop || typeof requestAnimationFrame !== 'function') {
+                    return;
                 }
+                requestAnimationFrame(() => {
+                    scrollPort.scrollTop = Math.max(0, scrollPort.scrollHeight - scrollPort.clientHeight);
+                });
             };
 
             const state = {
