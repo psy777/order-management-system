@@ -118,6 +118,23 @@
                 return distanceToBottom <= STICKY_SCROLL_THRESHOLD;
             };
 
+            const jumpToBottom = () => {
+                if (!scrollPort) {
+                    return;
+                }
+                const performScroll = () => {
+                    if (typeof scrollPort.scrollTo === 'function') {
+                        scrollPort.scrollTo({ top: scrollPort.scrollHeight, behavior: 'auto' });
+                    } else {
+                        scrollPort.scrollTop = scrollPort.scrollHeight;
+                    }
+                };
+                performScroll();
+                if (typeof requestAnimationFrame === 'function') {
+                    requestAnimationFrame(performScroll);
+                }
+            };
+
             const state = {
                 notes: [],
                 messages: [],
@@ -1782,7 +1799,7 @@
                     return;
                 }
                 if (pendingScrollToBottom) {
-                    scrollPort.scrollTop = scrollPort.scrollHeight;
+                    jumpToBottom();
                     pendingScrollToBottom = false;
                     return;
                 }
@@ -1791,7 +1808,7 @@
                     return;
                 }
                 if (shouldStickToBottom) {
-                    scrollPort.scrollTop = scrollPort.scrollHeight;
+                    jumpToBottom();
                     return;
                 }
                 const maxScrollTop = Math.max(0, scrollPort.scrollHeight - scrollPort.clientHeight);
@@ -2078,9 +2095,7 @@
                     showError('Unable to send that message.');
                 } finally {
                     state.isSending = false;
-                    if (scrollPort) {
-                        scrollPort.scrollTop = scrollPort.scrollHeight;
-                    }
+                    jumpToBottom();
                     if (attachmentInputEl) {
                         attachmentInputEl.value = '';
                     }
