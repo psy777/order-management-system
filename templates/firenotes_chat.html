@@ -142,10 +142,8 @@
                 if (currentTimestamp === null || previousTimestamp === null) {
                     return false;
                 }
-                if (currentTimestamp < previousTimestamp) {
-                    return false;
-                }
-                return currentTimestamp - previousTimestamp <= MESSAGE_GROUP_WINDOW_MS;
+                const timestampDelta = Math.abs(currentTimestamp - previousTimestamp);
+                return timestampDelta <= MESSAGE_GROUP_WINDOW_MS;
             };
 
             const scrollPort = chatScrollEl || chatLogEl;
