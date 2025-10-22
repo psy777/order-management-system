@@ -128,14 +128,28 @@
                 if (!scrollPort) {
                     return;
                 }
-                const maxScrollTop = Math.max(0, scrollPort.scrollHeight - scrollPort.clientHeight);
-                scrollPort.scrollTop = maxScrollTop;
-                if (scrollPort.scrollTop === maxScrollTop || typeof requestAnimationFrame !== 'function') {
-                    return;
-                }
-                requestAnimationFrame(() => {
-                    scrollPort.scrollTop = Math.max(0, scrollPort.scrollHeight - scrollPort.clientHeight);
-                });
+                const settle = (attempt = 0) => {
+                    if (!scrollPort) {
+                        return;
+                    }
+                    const maxScrollTop = Math.max(0, scrollPort.scrollHeight - scrollPort.clientHeight);
+                    if (Math.abs(scrollPort.scrollTop - maxScrollTop) <= 1 && attempt > 0) {
+                        scrollPort.scrollTop = maxScrollTop;
+                        return;
+                    }
+                    scrollPort.scrollTop = maxScrollTop;
+                    if (Math.abs(scrollPort.scrollTop - maxScrollTop) <= 1 || attempt >= 6) {
+                        return;
+                    }
+                    if (typeof requestAnimationFrame === 'function') {
+                        requestAnimationFrame(() => settle(attempt + 1));
+                        return;
+                    }
+                    if (typeof setTimeout === 'function') {
+                        setTimeout(() => settle(attempt + 1), 16);
+                    }
+                };
+                settle();
             };
 
             const state = {
