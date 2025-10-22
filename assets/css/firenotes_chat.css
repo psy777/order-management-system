@@ -429,6 +429,19 @@
     position: relative;
 }
 
+.fc-message--grouped {
+    gap: 0.2rem;
+    padding-top: 0.1rem;
+}
+
+.fc-message--grouped .fc-message__bubble {
+    padding-top: 0.45rem;
+}
+
+.fc-message__header--grouped {
+    display: none;
+}
+
 .fc-message__bubble {
     position: relative;
     padding: 0.75rem 1rem 0.85rem;
