@@ -109,6 +109,12 @@
             const STICKY_SCROLL_THRESHOLD = 48;
 
             const scrollPort = chatScrollEl || chatLogEl;
+            const setChatLogContent = (...nodes) => {
+                if (!chatLogEl) {
+                    return;
+                }
+                chatLogEl.replaceChildren(...nodes);
+            };
 
             const isNearBottom = (element) => {
                 if (!element) {
@@ -124,14 +130,18 @@
                 }
                 const performScroll = () => {
                     const maxScrollTop = Math.max(0, scrollPort.scrollHeight - scrollPort.clientHeight);
+                    const currentTop = scrollPort.scrollTop || 0;
+                    if (Math.abs(currentTop - maxScrollTop) <= 1) {
+                        return false;
+                    }
                     if (typeof scrollPort.scrollTo === 'function') {
                         scrollPort.scrollTo({ top: maxScrollTop, behavior: 'auto' });
                     } else {
                         scrollPort.scrollTop = maxScrollTop;
                     }
+                    return true;
                 };
-                const runScrollSequence = () => {
-                    performScroll();
+                const queueFinalCheck = () => {
                     if (typeof queueMicrotask === 'function') {
                         queueMicrotask(performScroll);
                     } else {
@@ -140,9 +150,12 @@
                 };
                 performScroll();
                 if (typeof requestAnimationFrame === 'function') {
-                    requestAnimationFrame(runScrollSequence);
+                    requestAnimationFrame(() => {
+                        performScroll();
+                        queueFinalCheck();
+                    });
                 } else {
-                    runScrollSequence();
+                    queueFinalCheck();
                 }
             };
 
@@ -1763,12 +1776,14 @@
                 closeActivePopover();
                 const previousScrollTop = scrollPort ? scrollPort.scrollTop : 0;
                 const shouldStickToBottom = isNearBottom(scrollPort);
-                chatLogEl.innerHTML = '';
+                const replaceWithPlaceholder = (message) => {
+                    const placeholder = document.createElement('div');
+                    placeholder.className = 'fc-chat-placeholder';
+                    placeholder.textContent = message;
+                    setChatLogContent(placeholder);
+                };
                 if (!state.activeNoteId) {
-                    const empty = document.createElement('div');
-                    empty.className = 'fc-chat-placeholder';
-                    empty.textContent = 'Create a note to start chatting.';
-                    chatLogEl.appendChild(empty);
+                    replaceWithPlaceholder('Create a note to start chatting.');
                     if (scrollPort) {
                         scrollPort.scrollTop = 0;
                     }
@@ -1776,10 +1791,7 @@
                 }
                 if (state.isLoadingMessages) {
                     setBusy(true);
-                    const loading = document.createElement('div');
-                    loading.className = 'fc-chat-placeholder';
-                    loading.textContent = 'Loading note…';
-                    chatLogEl.appendChild(loading);
+                    replaceWithPlaceholder('Loading note…');
                     if (scrollPort) {
                         scrollPort.scrollTop = 0;
                     }
@@ -1792,10 +1804,7 @@
                     ? state.messages.filter((message) => matchesMessageSearch(message, lowered))
                     : state.messages.slice();
                 if (!visible.length) {
-                    const empty = document.createElement('div');
-                    empty.className = 'fc-chat-placeholder';
-                    empty.textContent = lowered ? 'No matches in this note.' : 'Drop a thought to get started.';
-                    chatLogEl.appendChild(empty);
+                    replaceWithPlaceholder(lowered ? 'No matches in this note.' : 'Drop a thought to get started.');
                     if (scrollPort) {
                         scrollPort.scrollTop = 0;
                     }
@@ -1805,7 +1814,7 @@
                 visible.forEach((message) => {
                     fragment.appendChild(createMessageElement(message));
                 });
-                chatLogEl.appendChild(fragment);
+                setChatLogContent(fragment);
                 if (!scrollPort) {
                     return;
                 }
