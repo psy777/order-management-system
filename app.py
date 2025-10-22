@@ -51,6 +51,7 @@ from services.records import (
     bootstrap_record_service,
     extract_mentions,
     get_record_service,
+    reset_record_service,
     sync_record_mentions,
 )
 
@@ -5304,12 +5305,14 @@ def import_data():
     try:
         file.stream.seek(0)
         restore_backup_from_stream(file.stream)
+        reset_record_service()
+
+        global _db_bootstrapped
+        _db_bootstrapped = False
+
         init_db()
 
-        if not app.config.get('TESTING'):
-            Timer(1.0, lambda: os.kill(os.getpid(), 9)).start()
-
-        return jsonify({"status": "success", "message": "Data restored successfully. The application will restart in a few moments."}), 200
+        return jsonify({"status": "success", "message": "Data restored successfully. Your data is ready to use."}), 200
 
     except BackupError as exc:
         app.logger.error("Import rejected: %s", exc)
