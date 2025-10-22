@@ -52,7 +52,9 @@
                     </div>
                 </header>
                 <div class="fc-chat-panel__body">
-                    <div id="fc-chat-log" class="fc-chat-log" role="log" aria-live="polite" aria-busy="false"></div>
+                    <div id="fc-chat-scroll" class="fc-chat-scroll" role="presentation">
+                        <div id="fc-chat-log" class="fc-chat-log" role="log" aria-live="polite" aria-busy="false"></div>
+                    </div>
                 </div>
                 <footer class="fc-chat-panel__footer">
                     <p id="fc-error" class="fc-chat-error" role="status" aria-live="assertive" hidden></p>
@@ -86,6 +88,7 @@
             const noteTitleEl = document.getElementById('fc-note-title');
             const noteHandleButton = document.getElementById('fc-note-handle');
             const chatLogEl = document.getElementById('fc-chat-log');
+            const chatScrollEl = document.getElementById('fc-chat-scroll');
             const chatBodyEl = document.querySelector('.fc-chat-panel__body');
             const messageSearchEl = document.getElementById('fc-message-search');
             const refreshButton = document.getElementById('fc-refresh');
@@ -107,7 +110,9 @@
             const STICKY_SCROLL_THRESHOLD = 48;
 
             const setupChatScrollHandling = () => {
-                if (!chatBodyEl || !chatLogEl) {
+                const scrollContainer = chatScrollEl || chatLogEl;
+
+                if (!chatBodyEl || !chatLogEl || !scrollContainer) {
                     return;
                 }
 
@@ -126,13 +131,13 @@
                         return;
                     }
 
-                    const previous = chatLogEl.scrollTop;
-                    chatLogEl.scrollTop += primaryDelta;
-                    if (chatLogEl.scrollLeft !== 0) {
-                        chatLogEl.scrollLeft = 0;
+                    const previous = scrollContainer.scrollTop;
+                    scrollContainer.scrollTop += primaryDelta;
+                    if (scrollContainer.scrollLeft !== 0) {
+                        scrollContainer.scrollLeft = 0;
                     }
 
-                    if (chatLogEl.scrollTop !== previous) {
+                    if (scrollContainer.scrollTop !== previous) {
                         event.preventDefault();
                     }
                 };
@@ -157,13 +162,13 @@
                         return;
                     }
 
-                    const previous = chatLogEl.scrollTop;
-                    chatLogEl.scrollTop += deltaY;
-                    if (chatLogEl.scrollLeft !== 0) {
-                        chatLogEl.scrollLeft = 0;
+                    const previous = scrollContainer.scrollTop;
+                    scrollContainer.scrollTop += deltaY;
+                    if (scrollContainer.scrollLeft !== 0) {
+                        scrollContainer.scrollLeft = 0;
                     }
 
-                    if (chatLogEl.scrollTop !== previous) {
+                    if (scrollContainer.scrollTop !== previous) {
                         event.preventDefault();
                     }
 
@@ -180,6 +185,8 @@
                 chatBodyEl.addEventListener('touchend', handleTouchEnd, { passive: true });
                 chatBodyEl.addEventListener('touchcancel', handleTouchEnd, { passive: true });
             };
+
+            const scrollPort = chatScrollEl || chatLogEl;
 
             const isNearBottom = (element) => {
                 if (!element) {
@@ -1804,15 +1811,17 @@
                 }
                 cleanupMentionTextRoots();
                 closeActivePopover();
-                const previousScrollTop = chatLogEl.scrollTop;
-                const shouldStickToBottom = isNearBottom(chatLogEl);
+                const previousScrollTop = scrollPort ? scrollPort.scrollTop : 0;
+                const shouldStickToBottom = isNearBottom(scrollPort);
                 chatLogEl.innerHTML = '';
                 if (!state.activeNoteId) {
                     const empty = document.createElement('div');
                     empty.className = 'fc-chat-placeholder';
                     empty.textContent = 'Create a note to start chatting.';
                     chatLogEl.appendChild(empty);
-                    chatLogEl.scrollTop = 0;
+                    if (scrollPort) {
+                        scrollPort.scrollTop = 0;
+                    }
                     return;
                 }
                 if (state.isLoadingMessages) {
@@ -1821,7 +1830,9 @@
                     loading.className = 'fc-chat-placeholder';
                     loading.textContent = 'Loading note…';
                     chatLogEl.appendChild(loading);
-                    chatLogEl.scrollTop = 0;
+                    if (scrollPort) {
+                        scrollPort.scrollTop = 0;
+                    }
                     return;
                 }
                 setBusy(false);
@@ -1835,7 +1846,9 @@
                     empty.className = 'fc-chat-placeholder';
                     empty.textContent = lowered ? 'No matches in this note.' : 'Drop a thought to get started.';
                     chatLogEl.appendChild(empty);
-                    chatLogEl.scrollTop = 0;
+                    if (scrollPort) {
+                        scrollPort.scrollTop = 0;
+                    }
                     return;
                 }
                 const fragment = document.createDocumentFragment();
@@ -1843,17 +1856,20 @@
                     fragment.appendChild(createMessageElement(message));
                 });
                 chatLogEl.appendChild(fragment);
+                if (!scrollPort) {
+                    return;
+                }
                 if (lowered) {
-                    chatLogEl.scrollTop = 0;
+                    scrollPort.scrollTop = 0;
                     return;
                 }
                 if (shouldStickToBottom) {
-                    chatLogEl.scrollTop = chatLogEl.scrollHeight;
+                    scrollPort.scrollTop = scrollPort.scrollHeight;
                     return;
                 }
-                const maxScrollTop = Math.max(0, chatLogEl.scrollHeight - chatLogEl.clientHeight);
+                const maxScrollTop = Math.max(0, scrollPort.scrollHeight - scrollPort.clientHeight);
                 const targetScrollTop = Math.min(previousScrollTop, maxScrollTop);
-                chatLogEl.scrollTop = targetScrollTop;
+                scrollPort.scrollTop = targetScrollTop;
             };
 
             const autoResizeInput = () => {
@@ -2134,8 +2150,8 @@
                     showError('Unable to send that message.');
                 } finally {
                     state.isSending = false;
-                    if (chatLogEl) {
-                        chatLogEl.scrollTop = chatLogEl.scrollHeight;
+                    if (scrollPort) {
+                        scrollPort.scrollTop = scrollPort.scrollHeight;
                     }
                     if (attachmentInputEl) {
                         attachmentInputEl.value = '';
