@@ -138,6 +138,7 @@
             };
             const pendingReactions = new Set();
             let activePopover = null;
+            let pendingScrollToBottom = false;
 
 
             const handlePopoverDocumentClick = (event) => {
@@ -1780,6 +1781,11 @@
                 if (!scrollPort) {
                     return;
                 }
+                if (pendingScrollToBottom) {
+                    scrollPort.scrollTop = scrollPort.scrollHeight;
+                    pendingScrollToBottom = false;
+                    return;
+                }
                 if (lowered) {
                     scrollPort.scrollTop = 0;
                     return;
@@ -2064,6 +2070,7 @@
                         updateNoteFromResponse(payload.note);
                     }
                     resetComposer();
+                    pendingScrollToBottom = true;
                     renderMessages();
                     clearError();
                 } catch (error) {
