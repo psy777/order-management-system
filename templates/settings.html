@@ -362,33 +362,9 @@ hello@firenotes.com</p>
             };
 
             const waitForAppRestart = () => {
-                const pollIntervalMs = 2000;
-                const timeoutMs = 60000;
-                const start = Date.now();
-
-                const pollForAvailability = async () => {
-                    try {
-                        const response = await fetch(window.location.pathname, {
-                            cache: 'no-store',
-                            headers: { 'X-FireCoast-Restart-Check': '1' },
-                        });
-                        if (response.ok) {
-                            window.location.reload();
-                            return;
-                        }
-                    } catch (error) {
-                        // Ignore network errors while the server restarts.
-                    }
-
-                    if (Date.now() - start >= timeoutMs) {
-                        window.location.reload();
-                        return;
-                    }
-
-                    setTimeout(pollForAvailability, pollIntervalMs);
-                };
-
-                setTimeout(pollForAvailability, pollIntervalMs);
+                setTimeout(() => {
+                    window.location.reload();
+                }, 1000);
             };
 
             const sanitizeColor = (value) => {
@@ -765,7 +741,7 @@ hello@firenotes.com</p>
                 if (!file) return;
 
                 const confirmed = window.confirm(
-                    'Importing a backup will replace your existing data and restart FireCoast. Do you want to continue?'
+                    'Importing a backup will replace your existing data and reload FireCoast. Do you want to continue?'
                 );
 
                 if (!confirmed) {
@@ -776,7 +752,7 @@ hello@firenotes.com</p>
 
                 setStatus(
                     databaseStatus,
-                    'Uploading backup… FireCoast will restart automatically once the import finishes.'
+                    'Uploading backup… FireCoast will reload automatically once the import finishes.'
                 );
 
                 const formData = new FormData();
@@ -797,7 +773,7 @@ hello@firenotes.com</p>
                     const message =
                         (payload && typeof payload.message === 'string')
                             ? payload.message
-                            : 'Database restored successfully. FireCoast is restarting…';
+                            : 'Database restored successfully. Reloading FireCoast…';
                     setStatus(databaseStatus, message, 'success');
                     waitForAppRestart();
                 } catch (error) {

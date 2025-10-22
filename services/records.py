@@ -201,6 +201,10 @@ class RecordRegistry:
     def register(self, schema: RecordSchema) -> None:
         self._schemas[schema.entity_type] = schema
 
+    def clear(self) -> None:
+        """Remove all registered schemas."""
+        self._schemas.clear()
+
     def get(self, entity_type: str) -> RecordSchema:
         if entity_type not in self._schemas:
             raise KeyError(f"Unknown record type '{entity_type}'")
@@ -736,6 +740,12 @@ def bootstrap_record_service(conn: sqlite3.Connection) -> RecordService:
     return _service
 
 
+def reset_record_service() -> RecordService:
+    """Reset cached registry state so it can be reloaded from the database."""
+    _registry.clear()
+    return _service
+
+
 __all__ = [
     "FieldDefinition",
     "RecordRegistry",
@@ -745,5 +755,6 @@ __all__ = [
     "bootstrap_record_service",
     "extract_mentions",
     "get_record_service",
+    "reset_record_service",
     "sync_record_mentions",
 ]
