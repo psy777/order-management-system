@@ -123,15 +123,26 @@
                     return;
                 }
                 const performScroll = () => {
+                    const maxScrollTop = Math.max(0, scrollPort.scrollHeight - scrollPort.clientHeight);
                     if (typeof scrollPort.scrollTo === 'function') {
-                        scrollPort.scrollTo({ top: scrollPort.scrollHeight, behavior: 'auto' });
+                        scrollPort.scrollTo({ top: maxScrollTop, behavior: 'auto' });
                     } else {
-                        scrollPort.scrollTop = scrollPort.scrollHeight;
+                        scrollPort.scrollTop = maxScrollTop;
+                    }
+                };
+                const runScrollSequence = () => {
+                    performScroll();
+                    if (typeof queueMicrotask === 'function') {
+                        queueMicrotask(performScroll);
+                    } else {
+                        setTimeout(performScroll, 0);
                     }
                 };
                 performScroll();
                 if (typeof requestAnimationFrame === 'function') {
-                    requestAnimationFrame(performScroll);
+                    requestAnimationFrame(runScrollSequence);
+                } else {
+                    runScrollSequence();
                 }
             };
 
