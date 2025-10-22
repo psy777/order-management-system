@@ -377,6 +377,7 @@
     max-height: 100%;
     padding: 1.5rem;
     overflow-y: auto;
+    overflow-x: hidden;
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
@@ -386,6 +387,7 @@
     overscroll-behavior: contain;
     scrollbar-gutter: stable both-edges;
     scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
 }
 
 .fc-chat-log::-webkit-scrollbar {
