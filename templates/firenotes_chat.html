@@ -113,6 +113,38 @@
             const REACTION_OPTIONS = ['👍', '✅', '🔥', '🎉', '❗'];
             const QUICK_REACTIONS_LIMIT = 3;
             const STICKY_SCROLL_THRESHOLD = 48;
+            const MESSAGE_GROUP_WINDOW_MS = 5 * 60 * 1000;
+
+            const normalizeAuthorForGrouping = (author) => {
+                if (author === null || author === undefined) {
+                    return '';
+                }
+                return String(author).trim().toLowerCase();
+            };
+
+            const getMessageTimestampValue = (message) => {
+                if (!message || !message.created_at) {
+                    return null;
+                }
+                const timestamp = new Date(message.created_at).getTime();
+                return Number.isNaN(timestamp) ? null : timestamp;
+            };
+
+            const shouldGroupWithPreviousMessage = (current, previous) => {
+                if (!current || !previous) {
+                    return false;
+                }
+                if (normalizeAuthorForGrouping(current.author) !== normalizeAuthorForGrouping(previous.author)) {
+                    return false;
+                }
+                const currentTimestamp = getMessageTimestampValue(current);
+                const previousTimestamp = getMessageTimestampValue(previous);
+                if (currentTimestamp === null || previousTimestamp === null) {
+                    return false;
+                }
+                const timestampDelta = Math.abs(currentTimestamp - previousTimestamp);
+                return timestampDelta <= MESSAGE_GROUP_WINDOW_MS;
+            };
 
             const scrollPort = chatScrollEl || chatLogEl;
             const setChatLogContent = (...nodes) => {
@@ -1630,11 +1662,16 @@
                 return `@${normalized}`;
             };
 
-            const createMessageElement = (message) => {
+            const createMessageElement = (message, previousMessage = null) => {
                 const author = (message.author || '').toLowerCase();
                 const isUser = author === 'user';
+                const shouldGroup = shouldGroupWithPreviousMessage(message, previousMessage);
                 const wrapper = document.createElement('article');
-                wrapper.className = 'fc-message' + (isUser ? ' fc-message--user' : ' fc-message--assistant');
+                const wrapperClasses = ['fc-message', isUser ? 'fc-message--user' : 'fc-message--assistant'];
+                if (shouldGroup) {
+                    wrapperClasses.push('fc-message--grouped');
+                }
+                wrapper.className = wrapperClasses.join(' ');
                 if (message.id) {
                     wrapper.id = `message-${message.id}`;
                 }
@@ -1663,9 +1700,10 @@
 
                 const timestamp = document.createElement('time');
                 timestamp.className = 'fc-message__timestamp';
+                let stampLabel = '';
                 if (message.created_at) {
                     timestamp.dateTime = message.created_at;
-                    const stampLabel = formatTimestamp(message.created_at, true);
+                    stampLabel = formatTimestamp(message.created_at, true) || '';
                     if (stampLabel) {
                         timestamp.textContent = stampLabel;
                     }
@@ -1677,6 +1715,14 @@
                     editedIndicator.className = 'fc-message__edited';
                     editedIndicator.textContent = '(edited)';
                     header.appendChild(editedIndicator);
+                }
+
+                if (shouldGroup) {
+                    header.classList.add('fc-message__header--grouped');
+                    header.setAttribute('aria-hidden', 'true');
+                    if (stampLabel) {
+                        bubble.title = stampLabel;
+                    }
                 }
 
                 main.appendChild(header);
@@ -1832,7 +1878,9 @@
                 }
                 const fragment = document.createDocumentFragment();
                 visible.forEach((message) => {
-                    fragment.appendChild(createMessageElement(message));
+                    const messageIndex = state.messages.indexOf(message);
+                    const previousMessage = messageIndex > 0 ? state.messages[messageIndex - 1] : null;
+                    fragment.appendChild(createMessageElement(message, previousMessage));
                 });
                 setChatLogContent(fragment);
                 if (!scrollPort) {

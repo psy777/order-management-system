@@ -429,6 +429,15 @@
     position: relative;
 }
 
+.fc-message--grouped {
+    gap: 0.2rem;
+    padding-top: 0.1rem;
+}
+
+.fc-message--grouped .fc-message__bubble {
+    padding-top: 0.45rem;
+}
+
 .fc-message__bubble {
     position: relative;
     padding: 0.75rem 1rem 0.85rem;
@@ -460,6 +469,10 @@
     gap: 0.45rem;
     font-size: 0.82rem;
     color: #64748b;
+}
+
+.fc-message__header.fc-message__header--grouped {
+    display: none;
 }
 
 .fc-message__author {
