@@ -402,7 +402,7 @@
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
-    gap: 0.5rem;
+    gap: 0;
     background: transparent;
     box-sizing: border-box;
     align-items: stretch;
