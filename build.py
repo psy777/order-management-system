@@ -3,7 +3,7 @@ import shutil
 import PyInstaller.__main__
 
 # --- Configuration ---
-APP_NAME = "FireNotes"
+APP_NAME = "FireCoast"
 SCRIPT_FILE = "app.py"
 ICON_FILE = "firecoast_icon.png"
 DATA_FOLDER = "data"

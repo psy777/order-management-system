@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FireNotes DM</title>
+    <title>FireNotes | FireCoast</title>
     <link rel="icon" href="/favicon.ico" type="image/x-icon">
     <link rel="stylesheet" href="/assets/css/styles.css">
     <link rel="stylesheet" href="/assets/css/firenotes_chat.css">
@@ -182,32 +182,17 @@
                 if (!scrollPort) {
                     return;
                 }
-                const settle = (attempt = 0) => {
-                    if (!scrollPort) {
-                        return;
-                    }
+                const settle = () => {
                     const maxScrollTop = Math.max(0, scrollPort.scrollHeight - scrollPort.clientHeight);
                     const anchorUsed = scrollAnchorIntoView();
                     if (!anchorUsed) {
                         scrollPort.scrollTop = maxScrollTop;
                     }
-                    const atBottom = Math.abs(scrollPort.scrollTop - maxScrollTop) <= 1;
-                    if (atBottom && attempt > 0) {
-                        scrollPort.scrollTop = maxScrollTop;
-                        return;
-                    }
-                    if (atBottom || attempt >= 6) {
-                        scrollPort.scrollTop = maxScrollTop;
-                        return;
-                    }
-                    if (typeof requestAnimationFrame === 'function') {
-                        requestAnimationFrame(() => settle(attempt + 1));
-                        return;
-                    }
-                    if (typeof setTimeout === 'function') {
-                        setTimeout(() => settle(attempt + 1), 16);
-                    }
                 };
+                if (typeof requestAnimationFrame === 'function') {
+                    requestAnimationFrame(settle);
+                    return;
+                }
                 settle();
             };
 

@@ -135,7 +135,7 @@ NAV_SHORTCUT_CATALOG = [
     (
         'firenotes',
         {
-            'label': 'FireNotes Chat',
+            'label': 'FireNotes',
             'href': '/firenotes',
         },
     ),
