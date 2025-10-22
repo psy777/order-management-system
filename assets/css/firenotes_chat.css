@@ -437,6 +437,7 @@
     flex-direction: column;
     gap: 0.6rem;
     padding-right: 3.25rem;
+    min-width: 0;
 }
 
 .fc-message__header {
@@ -471,6 +472,8 @@
     gap: 0.6rem;
     color: #1f2937;
     max-width: 760px;
+    width: 100%;
+    min-width: 0;
 }
 
 .fc-message__forwarded {
@@ -483,6 +486,8 @@
     white-space: pre-wrap;
     line-height: 1.6;
     font-size: 0.98rem;
+    word-break: break-word;
+    overflow-wrap: anywhere;
 }
 
 .fc-message__attachments {
@@ -537,10 +542,14 @@
     margin: 0;
     padding-left: 1rem;
     color: #475569;
+    word-break: break-word;
+    overflow-wrap: anywhere;
 }
 
 .fc-message__meta-body {
     line-height: 1.5;
+    word-break: break-word;
+    overflow-wrap: anywhere;
 }
 
 .fc-message__toolbar {
