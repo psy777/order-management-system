@@ -52,7 +52,9 @@
                     </div>
                 </header>
                 <div class="fc-chat-panel__body">
-                    <div id="fc-chat-log" class="fc-chat-log" role="log" aria-live="polite" aria-busy="false"></div>
+                    <div id="fc-chat-scroll" class="fc-chat-scroll" role="presentation">
+                        <div id="fc-chat-log" class="fc-chat-log" role="log" aria-live="polite" aria-busy="false"></div>
+                    </div>
                 </div>
                 <footer class="fc-chat-panel__footer">
                     <p id="fc-error" class="fc-chat-error" role="status" aria-live="assertive" hidden></p>
@@ -86,6 +88,13 @@
             const noteTitleEl = document.getElementById('fc-note-title');
             const noteHandleButton = document.getElementById('fc-note-handle');
             const chatLogEl = document.getElementById('fc-chat-log');
+            const chatScrollEl = document.getElementById('fc-chat-scroll');
+            const chatBottomAnchor = chatLogEl ? document.createElement('div') : null;
+            if (chatLogEl && chatBottomAnchor) {
+                chatBottomAnchor.className = 'fc-chat-bottom-anchor';
+                chatBottomAnchor.setAttribute('aria-hidden', 'true');
+                chatLogEl.appendChild(chatBottomAnchor);
+            }
             const messageSearchEl = document.getElementById('fc-message-search');
             const refreshButton = document.getElementById('fc-refresh');
             const deleteButton = document.getElementById('fc-delete-note');
@@ -105,12 +114,69 @@
             const QUICK_REACTIONS_LIMIT = 3;
             const STICKY_SCROLL_THRESHOLD = 48;
 
+            const scrollPort = chatScrollEl || chatLogEl;
+            const setChatLogContent = (...nodes) => {
+                if (!chatLogEl) {
+                    return;
+                }
+                if (chatBottomAnchor) {
+                    chatLogEl.replaceChildren(...nodes, chatBottomAnchor);
+                    return;
+                }
+                chatLogEl.replaceChildren(...nodes);
+            };
+
             const isNearBottom = (element) => {
                 if (!element) {
                     return false;
                 }
                 const distanceToBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
                 return distanceToBottom <= STICKY_SCROLL_THRESHOLD;
+            };
+
+            const scrollAnchorIntoView = () => {
+                if (!chatBottomAnchor || typeof chatBottomAnchor.scrollIntoView !== 'function') {
+                    return false;
+                }
+                try {
+                    chatBottomAnchor.scrollIntoView({ block: 'end' });
+                } catch (error) {
+                    chatBottomAnchor.scrollIntoView(false);
+                }
+                return true;
+            };
+
+            const jumpToBottom = () => {
+                if (!scrollPort) {
+                    return;
+                }
+                const settle = (attempt = 0) => {
+                    if (!scrollPort) {
+                        return;
+                    }
+                    const maxScrollTop = Math.max(0, scrollPort.scrollHeight - scrollPort.clientHeight);
+                    const anchorUsed = scrollAnchorIntoView();
+                    if (!anchorUsed) {
+                        scrollPort.scrollTop = maxScrollTop;
+                    }
+                    const atBottom = Math.abs(scrollPort.scrollTop - maxScrollTop) <= 1;
+                    if (atBottom && attempt > 0) {
+                        scrollPort.scrollTop = maxScrollTop;
+                        return;
+                    }
+                    if (atBottom || attempt >= 6) {
+                        scrollPort.scrollTop = maxScrollTop;
+                        return;
+                    }
+                    if (typeof requestAnimationFrame === 'function') {
+                        requestAnimationFrame(() => settle(attempt + 1));
+                        return;
+                    }
+                    if (typeof setTimeout === 'function') {
+                        setTimeout(() => settle(attempt + 1), 16);
+                    }
+                };
+                settle();
             };
 
             const state = {
@@ -133,6 +199,8 @@
             };
             const pendingReactions = new Set();
             let activePopover = null;
+            let pendingScrollToBottom = false;
+
 
             const handlePopoverDocumentClick = (event) => {
                 if (!activePopover) {
@@ -1726,24 +1794,27 @@
                 }
                 cleanupMentionTextRoots();
                 closeActivePopover();
-                const previousScrollTop = chatLogEl.scrollTop;
-                const shouldStickToBottom = isNearBottom(chatLogEl);
-                chatLogEl.innerHTML = '';
+                const previousScrollTop = scrollPort ? scrollPort.scrollTop : 0;
+                const shouldStickToBottom = isNearBottom(scrollPort);
+                const replaceWithPlaceholder = (message) => {
+                    const placeholder = document.createElement('div');
+                    placeholder.className = 'fc-chat-placeholder';
+                    placeholder.textContent = message;
+                    setChatLogContent(placeholder);
+                };
                 if (!state.activeNoteId) {
-                    const empty = document.createElement('div');
-                    empty.className = 'fc-chat-placeholder';
-                    empty.textContent = 'Create a note to start chatting.';
-                    chatLogEl.appendChild(empty);
-                    chatLogEl.scrollTop = 0;
+                    replaceWithPlaceholder('Create a note to start chatting.');
+                    if (scrollPort) {
+                        scrollPort.scrollTop = 0;
+                    }
                     return;
                 }
                 if (state.isLoadingMessages) {
                     setBusy(true);
-                    const loading = document.createElement('div');
-                    loading.className = 'fc-chat-placeholder';
-                    loading.textContent = 'Loading note…';
-                    chatLogEl.appendChild(loading);
-                    chatLogEl.scrollTop = 0;
+                    replaceWithPlaceholder('Loading note…');
+                    if (scrollPort) {
+                        scrollPort.scrollTop = 0;
+                    }
                     return;
                 }
                 setBusy(false);
@@ -1753,29 +1824,36 @@
                     ? state.messages.filter((message) => matchesMessageSearch(message, lowered))
                     : state.messages.slice();
                 if (!visible.length) {
-                    const empty = document.createElement('div');
-                    empty.className = 'fc-chat-placeholder';
-                    empty.textContent = lowered ? 'No matches in this note.' : 'Drop a thought to get started.';
-                    chatLogEl.appendChild(empty);
-                    chatLogEl.scrollTop = 0;
+                    replaceWithPlaceholder(lowered ? 'No matches in this note.' : 'Drop a thought to get started.');
+                    if (scrollPort) {
+                        scrollPort.scrollTop = 0;
+                    }
                     return;
                 }
                 const fragment = document.createDocumentFragment();
                 visible.forEach((message) => {
                     fragment.appendChild(createMessageElement(message));
                 });
-                chatLogEl.appendChild(fragment);
+                setChatLogContent(fragment);
+                if (!scrollPort) {
+                    return;
+                }
+                if (pendingScrollToBottom) {
+                    jumpToBottom();
+                    pendingScrollToBottom = false;
+                    return;
+                }
                 if (lowered) {
-                    chatLogEl.scrollTop = 0;
+                    scrollPort.scrollTop = 0;
                     return;
                 }
                 if (shouldStickToBottom) {
-                    chatLogEl.scrollTop = chatLogEl.scrollHeight;
+                    jumpToBottom();
                     return;
                 }
-                const maxScrollTop = Math.max(0, chatLogEl.scrollHeight - chatLogEl.clientHeight);
+                const maxScrollTop = Math.max(0, scrollPort.scrollHeight - scrollPort.clientHeight);
                 const targetScrollTop = Math.min(previousScrollTop, maxScrollTop);
-                chatLogEl.scrollTop = targetScrollTop;
+                scrollPort.scrollTop = targetScrollTop;
             };
 
             const autoResizeInput = () => {
@@ -2049,6 +2127,7 @@
                         updateNoteFromResponse(payload.note);
                     }
                     resetComposer();
+                    pendingScrollToBottom = true;
                     renderMessages();
                     clearError();
                 } catch (error) {
@@ -2056,9 +2135,7 @@
                     showError('Unable to send that message.');
                 } finally {
                     state.isSending = false;
-                    if (chatLogEl) {
-                        chatLogEl.scrollTop = chatLogEl.scrollHeight;
-                    }
+                    jumpToBottom();
                     if (attachmentInputEl) {
                         attachmentInputEl.value = '';
                     }
