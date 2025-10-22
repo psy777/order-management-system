@@ -405,6 +405,14 @@
     box-sizing: border-box;
 }
 
+.fc-chat-bottom-anchor {
+    flex: 0 0 auto;
+    width: 100%;
+    height: 0;
+    margin: 0;
+    padding: 0;
+}
+
 
 .fc-chat-placeholder {
     margin: auto;

@@ -89,6 +89,12 @@
             const noteHandleButton = document.getElementById('fc-note-handle');
             const chatLogEl = document.getElementById('fc-chat-log');
             const chatScrollEl = document.getElementById('fc-chat-scroll');
+            const chatBottomAnchor = chatLogEl ? document.createElement('div') : null;
+            if (chatLogEl && chatBottomAnchor) {
+                chatBottomAnchor.className = 'fc-chat-bottom-anchor';
+                chatBottomAnchor.setAttribute('aria-hidden', 'true');
+                chatLogEl.appendChild(chatBottomAnchor);
+            }
             const messageSearchEl = document.getElementById('fc-message-search');
             const refreshButton = document.getElementById('fc-refresh');
             const deleteButton = document.getElementById('fc-delete-note');
@@ -113,6 +119,10 @@
                 if (!chatLogEl) {
                     return;
                 }
+                if (chatBottomAnchor) {
+                    chatLogEl.replaceChildren(...nodes, chatBottomAnchor);
+                    return;
+                }
                 chatLogEl.replaceChildren(...nodes);
             };
 
@@ -124,6 +134,18 @@
                 return distanceToBottom <= STICKY_SCROLL_THRESHOLD;
             };
 
+            const scrollAnchorIntoView = () => {
+                if (!chatBottomAnchor || typeof chatBottomAnchor.scrollIntoView !== 'function') {
+                    return false;
+                }
+                try {
+                    chatBottomAnchor.scrollIntoView({ block: 'end' });
+                } catch (error) {
+                    chatBottomAnchor.scrollIntoView(false);
+                }
+                return true;
+            };
+
             const jumpToBottom = () => {
                 if (!scrollPort) {
                     return;
@@ -133,12 +155,17 @@
                         return;
                     }
                     const maxScrollTop = Math.max(0, scrollPort.scrollHeight - scrollPort.clientHeight);
-                    if (Math.abs(scrollPort.scrollTop - maxScrollTop) <= 1 && attempt > 0) {
+                    const anchorUsed = scrollAnchorIntoView();
+                    if (!anchorUsed) {
+                        scrollPort.scrollTop = maxScrollTop;
+                    }
+                    const atBottom = Math.abs(scrollPort.scrollTop - maxScrollTop) <= 1;
+                    if (atBottom && attempt > 0) {
                         scrollPort.scrollTop = maxScrollTop;
                         return;
                     }
-                    scrollPort.scrollTop = maxScrollTop;
-                    if (Math.abs(scrollPort.scrollTop - maxScrollTop) <= 1 || attempt >= 6) {
+                    if (atBottom || attempt >= 6) {
+                        scrollPort.scrollTop = maxScrollTop;
                         return;
                     }
                     if (typeof requestAnimationFrame === 'function') {
