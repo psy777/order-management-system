@@ -1431,16 +1431,28 @@ def _handle_reminder_command(conn: sqlite3.Connection, note_id: str, content: st
         normalized = _normalize_reminder_payload(conn, payload)
         created = service.create_record(conn, 'reminder', normalized, actor='firenotes-chat')
         reminder_payload = _serialize_reminder(created['data'])
+        raw_title = (reminder_payload.get('title') or '').strip()
+        base_label = f"Reminder {raw_title}" if raw_title else 'Reminder'
         timer_value = reminder_payload.get('timer_seconds')
         if timer_value:
             timer_label = _format_timer_label(int(timer_value))
-            message_text = f"Reminder set for {timer_label}."
+            message_text = f"{base_label} in {timer_label}."
         else:
-            due_label = _format_reminder_due(reminder_payload)
-            if due_label == 'no due date':
-                message_text = "Reminder set."
+            due_value = reminder_payload.get('due_at')
+            if due_value:
+                timezone_name = reminder_payload.get('timezone') or _resolve_timezone_setting()
+                include_time = bool(reminder_payload.get('due_has_time'))
+                display_value = _format_datetime_for_display(
+                    due_value,
+                    timezone_name,
+                    include_time=include_time,
+                )
+                if display_value:
+                    message_text = f"{base_label} due {display_value}."
+                else:
+                    message_text = f"{base_label} saved."
             else:
-                message_text = f"Reminder {due_label}."
+                message_text = f"{base_label} saved."
         metadata = {
             'action': 'reminder_created',
             'reminder': reminder_payload,
