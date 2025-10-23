@@ -260,7 +260,17 @@
                 }
                 closeActivePopover();
                 const popover = document.createElement('div');
-                popover.className = 'fc-popover';
+                const placementOption = typeof options.placement === 'string' ? options.placement : 'bottom-end';
+                const additionalClassName = typeof options.className === 'string' ? options.className.trim() : '';
+                const classNames = ['fc-popover'];
+                if (additionalClassName) {
+                    additionalClassName.split(/\s+/).forEach((name) => {
+                        if (name) {
+                            classNames.push(name);
+                        }
+                    });
+                }
+                popover.className = classNames.join(' ');
                 popover.style.visibility = 'hidden';
                 const content = buildContent(popover);
                 if (content instanceof Node) {
@@ -272,17 +282,72 @@
                 const offsetX = Number.isFinite(options.offsetX) ? options.offsetX : 0;
                 const width = popover.offsetWidth;
                 const height = popover.offsetHeight;
-                let top = rect.bottom + offsetY + window.scrollY;
-                let left = rect.right - width + offsetX + window.scrollX;
-                if (left < 8) {
-                    left = rect.left + window.scrollX;
+                const scrollY = window.scrollY || window.pageYOffset || 0;
+                const scrollX = window.scrollX || window.pageXOffset || 0;
+                const viewportBottom = scrollY + window.innerHeight;
+                const viewportTop = scrollY;
+                const viewportRight = scrollX + window.innerWidth;
+                const minMargin = 8;
+                const sanitizePlacement = (value) => {
+                    if (value === 'top-end' || value === 'bottom-end') {
+                        return value;
+                    }
+                    return 'bottom-end';
+                };
+                let resolvedPlacement = sanitizePlacement(placementOption);
+                let top = scrollY;
+                let left = scrollX;
+                const computeAlignedLeft = () => rect.right - width + offsetX + scrollX;
+                const clampLeft = (candidate) => {
+                    let next = candidate;
+                    if (next + width > viewportRight - minMargin) {
+                        next = Math.max(viewportRight - width - minMargin, scrollX + minMargin);
+                    }
+                    if (next < scrollX + minMargin) {
+                        next = scrollX + minMargin;
+                    }
+                    return next;
+                };
+                const placeTopEnd = () => {
+                    const candidateTop = rect.top - height - offsetY + scrollY;
+                    if (candidateTop < viewportTop + minMargin) {
+                        return null;
+                    }
+                    return {
+                        top: candidateTop,
+                        left: clampLeft(computeAlignedLeft()),
+                    };
+                };
+                const placeBottomEnd = () => {
+                    const candidateTop = rect.bottom + offsetY + scrollY;
+                    if (candidateTop + height > viewportBottom - minMargin && rect.top - height - offsetY > viewportTop + minMargin) {
+                        const alternative = placeTopEnd();
+                        if (alternative) {
+                            resolvedPlacement = 'top-end';
+                            return alternative;
+                        }
+                    }
+                    return {
+                        top: candidateTop,
+                        left: clampLeft(computeAlignedLeft()),
+                    };
+                };
+                let position = null;
+                if (resolvedPlacement === 'top-end') {
+                    position = placeTopEnd();
+                    if (!position) {
+                        resolvedPlacement = 'bottom-end';
+                        position = placeBottomEnd();
+                    }
+                } else {
+                    position = placeBottomEnd();
                 }
-                const viewportBottom = window.scrollY + window.innerHeight;
-                if (top + height > viewportBottom && rect.top - height - offsetY > 0) {
-                    top = rect.top - height - offsetY + window.scrollY;
-                }
-                popover.style.top = `${Math.max(0, top)}px`;
-                popover.style.left = `${Math.max(8, left)}px`;
+                top = position ? position.top : rect.bottom + offsetY + scrollY;
+                left = position ? position.left : clampLeft(computeAlignedLeft());
+                popover.dataset.placement = resolvedPlacement;
+                popover.classList.add(`fc-popover--placement-${resolvedPlacement}`);
+                popover.style.top = `${Math.max(scrollY, top)}px`;
+                popover.style.left = `${left}px`;
                 popover.style.visibility = 'visible';
                 activePopover = {
                     element: popover,
@@ -1509,6 +1574,10 @@
                         );
                     }
                     return menu;
+                }, {
+                    placement: 'top-end',
+                    offsetY: 6,
+                    className: 'fc-popover--badge',
                 });
             };
 
