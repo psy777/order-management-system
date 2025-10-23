@@ -586,8 +586,8 @@
 
 .fc-message__toolbar {
     position: absolute;
-    top: -0.7rem;
-    right: -0.1rem;
+    top: -0.55rem;
+    right: -0.05rem;
     display: inline-flex;
     align-items: center;
     gap: 0.25rem;
@@ -613,11 +613,11 @@
     display: inline-flex;
     align-items: center;
     gap: 0.2rem;
-    background: rgba(15, 23, 42, 0.9);
+    background: rgba(12, 19, 33, 0.94);
     padding: 0.22rem 0.45rem;
     border-radius: 999px;
     border: 1px solid rgba(249, 115, 22, 0.35);
-    box-shadow: 0 16px 32px -26px rgba(15, 23, 42, 0.9), 0 0 0 1px rgba(249, 115, 22, 0.18);
+    box-shadow: 0 16px 32px -26px rgba(8, 13, 24, 0.9), 0 0 0 1px rgba(249, 115, 22, 0.18);
     backdrop-filter: blur(6px);
 }
 
@@ -731,7 +731,8 @@
 .fc-popover {
     position: absolute;
     z-index: 40;
-    --fc-popover-bg: #0f172a;
+    --fc-popover-bg: #101b2f;
+    --fc-popover-border: rgba(12, 18, 31, 0.72);
     --fc-popover-accent: #f97316;
     --fc-popover-accent-strong: #fb923c;
     --fc-popover-accent-rgb: 249, 115, 22;
@@ -740,8 +741,8 @@
     border-radius: 14px;
     padding: 0.65rem;
     min-width: 180px;
-    border: 1px solid rgba(15, 23, 42, 0.7);
-    box-shadow: 0 24px 48px -28px rgba(15, 23, 42, 0.85), 0 0 0 1px rgba(15, 23, 42, 0.5);
+    border: 1px solid var(--fc-popover-border);
+    box-shadow: 0 24px 48px -28px rgba(8, 13, 24, 0.88), 0 0 0 1px rgba(8, 13, 24, 0.5);
 }
 
 .fc-popover--placement-top-end {
@@ -811,7 +812,7 @@
 
 .fc-popover__menu-item {
     border: none;
-    background: transparent;
+    background: rgba(11, 18, 33, 0.65);
     padding: 0.35rem 0.5rem;
     text-align: left;
     border-radius: 10px;
@@ -847,7 +848,7 @@
 
 .fc-popover__emoji-button {
     border: none;
-    background: rgba(15, 23, 42, 0.85);
+    background: rgba(12, 19, 33, 0.88);
     border-radius: 10px;
     font-size: 1.2rem;
     padding: 0.4rem;
@@ -866,12 +867,13 @@
 }
 
 .fc-popover--badge {
-    --fc-popover-bg: #0b1221;
-    padding: 0.35rem 0.45rem;
+    --fc-popover-bg: #111f35;
+    --fc-popover-border: rgba(249, 115, 22, 0.42);
+    padding: 0.32rem 0.42rem;
     border-radius: 12px;
     min-width: auto;
-    border: 1px solid rgba(var(--fc-popover-accent-rgb), 0.35);
-    box-shadow: 0 22px 40px -28px rgba(15, 23, 42, 0.9), 0 0 0 1px rgba(var(--fc-popover-accent-rgb), 0.2);
+    border: 1px solid var(--fc-popover-border);
+    box-shadow: 0 22px 38px -28px rgba(8, 13, 24, 0.9), 0 0 0 1px rgba(249, 115, 22, 0.24);
 }
 
 .fc-popover--badge .fc-popover__menu {
@@ -882,6 +884,7 @@
     padding: 0.3rem 0.55rem;
     border-radius: 999px;
     font-size: 0.82rem;
+    background: rgba(12, 19, 33, 0.78);
 }
 
 .fc-popover--badge .fc-popover__menu-item:hover:not(:disabled),
@@ -903,15 +906,15 @@
 .fc-popover--badge.fc-popover--placement-top-end::after {
     content: '';
     position: absolute;
-    bottom: -6px;
-    right: 16px;
+    bottom: -5px;
+    right: 18px;
     width: 12px;
     height: 12px;
     background: var(--fc-popover-bg);
     transform: rotate(45deg);
     border-radius: 3px;
     border: 1px solid rgba(var(--fc-popover-accent-rgb), 0.28);
-    box-shadow: 0 8px 16px -12px rgba(15, 23, 42, 0.85);
+    box-shadow: 0 8px 16px -12px rgba(8, 13, 24, 0.85);
 }
 
 .fc-chat-panel__footer {
