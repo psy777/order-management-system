@@ -3,7 +3,7 @@ import pathlib
 import sqlite3
 import sys
 import unittest
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from dateutil.parser import isoparse
 
@@ -50,8 +50,11 @@ class ReminderNormalizationTests(unittest.TestCase):
         self.assertEqual(due_dt.tzinfo.utcoffset(due_dt), timedelta(0))
         self.assertTrue(normalized['due_has_time'])
         self.assertTrue(normalized['handle'].startswith('send-invoice-'))
+        self.assertEqual(normalized['kind'], 'reminder')
         self.assertFalse(normalized['completed'])
         self.assertIsNone(normalized['completed_at'])
+        self.assertEqual(normalized['remind_at'], normalized['due_at'])
+        self.assertIsNone(normalized['timer_seconds'])
 
     def test_completed_sets_timestamp_when_missing(self):
         payload = {
@@ -61,6 +64,7 @@ class ReminderNormalizationTests(unittest.TestCase):
         normalized = _normalize_reminder_payload(self.conn, payload)
         self.assertTrue(normalized['completed'])
         self.assertIsNotNone(normalized['completed_at'])
+        self.assertEqual(normalized['kind'], 'reminder')
 
     def test_ensures_unique_handle(self):
         self.conn.execute(
@@ -76,6 +80,7 @@ class ReminderNormalizationTests(unittest.TestCase):
         normalized = _normalize_reminder_payload(self.conn, payload)
         self.assertNotEqual(normalized['handle'], 'send-invoice-20240501')
         self.assertTrue(normalized['handle'].startswith('send-invoice-20240501'))
+        self.assertEqual(normalized['kind'], 'reminder')
 
     def test_infers_due_has_time_when_flag_missing(self):
         payload = {
@@ -95,6 +100,21 @@ class ReminderNormalizationTests(unittest.TestCase):
         normalized = _normalize_reminder_payload(self.conn, payload)
         self.assertFalse(normalized['due_has_time'])
 
+    def test_timer_generates_due_and_remind_values(self):
+        payload = {
+            'title': 'Quick follow up',
+            'timer_seconds': 900,
+        }
+        before = datetime.now(timezone.utc)
+        normalized = _normalize_reminder_payload(self.conn, payload)
+        after = datetime.now(timezone.utc)
+        self.assertEqual(normalized['timer_seconds'], 900)
+        self.assertTrue(normalized['due_has_time'])
+        self.assertIsNotNone(normalized['due_at'])
+        self.assertEqual(normalized['remind_at'], normalized['due_at'])
+        due_dt = isoparse(normalized['due_at'])
+        self.assertGreater(due_dt, before)
+        self.assertLess(due_dt, after + timedelta(seconds=910))
 
 class ReminderRecordServiceTests(unittest.TestCase):
     def setUp(self):
@@ -191,6 +211,35 @@ class ReminderRecordServiceTests(unittest.TestCase):
         self.assertEqual(len(mention_rows), 1)
         self.assertEqual(mention_rows[0]['mentioned_handle'], 'clientalpha')
         self.assertEqual(mention_rows[0]['context_entity_type'], 'reminder')
+
+    def test_partial_update_preserves_existing_fields(self):
+        payload = {
+            'title': 'Follow up shipment',
+            'timezone': 'UTC',
+        }
+        normalized = _normalize_reminder_payload(self.conn, payload)
+        created = self.service.create_record(self.conn, 'reminder', normalized, actor='ops')
+        reminder_id = created['data']['id']
+        update = _normalize_reminder_payload(self.conn, {'completed': True}, existing_id=reminder_id)
+        self.assertEqual(update['title'], 'Follow up shipment')
+        self.assertTrue(update['completed'])
+        self.assertIsNotNone(update['completed_at'])
+        self.assertEqual(update['kind'], 'reminder')
+
+    def test_partial_update_preserves_task_kind(self):
+        payload = {
+            'title': 'Call supplier',
+            'timezone': 'UTC',
+            'kind': 'task',
+        }
+        normalized = _normalize_reminder_payload(self.conn, payload)
+        created = self.service.create_record(self.conn, 'reminder', normalized, actor='ops')
+        reminder_id = created['data']['id']
+        update = _normalize_reminder_payload(self.conn, {'completed': True}, existing_id=reminder_id)
+        self.assertEqual(update['title'], 'Call supplier')
+        self.assertTrue(update['completed'])
+        self.assertEqual(update['kind'], 'task')
+        self.assertIsNotNone(update['completed_at'])
 
 
 if __name__ == '__main__':

@@ -487,6 +487,55 @@ def _toggle_chat_reaction(
             (reaction_id, message_id, normalized_emoji, reactor),
         )
         action = 'added'
+
+    if emoji == '✅' and message_row:
+        metadata = _parse_json_column(message_row['metadata_json']) if 'metadata_json' in message_row.keys() else None
+        if isinstance(metadata, dict) and metadata.get('action') == 'task_created':
+            task_payload = metadata.get('task') or {}
+            task_id = task_payload.get('id') or metadata.get('task_id')
+            if task_id:
+                try:
+                    service = get_record_service()
+                    updated_payload = _normalize_reminder_payload(
+                        conn,
+                        {'completed': action == 'added'},
+                        existing_id=str(task_id),
+                    )
+                    updated_record = service.update_record(
+                        conn,
+                        'reminder',
+                        str(task_id),
+                        updated_payload,
+                        actor='firenotes-chat',
+                    )
+                    serialized_task = _serialize_reminder(updated_record['data'])
+                    metadata['task'] = serialized_task
+                    metadata['task_id'] = serialized_task.get('id')
+                    try:
+                        conn.execute(
+                            """
+                            UPDATE firecoast_chat_messages
+                            SET metadata_json = ?, updated_at = CURRENT_TIMESTAMP
+                            WHERE id = ?
+                            """,
+                            (json.dumps(metadata), message_id),
+                        )
+                    except sqlite3.OperationalError as exc:
+                        if 'updated_at' in str(exc).lower():
+                            conn.execute(
+                                """
+                                UPDATE firecoast_chat_messages
+                                SET metadata_json = ?
+                                WHERE id = ?
+                                """,
+                                (json.dumps(metadata), message_id),
+                            )
+                        else:
+                            raise
+                    message_row = _get_chat_message_row(conn, message_id) or message_row
+                except Exception as exc:  # pragma: no cover - defensive logging
+                    app.logger.exception("Failed to synchronise task completion: %s", exc)
+
     reaction_map = _collect_chat_reactions(conn, [message_id], reactor)
     serialized = _serialize_chat_row(message_row, reaction_map)
     return serialized, action
@@ -1070,10 +1119,27 @@ def _handle_reminder_command(conn: sqlite3.Connection, note_id: str, content: st
             metadata={'action': 'error', 'context': 'reminder', 'reason': 'missing_details'},
         )
         return [message]
-    parts = [segment.strip() for segment in body.split('|')]
-    title = parts[0] if parts else ''
-    due_part = parts[1] if len(parts) > 1 else ''
-    notes_part = parts[2] if len(parts) > 2 else ''
+    timer_seconds = None
+    due_part = ''
+    notes_part = ''
+    title = ''
+    if '|' in body:
+        parts = [segment.strip() for segment in body.split('|')]
+        title = parts[0] if parts else ''
+        raw_due = parts[1] if len(parts) > 1 else ''
+        notes_part = parts[2] if len(parts) > 2 else ''
+        timer_candidate = _parse_timer_expression(raw_due) if raw_due else None
+        if timer_candidate:
+            timer_seconds = timer_candidate
+        else:
+            due_part = raw_due
+    else:
+        timer_candidate, remainder = _split_timer_prefix(body)
+        if timer_candidate:
+            timer_seconds = timer_candidate
+            title = remainder
+        else:
+            title = body
     if not title:
         title = 'Reminder'
     timezone_name = _resolve_timezone_setting()
@@ -1081,16 +1147,24 @@ def _handle_reminder_command(conn: sqlite3.Connection, note_id: str, content: st
         'title': title,
         'notes': notes_part or f'Created from chat command: {body}',
         'timezone': timezone_name,
+        'kind': 'reminder',
     }
     if due_part:
         payload['due_at'] = due_part
+    if timer_seconds:
+        payload['timer_seconds'] = timer_seconds
     service = get_record_service()
     try:
         normalized = _normalize_reminder_payload(conn, payload)
         created = service.create_record(conn, 'reminder', normalized, actor='firenotes-chat')
         reminder_payload = _serialize_reminder(created['data'])
-        due_label = _format_reminder_due(reminder_payload)
-        message_text = f"Reminder \"{reminder_payload['title']}\" {due_label}."
+        timer_value = reminder_payload.get('timer_seconds')
+        if timer_value:
+            timer_label = _format_timer_label(int(timer_value))
+            message_text = f"Reminder \"{reminder_payload['title']}\" in {timer_label}."
+        else:
+            due_label = _format_reminder_due(reminder_payload)
+            message_text = f"Reminder \"{reminder_payload['title']}\" {due_label}."
         metadata = {
             'action': 'reminder_created',
             'reminder': reminder_payload,
@@ -1103,6 +1177,84 @@ def _handle_reminder_command(conn: sqlite3.Connection, note_id: str, content: st
             'assistant',
             f"I couldn't save that reminder: {exc}",
             metadata={'action': 'error', 'context': 'reminder', 'reason': str(exc)},
+        )
+        return [message]
+
+
+def _handle_task_command(conn: sqlite3.Connection, note_id: str, content: str) -> List[Dict[str, Any]]:
+    body = content[len('.task'):].strip()
+    if not body:
+        message = _store_chat_message(
+            conn,
+            note_id,
+            'assistant',
+            "Let's capture a task. Try `.task Call @client | tomorrow 9am | include call agenda`.",
+            metadata={'action': 'error', 'context': 'task', 'reason': 'missing_details'},
+        )
+        return [message]
+    timer_seconds = None
+    due_part = ''
+    notes_part = ''
+    title = ''
+    if '|' in body:
+        parts = [segment.strip() for segment in body.split('|')]
+        title = parts[0] if parts else ''
+        raw_due = parts[1] if len(parts) > 1 else ''
+        notes_part = parts[2] if len(parts) > 2 else ''
+        timer_candidate = _parse_timer_expression(raw_due) if raw_due else None
+        if timer_candidate:
+            timer_seconds = timer_candidate
+        else:
+            due_part = raw_due
+    else:
+        timer_candidate, remainder = _split_timer_prefix(body)
+        if timer_candidate:
+            timer_seconds = timer_candidate
+            title = remainder
+        else:
+            title = body
+    if not title:
+        title = 'Task'
+    timezone_name = _resolve_timezone_setting()
+    payload = {
+        'title': title,
+        'notes': notes_part or f'Created from chat command: {body}',
+        'timezone': timezone_name,
+        'kind': 'task',
+    }
+    if due_part:
+        payload['due_at'] = due_part
+    if timer_seconds:
+        payload['timer_seconds'] = timer_seconds
+    service = get_record_service()
+    try:
+        normalized = _normalize_reminder_payload(conn, payload)
+        created = service.create_record(conn, 'reminder', normalized, actor='firenotes-chat')
+        task_payload = _serialize_reminder(created['data'])
+        timer_value = task_payload.get('timer_seconds')
+        if timer_value:
+            timer_label = _format_timer_label(int(timer_value))
+            message_text = (
+                f"Task \"{task_payload['title']}\" in {timer_label}. React with ✅ when complete."
+            )
+        else:
+            due_label = _format_reminder_due(task_payload)
+            message_text = (
+                f"Task \"{task_payload['title']}\" {due_label}. React with ✅ when complete."
+            )
+        metadata = {
+            'action': 'task_created',
+            'task': task_payload,
+            'task_id': task_payload.get('id'),
+        }
+        return [_store_chat_message(conn, note_id, 'assistant', message_text, metadata=metadata)]
+    except (ValueError, RecordValidationError) as exc:
+        message = _store_chat_message(
+            conn,
+            note_id,
+            'assistant',
+            f"I couldn't save that task: {exc}",
+            metadata={'action': 'error', 'context': 'task', 'reason': str(exc)},
         )
         return [message]
 
@@ -1281,6 +1433,7 @@ def _firenotes_help(conn: sqlite3.Connection, note_id: str) -> List[Dict[str, An
         [
             "Here's what I can do:",
             "• `.reminder Title | tomorrow 9am | notes` to capture a follow-up.",
+            "• `.task Call client | Friday 10am | confirm details` to create a task you can check off with ✅.",
             "• `.event Planning session | Friday 2pm | 3pm | HQ | bring slides` to schedule a calendar block.",
             "• `.report list` or `@firenotes run report orders_overview from 2024-01-01 to 2024-03-31` to pull analytics.",
             "• `@firenotes what's my password for Example` to retrieve saved credentials.",
@@ -1337,6 +1490,8 @@ def _handle_chat_message(conn: sqlite3.Connection, message: Dict[str, Any]) -> L
         return _handle_event_command(conn, note_id, content)
     if lowered.startswith('.reminder'):
         return _handle_reminder_command(conn, note_id, content)
+    if lowered.startswith('.task'):
+        return _handle_task_command(conn, note_id, content)
     if lowered.startswith('.report'):
         return _handle_report_command(conn, note_id, content)
     if lowered.startswith(FIRENOTES_MENTION):
@@ -1345,6 +1500,8 @@ def _handle_chat_message(conn: sqlite3.Connection, message: Dict[str, Any]) -> L
 
 PHONE_CLEAN_RE = re.compile(r"\D+")
 CALENDAR_HANDLE_SANITIZE_RE = re.compile(r"[^a-z0-9.-]+")
+TIMER_PREFIX_RE = re.compile(r"^\s*(?P<timer>(?:\d+\s*[smhd]\s*)+)(?=\s|$)", re.IGNORECASE)
+TIMER_COMPONENT_RE = re.compile(r"(\d+)\s*([smhd])", re.IGNORECASE)
 
 
 def _normalize_phone_digits(value):
@@ -3869,6 +4026,55 @@ def _ensure_unique_reminder_handle(
         suffix += 1
 
 
+def _parse_timer_expression(text: Optional[str]) -> Optional[int]:
+    if not text:
+        return None
+    matches = TIMER_COMPONENT_RE.findall(str(text))
+    if not matches:
+        return None
+    total_seconds = 0
+    unit_map = {'s': 1, 'm': 60, 'h': 3600, 'd': 86400}
+    for amount_text, unit_text in matches:
+        try:
+            amount = int(amount_text)
+        except (TypeError, ValueError):
+            return None
+        if amount < 0:
+            return None
+        multiplier = unit_map.get(unit_text.lower())
+        if not multiplier:
+            return None
+        total_seconds += amount * multiplier
+    if total_seconds <= 0:
+        return None
+    return total_seconds
+
+
+def _format_timer_label(seconds: int) -> str:
+    remaining = max(int(seconds), 0)
+    parts: List[str] = []
+    for unit_seconds, suffix in ((86400, 'd'), (3600, 'h'), (60, 'm')):
+        if remaining >= unit_seconds:
+            value, remaining = divmod(remaining, unit_seconds)
+            parts.append(f"{value}{suffix}")
+    if remaining or not parts:
+        parts.append(f"{remaining}s")
+    return ''.join(parts)
+
+
+def _split_timer_prefix(text: str) -> Tuple[Optional[int], str]:
+    if not text:
+        return None, ''
+    match = TIMER_PREFIX_RE.match(text)
+    if not match:
+        return None, text.strip()
+    timer_seconds = _parse_timer_expression(match.group('timer'))
+    if not timer_seconds:
+        return None, text.strip()
+    remainder = text[match.end():].strip()
+    return timer_seconds, remainder
+
+
 def _coerce_optional_reminder_datetime(
     value: Any,
     timezone_name: str,
@@ -3897,53 +4103,178 @@ def _normalize_reminder_payload(
 ) -> Dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Payload must be an object")
-    title = (payload.get('title') or '').strip()
+    existing_data: Dict[str, Any] = {}
+    if existing_id:
+        existing_record: Optional[Dict[str, Any]] = None
+        try:
+            service = get_record_service()
+            existing_record = service.get_record(conn, 'reminder', str(existing_id))
+        except Exception:
+            existing_record = None
+        if existing_record:
+            existing_data = dict(existing_record)
+        else:
+            row = conn.execute(
+                """
+                SELECT data
+                FROM records
+                WHERE entity_type = 'reminder' AND entity_id = ?
+                """,
+                (existing_id,),
+            ).fetchone()
+            if row:
+                raw = row["data"] if isinstance(row, sqlite3.Row) else row[0]
+                try:
+                    existing_data = json.loads(raw)
+                except Exception:
+                    existing_data = {}
+
+    MISSING = object()
+
+    title_source = payload.get('title', MISSING)
+    if title_source is MISSING:
+        title = (existing_data.get('title') or '').strip()
+    else:
+        title = (title_source or '').strip()
+    if not title and existing_data:
+        title = (existing_data.get('title') or '').strip()
     if not title:
         raise ValueError("Title is required")
-    timezone_value = _normalize_timezone_value(payload.get('timezone'))
-    due_source = payload.get('due_at')
-    due_dt = _coerce_optional_reminder_datetime(due_source, timezone_value, 'due_at')
-    notes_value = payload.get('notes')
-    notes_text = '' if notes_value is None else str(notes_value)
-    completed = bool(payload.get('completed'))
-    due_has_time_flag = payload.get('due_has_time')
-    due_has_time = bool(due_has_time_flag) if due_dt else False
-    if due_dt and due_has_time_flag is None:
-        try:
-            tz = pytz.timezone(timezone_value)
-            local_dt = due_dt.astimezone(tz)
-            if any((local_dt.hour, local_dt.minute, local_dt.second, local_dt.microsecond)):
-                due_has_time = True
-        except Exception:
-            if isinstance(due_source, str) and 'T' in due_source:
-                time_fragment = due_source.split('T', 1)[1]
-                if not time_fragment.startswith('00:00'):
+
+    timezone_source = payload.get('timezone', MISSING)
+    timezone_value = _normalize_timezone_value(
+        timezone_source if timezone_source is not MISSING else existing_data.get('timezone')
+    )
+
+    notes_source = payload.get('notes', MISSING)
+    if notes_source is MISSING:
+        notes_candidate = existing_data.get('notes', '')
+    else:
+        notes_candidate = notes_source
+    notes_text = '' if notes_candidate is None else str(notes_candidate)
+
+    kind_source = payload.get('kind', MISSING)
+    if kind_source is MISSING:
+        kind_value = (existing_data.get('kind') or 'reminder').strip().lower() or 'reminder'
+    else:
+        kind_value = (str(kind_source) or 'reminder').strip().lower() or 'reminder'
+    if kind_value not in {'reminder', 'task'}:
+        kind_value = 'reminder'
+
+    timer_source = payload.get('timer_seconds', MISSING)
+    timer_was_explicit = timer_source is not MISSING
+    if timer_was_explicit:
+        if timer_source in (None, '', 0, '0'):
+            timer_seconds: Optional[int] = None
+        else:
+            try:
+                timer_seconds = int(timer_source)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Timer must be a whole number of seconds.") from exc
+            if timer_seconds <= 0:
+                raise ValueError("Timer must be a whole number of seconds.")
+    else:
+        existing_timer = existing_data.get('timer_seconds')
+        if existing_timer in (None, '', 0, '0'):
+            timer_seconds = None
+        else:
+            try:
+                timer_seconds = int(existing_timer)
+            except (TypeError, ValueError):
+                timer_seconds = None
+
+    due_source_present = 'due_at' in payload
+    due_source_value = payload.get('due_at') if due_source_present else existing_data.get('due_at')
+    if timer_was_explicit and timer_seconds is not None:
+        due_dt: Optional[datetime] = datetime.now(timezone.utc) + timedelta(seconds=timer_seconds)
+    else:
+        if due_source_value in (None, ''):
+            due_dt = None
+        else:
+            due_dt = _coerce_optional_reminder_datetime(due_source_value, timezone_value, 'due_at')
+
+    due_has_time_source = payload.get('due_has_time', MISSING)
+    if timer_was_explicit and timer_seconds is not None:
+        due_has_time = True
+    else:
+        if due_has_time_source is MISSING:
+            due_has_time_flag = existing_data.get('due_has_time')
+        else:
+            due_has_time_flag = due_has_time_source
+        due_has_time = bool(due_has_time_flag) if due_dt else False
+        if due_dt and due_has_time_source is MISSING and due_source_present:
+            try:
+                tz = pytz.timezone(timezone_value)
+                local_dt = due_dt.astimezone(tz)
+                if any((local_dt.hour, local_dt.minute, local_dt.second, local_dt.microsecond)):
                     due_has_time = True
-    completed_at_value = payload.get('completed_at')
-    completed_dt = None
+            except Exception:
+                if isinstance(due_source_value, str) and 'T' in due_source_value:
+                    time_fragment = due_source_value.split('T', 1)[1]
+                    if not time_fragment.startswith('00:00'):
+                        due_has_time = True
+
+    remind_source_present = 'remind_at' in payload
+    remind_source_value = payload.get('remind_at') if remind_source_present else existing_data.get('remind_at')
+    if timer_was_explicit and timer_seconds is not None:
+        remind_dt: Optional[datetime] = due_dt
+    elif remind_source_value in (None, ''):
+        remind_dt = due_dt
+    else:
+        remind_dt = _coerce_optional_reminder_datetime(remind_source_value, timezone_value, 'remind_at')
+
+    completed_source = payload.get('completed', MISSING)
+    if completed_source is MISSING:
+        completed = bool(existing_data.get('completed'))
+    else:
+        completed = bool(completed_source)
+
+    completed_at_source_present = 'completed_at' in payload
+    completed_at_source_value = payload.get('completed_at') if completed_at_source_present else None
+    completed_dt: Optional[datetime] = None
     if completed:
-        completed_dt = _coerce_optional_reminder_datetime(
-            completed_at_value, timezone_value, 'completed_at'
-        )
-        if completed_dt is None:
+        if completed_at_source_present and completed_at_source_value not in (None, ''):
+            completed_dt = _coerce_optional_reminder_datetime(
+                completed_at_source_value, timezone_value, 'completed_at'
+            )
+        elif existing_data.get('completed') and existing_data.get('completed_at'):
+            completed_dt = _coerce_optional_reminder_datetime(
+                existing_data['completed_at'], timezone_value, 'completed_at'
+            )
+        else:
             completed_dt = datetime.now(timezone.utc)
-    normalized_completed_at = completed_dt.isoformat() if completed_dt else None
-    incoming_handle = (payload.get('handle') or '').strip()
+    else:
+        if completed_at_source_present and completed_at_source_value not in (None, ''):
+            completed_dt = _coerce_optional_reminder_datetime(
+                completed_at_source_value, timezone_value, 'completed_at'
+            )
+        else:
+            completed_dt = None
+
+    handle_source = payload.get('handle', MISSING)
+    if handle_source is MISSING:
+        incoming_handle = (existing_data.get('handle') or '').strip()
+    else:
+        incoming_handle = (handle_source or '').strip()
     candidate_handle = incoming_handle or _suggest_reminder_handle(title, due_dt)
     normalized_handle = _ensure_unique_reminder_handle(
         conn,
         candidate_handle,
         existing_id=existing_id,
     )
+
     return {
         'title': title,
         'handle': normalized_handle,
         'notes': notes_text,
+        'kind': kind_value,
         'due_at': due_dt.isoformat() if due_dt else None,
         'due_has_time': bool(due_has_time),
+        'remind_at': remind_dt.isoformat() if remind_dt else None,
+        'timer_seconds': int(timer_seconds) if timer_seconds is not None else None,
         'timezone': timezone_value,
         'completed': completed,
-        'completed_at': normalized_completed_at,
+        'completed_at': completed_dt.isoformat() if completed_dt else None,
     }
 
 
@@ -3977,6 +4308,15 @@ def _serialize_reminder(data: Dict[str, Any]) -> Dict[str, Any]:
     payload['notes'] = payload.get('notes') or ''
     payload['due_at'] = payload.get('due_at') or None
     payload['due_has_time'] = bool(payload.get('due_has_time')) and bool(payload['due_at'])
+    kind_value = (payload.get('kind') or 'reminder').strip().lower() or 'reminder'
+    payload['kind'] = kind_value
+    remind_at_value = payload.get('remind_at') or payload['due_at'] or None
+    payload['remind_at'] = remind_at_value
+    timer_value = payload.get('timer_seconds')
+    try:
+        payload['timer_seconds'] = int(timer_value) if timer_value not in (None, '') else None
+    except (TypeError, ValueError):
+        payload['timer_seconds'] = None
     payload['timezone'] = (payload.get('timezone') or 'UTC').strip() or 'UTC'
     payload['completed'] = bool(payload.get('completed'))
     payload['completed_at'] = payload.get('completed_at') or None
@@ -4177,6 +4517,14 @@ def api_reminders():
             status_param = (request.args.get('status') or 'active').strip().lower()
             if status_param not in {'active', 'completed', 'all'}:
                 status_param = 'active'
+            kind_param = request.args.get('kind') or request.args.get('type')
+            kind_filter = None
+            if kind_param:
+                normalized_kind = kind_param.strip().lower()
+                if normalized_kind in {'task', 'tasks'}:
+                    kind_filter = 'task'
+                elif normalized_kind in {'reminder', 'reminders'}:
+                    kind_filter = 'reminder'
             start_param = request.args.get('start') or request.args.get('range_start')
             end_param = request.args.get('end') or request.args.get('range_end')
             range_start = _parse_calendar_range_boundary(start_param) if start_param else None
@@ -4186,6 +4534,8 @@ def api_reminders():
             reminders: List[Dict[str, Any]] = []
             for record in records:
                 serialized = _serialize_reminder(record)
+                if kind_filter and serialized.get('kind') != kind_filter:
+                    continue
                 if status_param == 'active' and serialized['completed']:
                     continue
                 if status_param == 'completed' and not serialized['completed']:

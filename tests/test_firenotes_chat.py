@@ -2,6 +2,9 @@ import io
 import json
 import pathlib
 import sys
+from datetime import datetime, timedelta, timezone
+
+from dateutil.parser import isoparse
 
 import pytest
 
@@ -127,14 +130,137 @@ def test_chat_creates_reminder_entry(configure_chat_environment):
     assert assistant['metadata']['action'] == 'reminder_created'
     reminder = assistant['metadata']['reminder']
     assert reminder['title'] == 'Follow up'
+    assert reminder['kind'] == 'reminder'
 
     conn = get_db_connection()
     try:
         reminders = get_record_service().list_records(conn, 'reminder')
-        titles = [entry.get('title') for entry in reminders]
-        assert 'Follow up' in titles
+        kinds = {entry.get('title'): entry.get('kind') for entry in reminders}
+        assert kinds.get('Follow up') == 'reminder'
     finally:
         conn.close()
+
+
+def test_chat_creates_task_entry(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Task note')
+
+    response = client.post(
+        '/api/firenotes/chat',
+        json={
+            'note_id': note['id'],
+            'content': '.task Call @wes | 2030-02-01 15:00 | confirm availability',
+        },
+    )
+    assert response.status_code == 200
+    payload = response.get_json()
+    assistant = payload['messages'][1]
+    assert assistant['metadata']['action'] == 'task_created'
+    task = assistant['metadata']['task']
+    assert task['title'] == 'Call @wes'
+    assert task['kind'] == 'task'
+    assert not task['completed']
+
+    conn = get_db_connection()
+    try:
+        reminders = get_record_service().list_records(conn, 'reminder')
+        matches = [entry for entry in reminders if entry.get('title') == 'Call @wes']
+        assert matches and matches[0].get('kind') == 'task'
+    finally:
+        conn.close()
+
+
+def test_chat_creates_timer_reminder_from_short_command(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Timers note')
+
+    before = datetime.now(timezone.utc)
+    response = client.post(
+        '/api/firenotes/chat',
+        json={
+            'note_id': note['id'],
+            'content': '.reminder 3h20m call @wes',
+        },
+    )
+    after = datetime.now(timezone.utc)
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assistant = payload['messages'][1]
+    reminder = assistant['metadata']['reminder']
+    assert reminder['timer_seconds'] == 12000
+    assert reminder['due_at'] is not None
+    due_dt = isoparse(reminder['due_at'])
+    baseline = due_dt - timedelta(seconds=reminder['timer_seconds'])
+    assert before <= baseline <= after
+
+
+def test_task_completion_toggled_with_checkmark_reaction(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Reaction note')
+
+    response = client.post(
+        '/api/firenotes/chat',
+        json={
+            'note_id': note['id'],
+            'content': '.task 45m follow up with @client',
+        },
+    )
+    assert response.status_code == 200
+    payload = response.get_json()
+    assistant = payload['messages'][1]
+    task_metadata = assistant['metadata']['task']
+    assert task_metadata['timer_seconds'] == 2700
+    assert not task_metadata['completed']
+
+    message_id = assistant['id']
+
+    add_response = client.post(
+        '/api/firenotes/chat/reactions',
+        json={'message_id': message_id, 'emoji': '✅'},
+    )
+    assert add_response.status_code == 200
+    add_payload = add_response.get_json()
+    updated_message = add_payload['message']
+    assert updated_message['metadata']['task']['completed']
+
+    remove_response = client.post(
+        '/api/firenotes/chat/reactions',
+        json={'message_id': message_id, 'emoji': '✅'},
+    )
+    assert remove_response.status_code == 200
+    remove_payload = remove_response.get_json()
+    reverted_message = remove_payload['message']
+    assert not reverted_message['metadata']['task']['completed']
+
+    task_id = reverted_message['metadata']['task']['id']
+    conn = get_db_connection()
+    try:
+        records = get_record_service().list_records(conn, 'reminder')
+        stored = next(entry for entry in records if entry['id'] == task_id)
+        assert stored['completed'] is False
+    finally:
+        conn.close()
+
+
+def test_reminders_endpoint_returns_tasks_and_reminders(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+
+    first = client.post('/api/reminders', json={'title': 'Prep briefing', 'kind': 'reminder'})
+    assert first.status_code == 201
+
+    second = client.post(
+        '/api/reminders',
+        json={'title': 'Call vendor', 'kind': 'task', 'timer_seconds': 600},
+    )
+    assert second.status_code == 201
+
+    response = client.get('/api/reminders?status=all')
+    assert response.status_code == 200
+    payload = response.get_json()
+    kinds = {item['title']: item['kind'] for item in payload['reminders']}
+    assert kinds['Prep briefing'] == 'reminder'
+    assert kinds['Call vendor'] == 'task'
 
 
 def test_password_lookup_responds_with_matches(configure_chat_environment):

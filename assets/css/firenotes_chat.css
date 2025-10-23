@@ -461,6 +461,25 @@
     opacity: 0.65;
 }
 
+.fc-message--task .fc-message__bubble {
+    border-left: 4px solid #6366f1;
+    background: rgba(99, 102, 241, 0.08);
+}
+
+.fc-message--task .fc-message__author {
+    color: #4338ca;
+}
+
+.fc-message--task.fc-message--task-completed .fc-message__bubble {
+    border-left-color: #10b981;
+    background: rgba(16, 185, 129, 0.15);
+}
+
+.fc-message--task.fc-message--task-completed .fc-message__text,
+.fc-message--task.fc-message--task-completed .fc-message__meta-body {
+    color: #047857;
+}
+
 .fc-message__main {
     display: flex;
     flex-direction: column;
