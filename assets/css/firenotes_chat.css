@@ -1200,6 +1200,143 @@
     outline: none;
 }
 
+.firenotes-chat .record-mention-context-header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-bottom: 0.75rem;
+}
+
+.firenotes-chat .record-mention-context-name {
+    text-align: left;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #0f172a;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    transition: color 0.18s ease;
+}
+
+.firenotes-chat .record-mention-context-name:hover,
+.firenotes-chat .record-mention-context-name:focus-visible {
+    color: #f97316;
+    outline: none;
+}
+
+.firenotes-chat .record-mention-context-handle {
+    text-align: left;
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: 0.78rem;
+    color: #475569;
+    cursor: pointer;
+    transition: color 0.18s ease;
+}
+
+.firenotes-chat .record-mention-context-handle:hover,
+.firenotes-chat .record-mention-context-handle:focus-visible {
+    color: #f97316;
+    outline: none;
+}
+
+.firenotes-chat .record-mention-context-pill {
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    border-radius: 999px;
+    padding: 0.2rem 0.55rem;
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    background: linear-gradient(135deg, #f8fafc, #e2e8f0);
+    color: #334155;
+}
+
+.firenotes-chat .record-mention-contact-grid {
+    display: grid;
+    gap: 0.75rem;
+    font-size: 0.9rem;
+}
+
+.firenotes-chat .record-mention-contact-tile {
+    width: 100%;
+    border: 1px solid rgba(148, 163, 184, 0.4);
+    border-radius: 16px;
+    padding: 0.85rem 1rem;
+    text-align: left;
+    background: linear-gradient(160deg, #ffffff 0%, #f8fafc 100%);
+    color: #1e293b;
+    box-shadow: 0 18px 36px -28px rgba(15, 23, 42, 0.45);
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    cursor: pointer;
+    transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+
+.firenotes-chat .record-mention-contact-tile:hover,
+.firenotes-chat .record-mention-contact-tile:focus-visible {
+    transform: translateY(-2px);
+    border-color: rgba(249, 115, 22, 0.55);
+    box-shadow: 0 22px 40px -24px rgba(249, 115, 22, 0.45);
+    background: linear-gradient(160deg, #fff7ed 0%, #fffbeb 100%);
+    outline: none;
+}
+
+.firenotes-chat .record-mention-contact-tile__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.firenotes-chat .record-mention-contact-tile__label {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #64748b;
+}
+
+.firenotes-chat .record-mention-contact-tile__badge {
+    border-radius: 999px;
+    padding: 0.1rem 0.55rem;
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    background: rgba(59, 130, 246, 0.1);
+    color: #1d4ed8;
+}
+
+.firenotes-chat .record-mention-contact-tile__value {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #0f172a;
+    line-height: 1.35;
+}
+
+.firenotes-chat .record-mention-contact-tile__hint {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: #cbd5f5;
+}
+
+.firenotes-chat .record-mention-contact-empty {
+    border: 1px dashed rgba(148, 163, 184, 0.7);
+    border-radius: 14px;
+    padding: 0.9rem 1rem;
+    font-size: 0.85rem;
+    color: #64748b;
+    background: rgba(248, 250, 252, 0.85);
+    text-align: center;
+}
+
 .fc-message__text-content {
     display: inline;
 }
