@@ -272,6 +272,21 @@ MAX_CHAT_HISTORY = 250
 DEFAULT_CHAT_REACTOR = 'workspace-user'
 FIRENOTES_MENTION = '@firenotes'
 
+CLEAR_CATEGORY_ACTIONS = {
+    'tasks': {'task_created'},
+    'reminders': {'reminder_created', 'reminder_fired'},
+    'events': {'calendar_event_created'},
+}
+
+CLEAR_CATEGORY_LABELS = {
+    'tasks': ('task update', 'task updates'),
+    'reminders': ('reminder update', 'reminder updates'),
+    'events': ('event update', 'event updates'),
+    'commands': ('command message', 'command messages'),
+}
+
+CHAT_CLEAR_SCAN_LIMIT = 500
+
 
 def _resolve_timezone_setting() -> str:
     settings = read_json_file(SETTINGS_FILE)
@@ -316,6 +331,97 @@ def _parse_json_column(value: Optional[str]) -> Optional[Any]:
         return json.loads(value)
     except json.JSONDecodeError:
         return None
+
+
+def _normalize_clear_author_handle(handle: str) -> Optional[str]:
+    if not handle:
+        return None
+    cleaned = handle.strip()
+    if cleaned.startswith('@'):
+        cleaned = cleaned[1:]
+    lowered = cleaned.lower()
+    if lowered in {'you', 'me', 'user'}:
+        return 'user'
+    if lowered in {'firecoast', 'firenotes', 'assistant'}:
+        return 'assistant'
+    if lowered:
+        return lowered
+    return None
+
+
+def _format_clear_target_label(author: Optional[str]) -> str:
+    if not author:
+        return 'messages'
+    normalized = str(author).strip().lower()
+    if normalized in {'user', 'you', 'me'}:
+        return '@you'
+    if normalized in {'assistant', 'firecoast', 'firenotes'}:
+        return '@firecoast'
+    if normalized.startswith('@'):
+        return normalized
+    return f"@{normalized}"
+
+
+def _format_clear_category_label(category: str, count: int) -> str:
+    singular, plural = CLEAR_CATEGORY_LABELS.get(category, (category, f"{category}s"))
+    return singular if count == 1 else plural
+
+
+def _collect_messages_for_clear(
+    conn: sqlite3.Connection,
+    note_id: str,
+    *,
+    author: Optional[str] = None,
+    category: Optional[str] = None,
+    count: Optional[int] = None,
+    skip_ids: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    if not note_id:
+        return []
+    normalized_skip = {str(value) for value in (skip_ids or []) if value}
+    params: List[Any] = [note_id]
+    query = (
+        "SELECT id, note_id, author, content, metadata_json, attachments_json, created_at "
+        "FROM firecoast_chat_messages WHERE note_id = ?"
+    )
+    if author:
+        query += " AND LOWER(author) = ?"
+        params.append(author.lower())
+    query += " ORDER BY datetime(created_at) DESC, rowid DESC LIMIT ?"
+    scan_limit = CHAT_CLEAR_SCAN_LIMIT
+    if count is not None:
+        scan_limit = max(25, min(CHAT_CLEAR_SCAN_LIMIT, count * 5))
+    params.append(scan_limit)
+    cursor = conn.execute(query, params)
+    matches: List[Dict[str, Any]] = []
+    allowed_actions = CLEAR_CATEGORY_ACTIONS.get(category or '', set())
+    for row in cursor.fetchall():
+        record = dict(row)
+        message_id = str(record.get('id') or '')
+        if not message_id or message_id in normalized_skip:
+            continue
+        metadata = _parse_json_column(record.get('metadata_json')) or {}
+        content = (record.get('content') or '')
+        normalized_content = content.lstrip()
+        if category:
+            if category == 'commands':
+                if not normalized_content.startswith('.'):
+                    continue
+            else:
+                action = str(metadata.get('action') or '').lower()
+                if action not in allowed_actions:
+                    continue
+        matches.append(
+            {
+                'id': message_id,
+                'author': record.get('author'),
+                'metadata': metadata,
+                'content': content,
+            }
+        )
+        if count is not None and len(matches) >= count:
+            break
+    return matches
 
 
 def _serialize_chat_row(
@@ -1052,6 +1158,156 @@ def _format_event_window(event_payload: Dict[str, Any], timezone_name: str) -> s
         return f"{start_dt.strftime('%b %d, %Y %I:%M %p')} – {end_dt.strftime('%I:%M %p %Z')}"
     return f"{start_dt.strftime('%b %d, %Y %I:%M %p')} – {end_dt.strftime('%b %d, %Y %I:%M %p %Z')}"
 
+def _handle_clear_command(
+    conn: sqlite3.Connection, message: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    note_id = message.get('note_id') or ''
+    content = (message.get('content') or '')
+    if not note_id:
+        return []
+    body = content[len('.clear'):].strip()
+    criteria: Dict[str, Any] = {}
+    if not body:
+        feedback = (
+            "Tell me what to clear. Try `.clear 4 @firecoast`, `.clear tasks`, or `.clear commands`."
+        )
+        metadata = {
+            'action': 'clear_result',
+            'status': 'error',
+            'reason': 'missing_target',
+            'criteria': criteria,
+        }
+        return [_store_chat_message(conn, note_id, 'assistant', feedback, metadata=metadata)]
+
+    tokens = body.split()
+    category: Optional[str] = None
+    author: Optional[str] = None
+    count: Optional[int] = None
+
+    if tokens:
+        keyword = tokens[0].lower()
+        if keyword in CLEAR_CATEGORY_ACTIONS or keyword == 'commands':
+            category = keyword
+            remaining = tokens[1:]
+            if remaining:
+                head = remaining[0].lower()
+                if head == 'all':
+                    count = None
+                elif head.isdigit():
+                    count = max(1, int(head))
+            if count is None:
+                count = None
+        else:
+            pointer = 0
+            if keyword == 'all':
+                count = None
+                pointer += 1
+            elif keyword.isdigit():
+                count = max(1, int(keyword))
+                pointer += 1
+            else:
+                count = 1
+            if pointer >= len(tokens):
+                feedback = (
+                    "I couldn't understand that clear command. Try `.clear 4 @firecoast` or `.clear tasks`."
+                )
+                metadata = {
+                    'action': 'clear_result',
+                    'status': 'error',
+                    'reason': 'missing_target',
+                    'criteria': criteria,
+                }
+                return [_store_chat_message(conn, note_id, 'assistant', feedback, metadata=metadata)]
+            handle_token = tokens[pointer]
+            author = _normalize_clear_author_handle(handle_token)
+            if not author:
+                feedback = f"I don't recognize {handle_token}. Try @you or @firecoast."
+                metadata = {
+                    'action': 'clear_result',
+                    'status': 'error',
+                    'reason': 'unknown_author',
+                    'criteria': criteria,
+                }
+                return [_store_chat_message(conn, note_id, 'assistant', feedback, metadata=metadata)]
+            pointer += 1
+            if pointer < len(tokens):
+                tail = tokens[pointer].lower()
+                if tail == 'all':
+                    count = None
+                elif tail.isdigit():
+                    count = max(1, int(tail))
+
+    if category:
+        criteria['category'] = category
+        if count is not None:
+            criteria['count'] = count
+        else:
+            criteria['count'] = 'all'
+    elif author:
+        criteria['author'] = author
+        criteria['count'] = 'all' if count is None else count
+    else:
+        feedback = (
+            "I couldn't understand that clear command. Try `.clear tasks` or `.clear 4 @firecoast`."
+        )
+        metadata = {
+            'action': 'clear_result',
+            'status': 'error',
+            'reason': 'missing_target',
+            'criteria': criteria,
+        }
+        return [_store_chat_message(conn, note_id, 'assistant', feedback, metadata=metadata)]
+
+    skip_ids = [message.get('id')]
+    targets = _collect_messages_for_clear(
+        conn,
+        note_id,
+        author=author,
+        category=category,
+        count=count,
+        skip_ids=skip_ids,
+    )
+
+    if not targets:
+        feedback = "I couldn't find any matching messages to clear."
+        metadata = {
+            'action': 'clear_result',
+            'status': 'noop',
+            'reason': 'no_matches',
+            'criteria': criteria,
+        }
+        return [_store_chat_message(conn, note_id, 'assistant', feedback, metadata=metadata)]
+
+    cleared: List[Dict[str, Any]] = []
+    for target in targets:
+        deleted = _delete_chat_message(conn, target['id'])
+        cleared.append(
+            {
+                'id': deleted.get('id'),
+                'author': target.get('author'),
+            }
+        )
+
+    cleared_count = len(cleared)
+    metadata = {
+        'action': 'clear_result',
+        'status': 'success',
+        'cleared_count': cleared_count,
+        'criteria': criteria,
+        'cleared_message_ids': [entry.get('id') for entry in cleared if entry.get('id')],
+        'cleared_authors': sorted({(entry.get('author') or '').lower() for entry in cleared if entry.get('author')}),
+    }
+
+    if category:
+        label = _format_clear_category_label(category, cleared_count)
+        feedback = f"Cleared {cleared_count} {label}."
+    else:
+        label = _format_clear_target_label(author)
+        noun = 'message' if cleared_count == 1 else 'messages'
+        feedback = f"Cleared {cleared_count} {noun} from {label}."
+
+    return [_store_chat_message(conn, note_id, 'assistant', feedback, metadata=metadata)]
+
 def _handle_event_command(conn: sqlite3.Connection, note_id: str, content: str) -> List[Dict[str, Any]]:
     body = content[len('.event'):].strip()
     if not body:
@@ -1502,6 +1758,8 @@ def _handle_chat_message(conn: sqlite3.Connection, message: Dict[str, Any]) -> L
     if not note_id:
         return []
     lowered = content.lower()
+    if lowered.startswith('.clear'):
+        return _handle_clear_command(conn, message)
     if lowered.startswith('.event'):
         return _handle_event_command(conn, note_id, content)
     if lowered.startswith('.reminder'):

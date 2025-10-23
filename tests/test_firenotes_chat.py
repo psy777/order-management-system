@@ -56,6 +56,13 @@ def _create_note(client, title='New note'):
     return payload['note']
 
 
+def _list_note_messages(client, note_id, limit=100):
+    response = client.get(f'/api/firenotes/chat?noteId={note_id}&limit={limit}')
+    assert response.status_code == 200
+    payload = response.get_json()
+    return payload['messages']
+
+
 def test_init_db_upgrades_record_handles_schema(configure_chat_environment):
     conn = get_db_connection()
     try:
@@ -194,6 +201,95 @@ def test_chat_creates_timer_reminder_from_short_command(configure_chat_environme
     due_dt = isoparse(reminder['due_at'])
     baseline = due_dt - timedelta(seconds=reminder['timer_seconds'])
     assert before <= baseline <= after
+
+
+def test_clear_command_removes_firecoast_messages_by_count(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Clear count note')
+
+    create_response = client.post(
+        '/api/firenotes/chat',
+        json={'note_id': note['id'], 'content': '.task Send recap | 2030-01-01 09:00'},
+    )
+    assert create_response.status_code == 200
+    assistant_task = create_response.get_json()['messages'][-1]
+    assert assistant_task['metadata']['action'] == 'task_created'
+    history = _list_note_messages(client, note['id'])
+    assert any((msg.get('metadata') or {}).get('action') == 'task_created' for msg in history)
+
+    clear_response = client.post(
+        '/api/firenotes/chat',
+        json={'note_id': note['id'], 'content': '.clear 1 @firecoast'},
+    )
+    assert clear_response.status_code == 200
+    payload = clear_response.get_json()
+    summary = payload['messages'][-1]
+    assert summary['metadata']['action'] == 'clear_result'
+    assert summary['metadata']['status'] == 'success'
+    assert summary['metadata']['cleared_count'] == 1
+    assert summary['metadata']['criteria']['author'] == 'assistant'
+
+    remaining = _list_note_messages(client, note['id'])
+    assert not any((msg.get('metadata') or {}).get('action') == 'task_created' for msg in remaining)
+
+
+def test_clear_command_category_tasks(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Clear tasks note')
+
+    for index, title in enumerate(['Check invoices', 'Draft follow-up'], start=1):
+        response = client.post(
+            '/api/firenotes/chat',
+            json={
+                'note_id': note['id'],
+                'content': f'.task {title} | 2030-01-0{index} 10:00',
+            },
+        )
+        assert response.status_code == 200
+
+    clear_response = client.post(
+        '/api/firenotes/chat',
+        json={'note_id': note['id'], 'content': '.clear tasks'},
+    )
+    assert clear_response.status_code == 200
+    summary = clear_response.get_json()['messages'][-1]
+    assert summary['metadata']['action'] == 'clear_result'
+    assert summary['metadata']['criteria']['category'] == 'tasks'
+    assert summary['metadata']['cleared_count'] == 2
+
+    remaining = _list_note_messages(client, note['id'])
+    assert not any((msg.get('metadata') or {}).get('action') == 'task_created' for msg in remaining)
+
+
+def test_clear_command_prunes_user_commands(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Clear commands note')
+
+    first = client.post(
+        '/api/firenotes/chat',
+        json={'note_id': note['id'], 'content': '.task Prepare agenda'},
+    )
+    assert first.status_code == 200
+
+    clear_response = client.post(
+        '/api/firenotes/chat',
+        json={'note_id': note['id'], 'content': '.clear commands'},
+    )
+    assert clear_response.status_code == 200
+    payload = clear_response.get_json()
+    clear_command_message = payload['messages'][0]
+    summary = payload['messages'][-1]
+    assert summary['metadata']['criteria']['category'] == 'commands'
+    assert summary['metadata']['cleared_count'] == 1
+
+    remaining = _list_note_messages(client, note['id'])
+    remaining_commands = [
+        msg
+        for msg in remaining
+        if msg.get('author') == 'user' and (msg.get('content') or '').lstrip().startswith('.')
+    ]
+    assert remaining_commands
+    assert {msg['id'] for msg in remaining_commands} == {clear_command_message['id']}
 
 
 def test_task_completion_toggled_with_checkmark_reaction(configure_chat_environment):

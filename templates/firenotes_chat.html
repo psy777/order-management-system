@@ -1616,15 +1616,16 @@
                     addItem('Copy Message Link', () => {
                         handleCopyMessageLink(message);
                     });
-                    if (isUserMessage(message)) {
-                        addItem(
-                            'Delete Message',
-                            () => {
-                                handleDeleteMessage(message);
-                            },
-                            { destructive: true }
-                        );
-                    }
+                    addItem(
+                        'Delete Message',
+                        () => {
+                            handleDeleteMessage(message);
+                        },
+                        {
+                            destructive: true,
+                            disabled: !message.id || isMessageActionPending(message.id),
+                        }
+                    );
                     return menu;
                 }, {
                     placement: 'top-end',
