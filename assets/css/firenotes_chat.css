@@ -1185,7 +1185,7 @@
 
 .firenotes-chat .record-mention-text button {
     border: 1px solid #d0d5dd;
-    border-radius: 999px;
+    border-radius: 0.3rem;
     padding: 2px 8px;
     background: #f8fafc;
     color: #1f2933;

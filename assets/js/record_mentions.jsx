@@ -879,8 +879,8 @@ function RecordMentionTextarea({
             const mentionText = `@${rawHandle || handle}`;
             const pillLabel = isCaretInside ? mentionText : displayLabel;
             const pillClasses = isCaretInside
-                ? 'mention-pill pointer-events-auto inline-flex max-w-full items-center gap-1 rounded-full border border-orange-300 bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700 shadow-sm'
-                : 'mention-pill pointer-events-auto inline-flex max-w-full items-center gap-1 rounded-full border border-orange-200 bg-orange-50 px-2 py-0.5 text-xs font-semibold text-orange-700 shadow-sm transition-colors hover:bg-orange-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500';
+                ? 'mention-pill pointer-events-auto inline-flex max-w-full items-center gap-1 rounded-md border border-orange-300 bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700 shadow-sm'
+                : 'mention-pill pointer-events-auto inline-flex max-w-full items-center gap-1 rounded-md border border-orange-200 bg-orange-50 px-2 py-0.5 text-xs font-semibold text-orange-700 shadow-sm transition-colors hover:bg-orange-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500';
             const caretWithinMention = isCaretInside && typeof caretOffset === 'number'
                 ? Math.max(0, Math.min(mentionText.length, caretOffset))
                 : null;
@@ -916,7 +916,7 @@ function RecordMentionTextarea({
                         <span className="truncate">{pillLabel}</span>
                     )}
                     {!isCaretInside && badgeLabel && (
-                        <span className="rounded-full bg-orange-100 px-1 text-[10px] font-semibold uppercase tracking-wide text-orange-600">
+                        <span className="rounded-md bg-orange-100 px-1 text-[10px] font-semibold uppercase tracking-wide text-orange-600">
                             {badgeLabel}
                         </span>
                     )}
@@ -997,7 +997,7 @@ function RecordMentionTextarea({
                                         <div className="record-mention-textarea__option-main flex items-center justify-between gap-2">
                                             <span className="record-mention-textarea__item-label font-semibold">{displayLabel}</span>
                                             {entityLabel && (
-                                                <span className="record-mention-textarea__item-entity rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                                                <span className="record-mention-textarea__item-entity rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                                                     {entityLabel}
                                                 </span>
                                             )}
@@ -1067,7 +1067,7 @@ function RecordMentionText({
                     key={`mention-${start}-${handle}`}
                     type="button"
                     data-mention-handle={handle}
-                    className="pointer-events-auto inline-flex max-w-full items-center gap-1 rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-sm font-medium text-slate-700 transition-colors hover:bg-orange-50 hover:text-orange-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500"
+                    className="pointer-events-auto inline-flex max-w-full items-center gap-1 rounded-md border border-slate-300 bg-slate-50 px-2 py-0.5 text-sm font-medium text-slate-700 transition-colors hover:bg-orange-50 hover:text-orange-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500"
                     style={{ pointerEvents: 'auto' }}
                     onClick={event => openContextMenuFromEvent(event, handle, metadata)}
                     aria-label={metadata?.displayName ? `Mention: ${metadata.displayName}` : `Mention handle ${handle}`}
@@ -1075,7 +1075,7 @@ function RecordMentionText({
                 >
                     <span className="truncate">{displayLabel}</span>
                     {badgeLabel && (
-                        <span className="rounded-full bg-slate-200 px-1 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                        <span className="rounded-md bg-slate-200 px-1 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
                             {badgeLabel}
                         </span>
                     )}
