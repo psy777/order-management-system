@@ -16,13 +16,21 @@ data. The script first verifies that your working tree is clean, creates a ZIP
 backup of the `data/` directory, pulls the newest code, and finally reinstalls
 Python dependencies.
 
-To upgrade an installation, run the following from the project root:
+To upgrade an installation:
 
-```
-python upgrade.py
-```
+1. Ensure your working tree is clean (`git status` should report no pending
+   changes). The script refuses to run if it detects uncommitted work so you
+   have a chance to stash or commit first.
+2. From the project root, execute:
 
-By default the script pulls from the `origin` remote and the `master` branch.
+   ```
+   python upgrade.py
+   ```
+
+   The helper will create a ZIP backup of `data/`, fetch the latest
+   `master` commit from `origin`, hard-reset your local `master` to that
+   revision, and reinstall dependencies from `requirements.txt`.
+
 You can customise the source remote or branch, or skip dependency installation
 if you prefer to manage it manually:
 
@@ -30,9 +38,10 @@ if you prefer to manage it manually:
 python upgrade.py --remote upstream --branch master --skip-deps
 ```
 
-If anything goes wrong during the process you can find the generated backup
-under `upgrade_backups/` and restore the previous state via the `/api/import-data`
-endpoint or the `services.backup` helpers.
+On success the command prints where the backup archive lives (under
+`upgrade_backups/`) and the previous/current Git revisions. If anything goes
+wrong you can restore the backup through the `/api/import-data` endpoint or the
+`services.backup` helpers.
 
 ## Schema-driven records
 
