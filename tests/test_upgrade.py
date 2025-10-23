@@ -211,6 +211,12 @@ def test_upgrade_endpoint_invokes_service(monkeypatch, tmp_path):
         )
 
     monkeypatch.setattr(firenotes_app, 'perform_upgrade', fake_perform_upgrade)
+    restart_calls: dict[str, float] = {}
+
+    def fake_schedule_restart(delay: float = firenotes_app.RESTART_DELAY_SECONDS) -> None:
+        restart_calls['delay'] = delay
+
+    monkeypatch.setattr(firenotes_app, '_schedule_post_upgrade_restart', fake_schedule_restart)
 
     response = client.post('/api/system/upgrade', json={})
     assert response.status_code == 200
@@ -219,6 +225,9 @@ def test_upgrade_endpoint_invokes_service(monkeypatch, tmp_path):
     assert payload['previousRevision'] == 'abc123'
     assert payload['currentRevision'] == 'def456'
     assert payload['dependenciesInstalled'] is True
+    assert payload['restartScheduled'] is True
+    assert 'delay' in restart_calls
+    assert restart_calls['delay'] == firenotes_app.RESTART_DELAY_SECONDS
 
 
 def test_upgrade_endpoint_respects_skip_dependencies(monkeypatch, tmp_path):

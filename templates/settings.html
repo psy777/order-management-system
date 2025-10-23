@@ -389,10 +389,10 @@ hello@firenotes.com</p>
                 }
             };
 
-            const waitForAppRestart = () => {
+            const waitForAppRestart = (delayMs = 1000) => {
                 setTimeout(() => {
                     window.location.reload();
-                }, 1000);
+                }, Math.max(0, delayMs));
             };
 
             const setUpgradeButtonBusy = (isBusy) => {
@@ -818,8 +818,11 @@ hello@firenotes.com</p>
                         }
 
                         upgradeSucceeded = true;
-                        setStatus(upgradeStatus, 'Upgrade complete. Reloading…', 'success');
-                        waitForAppRestart();
+                        const upgradeMessage = payload.restartScheduled
+                            ? 'Upgrade complete. Restarting…'
+                            : 'Upgrade complete. Reloading…';
+                        setStatus(upgradeStatus, upgradeMessage, 'success');
+                        waitForAppRestart(payload.restartScheduled ? 2000 : 1000);
                     } catch (error) {
                         console.error(error);
                         const message =

@@ -60,11 +60,31 @@ from services.records import (
 load_dotenv()
 
 # --- App Initialization ---
+RESTART_DELAY_SECONDS = 1.0
+
 app = Flask(__name__, template_folder='templates')
 app.config['JSON_SORT_KEYS'] = False
 app.secret_key = os.urandom(24)
 
 _db_bootstrapped = False
+
+
+def _schedule_post_upgrade_restart(delay: float = RESTART_DELAY_SECONDS) -> None:
+    """Re-exec the current process after a short delay to load the new code."""
+
+    if app.config.get('TESTING'):
+        app.logger.info('Skipping restart scheduling while running tests')
+        return
+
+    def _perform_restart() -> None:
+        try:
+            app.logger.info('Restarting process to finalize upgrade')
+        except Exception:  # pragma: no cover - logging best effort
+            pass
+        python_executable = sys.executable
+        os.execl(python_executable, python_executable, *sys.argv)
+
+    Timer(delay, _perform_restart).start()
 
 
 @app.before_request
@@ -4961,6 +4981,9 @@ def trigger_system_upgrade():
             500,
         )
 
+    app.logger.info('Upgrade succeeded; scheduling application restart')
+    _schedule_post_upgrade_restart()
+
     return (
         jsonify(
             {
@@ -4969,6 +4992,7 @@ def trigger_system_upgrade():
                 'previousRevision': result.previous_revision,
                 'currentRevision': result.current_revision,
                 'dependenciesInstalled': not skip_dependencies,
+                'restartScheduled': True,
             }
         ),
         200,
