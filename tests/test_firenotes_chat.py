@@ -741,6 +741,36 @@ def test_note_handles_available_in_directory(configure_chat_environment):
     assert note.get('handle') in handles
 
 
+def test_contact_handles_include_contact_details(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    response = client.post(
+        '/api/contacts',
+        json={
+            'companyName': 'Fire Coast Logistics',
+            'contactName': 'David Tucker',
+            'email': 'david@example.com',
+            'phone': '555-0100',
+            'handle': 'davidtucker',
+        },
+    )
+    assert response.status_code == 201
+    payload = response.get_json()
+    created_contact = payload['contact']
+    contact_id = created_contact['id']
+
+    handles_response = client.get('/api/records/handles?entity_types=contact')
+    assert handles_response.status_code == 200
+    handles_payload = handles_response.get_json()
+    directory = handles_payload.get('handles', [])
+    match = next((entry for entry in directory if entry['entityId'] == contact_id), None)
+    assert match is not None
+    assert match['handle'] == 'davidtucker'
+    assert match['contact']['contactName'] == 'David Tucker'
+    assert match['contact']['companyName'] == 'Fire Coast Logistics'
+    assert match['contact']['email'] == 'david@example.com'
+    assert match['contact']['phone'] == '5550100'
+
+
 def test_delete_note_removes_history_and_files(configure_chat_environment):
     client = firenotes_app.app.test_client()
     note = _create_note(client, 'Disposable note')

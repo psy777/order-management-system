@@ -329,14 +329,19 @@ function useMentionContextMenu({ handlesMap, refresh, containerRef }) {
         };
     }, [closeContextMenu, containerRef, contextMenu.isOpen]);
 
-    const copyHandleToClipboard = useCallback(async handleValue => {
-        const handleText = `@${handleValue}`;
+    const copyValueToClipboard = useCallback(async (value, label) => {
+        if (!value) {
+            setMenuFeedback(`No ${label.toLowerCase()} available to copy`);
+            setTimeout(() => setMenuFeedback(''), 2000);
+            return;
+        }
+        const textValue = value;
         try {
             if (navigator.clipboard && navigator.clipboard.writeText) {
-                await navigator.clipboard.writeText(handleText);
+                await navigator.clipboard.writeText(textValue);
             } else {
                 const input = document.createElement('textarea');
-                input.value = handleText;
+                input.value = textValue;
                 input.setAttribute('readonly', '');
                 input.style.position = 'absolute';
                 input.style.left = '-9999px';
@@ -345,14 +350,19 @@ function useMentionContextMenu({ handlesMap, refresh, containerRef }) {
                 document.execCommand('copy');
                 document.body.removeChild(input);
             }
-            setMenuFeedback('Handle copied to clipboard');
+            setMenuFeedback(`${label} copied to clipboard`);
             setTimeout(() => setMenuFeedback(''), 2000);
         } catch (err) {
-            console.error('Failed to copy handle', err);
+            console.error('Failed to copy value', err);
             setMenuFeedback('Unable to copy automatically');
             setTimeout(() => setMenuFeedback(''), 2500);
         }
-    }, []);
+    }, [setMenuFeedback]);
+
+    const copyHandleToClipboard = useCallback(async handleValue => {
+        const handleText = handleValue ? `@${handleValue}` : '';
+        await copyValueToClipboard(handleText, 'Handle');
+    }, [copyValueToClipboard]);
 
     const openContextMenuAtRect = useCallback((handle, metadata, rect, options = {}) => {
         const normalisedHandle = normaliseHandle(handle);
@@ -390,6 +400,24 @@ function useMentionContextMenu({ handlesMap, refresh, containerRef }) {
         ? `/api/records/${(contextMetadata.entityType || '').toLowerCase()}/${encodeURIComponent(contextMetadata.entityId)}`
         : null;
     const resolvedHandleForDisplay = contextMenu.rawHandle || contextMenu.handle || '';
+    const contactDetails = contextMetadata && contextMetadata.contact ? contextMetadata.contact : null;
+
+    const renderContactInfoButton = (label, value) => {
+        if (!value) {
+            return null;
+        }
+        return (
+            <button
+                type="button"
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-left transition hover:border-orange-300 hover:bg-orange-50"
+                onClick={() => copyValueToClipboard(value, label)}
+            >
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{label}</div>
+                <div className="mt-0.5 break-words text-sm font-medium text-slate-700">{value}</div>
+                <div className="mt-1 text-[10px] uppercase tracking-wide text-slate-300">Click to copy</div>
+            </button>
+        );
+    };
 
     const ContextMenu = contextMenu.isOpen ? (
         <div
@@ -398,82 +426,103 @@ function useMentionContextMenu({ handlesMap, refresh, containerRef }) {
             style={{ top: contextMenu.position.top, left: contextMenu.position.left }}
         >
             <div className="space-y-1">
-                <div className="text-sm font-semibold text-slate-900">{getDisplayLabel(contextMetadata, resolvedHandleForDisplay)}</div>
-                <div className="text-xs text-slate-500">@{resolvedHandleForDisplay}</div>
+                <button
+                    type="button"
+                    className="text-left text-sm font-semibold text-slate-900 transition hover:text-orange-700 focus:outline-none"
+                    onClick={() => {
+                        if (!recordUrl) {
+                            setMenuFeedback('No record destination yet.');
+                            setTimeout(() => setMenuFeedback(''), 2000);
+                            return;
+                        }
+                        window.open(recordUrl, '_blank');
+                        closeContextMenu();
+                    }}
+                >
+                    {getDisplayLabel(contextMetadata, resolvedHandleForDisplay)}
+                </button>
+                <button
+                    type="button"
+                    className="text-left text-xs text-slate-500 transition hover:text-orange-600 focus:outline-none"
+                    onClick={() => copyHandleToClipboard(resolvedHandleForDisplay)}
+                >
+                    @{resolvedHandleForDisplay}
+                </button>
                 {contextEntityLabel && (
                     <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
                         {contextEntityLabel}
                     </span>
                 )}
             </div>
-            <div className="mt-3 flex flex-col gap-1 text-sm">
-                <button
-                    type="button"
-                    className="flex items-center justify-between rounded-md px-2 py-2 text-left transition hover:bg-orange-50 hover:text-orange-700"
-                    onClick={() => {
-                        if (!recordUrl) {
-                            setMenuFeedback('No record destination yet.');
-                            return;
-                        }
-                        window.open(recordUrl, '_blank');
-                        closeContextMenu();
-                    }}
-                    disabled={!recordUrl}
-                >
-                    <span>{hasUiDestination ? 'Open record' : 'View record JSON'}</span>
-                    {!recordUrl && <span className="text-xs text-slate-400">Unavailable</span>}
-                </button>
-                <button
-                    type="button"
-                    className="flex items-center justify-between rounded-md px-2 py-2 text-left transition hover:bg-orange-50 hover:text-orange-700"
-                    onClick={() => {
-                        if (!activityUrl) {
-                            setMenuFeedback('No activity log available yet.');
-                            return;
-                        }
-                        window.open(activityUrl, '_blank');
-                        closeContextMenu();
-                    }}
-                    disabled={!activityUrl}
-                >
-                    <span>Open activity log</span>
-                    {!activityUrl && <span className="text-xs text-slate-400">Unavailable</span>}
-                </button>
-                <button
-                    type="button"
-                    className="flex items-center justify-between rounded-md px-2 py-2 text-left transition hover:bg-orange-50 hover:text-orange-700"
-                    onClick={() => copyHandleToClipboard(resolvedHandleForDisplay)}
-                >
-                    <span>Copy handle</span>
-                    <span className="text-xs text-slate-400">@{resolvedHandleForDisplay}</span>
-                </button>
-                {apiUrl && (
+            {contactDetails ? (
+                <div className="mt-3 flex flex-col gap-2 text-sm">
+                    {renderContactInfoButton('Contact', contactDetails.contactName)}
+                    {renderContactInfoButton('Company', contactDetails.companyName)}
+                    {renderContactInfoButton('Email', contactDetails.email)}
+                    {renderContactInfoButton('Phone', contactDetails.phone)}
+                </div>
+            ) : (
+                <div className="mt-3 flex flex-col gap-1 text-sm">
                     <button
                         type="button"
                         className="flex items-center justify-between rounded-md px-2 py-2 text-left transition hover:bg-orange-50 hover:text-orange-700"
                         onClick={() => {
-                            window.open(apiUrl, '_blank');
+                            if (!recordUrl) {
+                                setMenuFeedback('No record destination yet.');
+                                return;
+                            }
+                            window.open(recordUrl, '_blank');
                             closeContextMenu();
                         }}
+                        disabled={!recordUrl}
                     >
-                        <span>Open raw record</span>
-                        <span className="text-xs text-slate-400">API</span>
+                        <span>{hasUiDestination ? 'Open record' : 'View record JSON'}</span>
+                        {!recordUrl && <span className="text-xs text-slate-400">Unavailable</span>}
                     </button>
-                )}
-                <button
-                    type="button"
-                    className="flex items-center justify-between rounded-md px-2 py-2 text-left transition hover:bg-orange-50 hover:text-orange-700"
-                    onClick={() => {
-                        if (typeof refresh === 'function') {
-                            refresh();
-                        }
-                        setMenuFeedback('Directory refresh requested');
-                        setTimeout(() => setMenuFeedback(''), 2000);
-                    }}
-                >
-                    <span>Refresh directory</span>
-                </button>
-            </div>
+                    <button
+                        type="button"
+                        className="flex items-center justify-between rounded-md px-2 py-2 text-left transition hover:bg-orange-50 hover:text-orange-700"
+                        onClick={() => {
+                            if (!activityUrl) {
+                                setMenuFeedback('No activity log available yet.');
+                                return;
+                            }
+                            window.open(activityUrl, '_blank');
+                            closeContextMenu();
+                        }}
+                        disabled={!activityUrl}
+                    >
+                        <span>Open activity log</span>
+                        {!activityUrl && <span className="text-xs text-slate-400">Unavailable</span>}
+                    </button>
+                    {apiUrl && (
+                        <button
+                            type="button"
+                            className="flex items-center justify-between rounded-md px-2 py-2 text-left transition hover:bg-orange-50 hover:text-orange-700"
+                            onClick={() => {
+                                window.open(apiUrl, '_blank');
+                                closeContextMenu();
+                            }}
+                        >
+                            <span>Open raw record</span>
+                            <span className="text-xs text-slate-400">API</span>
+                        </button>
+                    )}
+                    <button
+                        type="button"
+                        className="flex items-center justify-between rounded-md px-2 py-2 text-left transition hover:bg-orange-50 hover:text-orange-700"
+                        onClick={() => {
+                            if (typeof refresh === 'function') {
+                                refresh();
+                            }
+                            setMenuFeedback('Directory refresh requested');
+                            setTimeout(() => setMenuFeedback(''), 2000);
+                        }}
+                    >
+                        <span>Refresh directory</span>
+                    </button>
+                </div>
+            )}
             {menuFeedback && (
                 <div className="mt-3 text-xs font-medium text-emerald-600">{menuFeedback}</div>
             )}

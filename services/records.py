@@ -578,16 +578,52 @@ class RecordService:
             sql += " WHERE " + " AND ".join(conditions)
         sql += " ORDER BY display_name COLLATE NOCASE ASC"
         cursor = conn.execute(sql, params)
-        results = []
-        for row in cursor.fetchall():
+        rows = cursor.fetchall()
+        results: List[Dict[str, Any]] = []
+        contact_ids: List[str] = []
+
+        for row in rows:
+            entity_type = row["entity_type"]
+            entity_id = row["entity_id"]
+            if entity_type and entity_type.lower() == "contact" and entity_id:
+                contact_ids.append(str(entity_id))
             results.append(
                 {
                     "handle": row["handle"],
-                    "entityType": row["entity_type"],
-                    "entityId": row["entity_id"],
+                    "entityType": entity_type,
+                    "entityId": entity_id,
                     "displayName": row["display_name"],
                 }
             )
+
+        if contact_ids:
+            placeholders = ",".join(["?"] * len(contact_ids))
+            contact_cursor = conn.execute(
+                f"""
+                SELECT id, company_name, contact_name, email, phone
+                FROM contacts
+                WHERE id IN ({placeholders})
+                """,
+                contact_ids,
+            )
+            contact_rows = {
+                str(contact_row["id"]): {
+                    "companyName": (contact_row["company_name"] or "").strip(),
+                    "contactName": (contact_row["contact_name"] or "").strip(),
+                    "email": (contact_row["email"] or "").strip(),
+                    "phone": (contact_row["phone"] or "").strip(),
+                }
+                for contact_row in contact_cursor.fetchall()
+            }
+        else:
+            contact_rows = {}
+
+        for entry in results:
+            if entry["entityType"] and entry["entityType"].lower() == "contact":
+                contact_details = contact_rows.get(str(entry["entityId"]))
+                if contact_details:
+                    entry["contact"] = contact_details
+
         return results
 
     def resolve_handles(self, conn: sqlite3.Connection, handles: Sequence[str]) -> Dict[str, Dict[str, Any]]:
