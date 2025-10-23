@@ -131,6 +131,7 @@ def test_chat_creates_reminder_entry(configure_chat_environment):
     reminder = assistant['metadata']['reminder']
     assert reminder['title'] == 'Follow up'
     assert reminder['kind'] == 'reminder'
+    assert reminder['context_note_id'] == note['id']
 
     conn = get_db_connection()
     try:
@@ -287,6 +288,90 @@ def test_reminders_page_renders(configure_chat_environment):
     assert response.status_code == 200
     html = response.get_data(as_text=True)
     assert 'id="reminders-root"' in html
+
+
+def test_due_reminder_dispatch_cycle_posts_chat_message(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Dispatch note')
+    now = datetime.now(timezone.utc)
+
+    conn = get_db_connection()
+    try:
+        service = get_record_service()
+        payload = {
+            'title': 'Dispatch me',
+            'notes': 'Check the timer',
+            'timezone': 'UTC',
+            'kind': 'reminder',
+            'due_at': (now - timedelta(minutes=5)).isoformat(),
+            'remind_at': (now - timedelta(minutes=5)).isoformat(),
+            'context_note_id': note['id'],
+        }
+        normalized = firenotes_app._normalize_reminder_payload(conn, payload)
+        created = service.create_record(conn, 'reminder', normalized, actor='pytest')
+        reminder_id = created['id']
+        conn.commit()
+    finally:
+        conn.close()
+
+    fired = firenotes_app.run_reminder_dispatch_cycle(now=now)
+    assert any(entry['id'] == reminder_id for entry in fired)
+
+    reminder_response = client.get(f'/api/reminders/{reminder_id}')
+    assert reminder_response.status_code == 200
+    reminder_payload = reminder_response.get_json()['reminder']
+    assert reminder_payload['completed'] is True
+    assert reminder_payload['last_notified_at']
+
+    chat_history = client.get(f"/api/firenotes/chat?noteId={note['id']}&limit=5").get_json()['messages']
+    fired_messages = [msg for msg in chat_history if (msg.get('metadata') or {}).get('action') == 'reminder_fired']
+    assert fired_messages
+    assert 'Dispatch me' in fired_messages[-1]['content']
+
+
+def test_persistent_reminder_dispatch_cycle_stays_active(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Persistent dispatch')
+    now = datetime.now(timezone.utc)
+
+    conn = get_db_connection()
+    try:
+        service = get_record_service()
+        payload = {
+            'title': 'Standup ping',
+            'timezone': 'UTC',
+            'kind': 'reminder',
+            'due_at': (now - timedelta(minutes=10)).isoformat(),
+            'remind_at': (now - timedelta(minutes=10)).isoformat(),
+            'context_note_id': note['id'],
+            'persistent': True,
+        }
+        normalized = firenotes_app._normalize_reminder_payload(conn, payload)
+        created = service.create_record(conn, 'reminder', normalized, actor='pytest')
+        reminder_id = created['id']
+        conn.commit()
+    finally:
+        conn.close()
+
+    first_cycle = firenotes_app.run_reminder_dispatch_cycle(now=now)
+    assert any(entry['id'] == reminder_id for entry in first_cycle)
+
+    reminder_response = client.get(f'/api/reminders/{reminder_id}')
+    reminder_payload = reminder_response.get_json()['reminder']
+    assert reminder_payload['persistent'] is True
+    assert reminder_payload['completed'] is False
+    assert reminder_payload['last_notified_at']
+
+    history_payload = client.get(f"/api/firenotes/chat?noteId={note['id']}&limit=5").get_json()
+    initial_fired = [msg for msg in history_payload['messages'] if (msg.get('metadata') or {}).get('action') == 'reminder_fired']
+    assert len(initial_fired) == 1
+
+    second_cycle = firenotes_app.run_reminder_dispatch_cycle(now=now + timedelta(minutes=1))
+    assert all(entry['id'] != reminder_id for entry in second_cycle)
+
+    history_after = client.get(f"/api/firenotes/chat?noteId={note['id']}&limit=5").get_json()['messages']
+    fired_after = [msg for msg in history_after if (msg.get('metadata') or {}).get('action') == 'reminder_fired']
+    assert len(fired_after) == 1
 
 
 def test_password_lookup_responds_with_matches(configure_chat_environment):

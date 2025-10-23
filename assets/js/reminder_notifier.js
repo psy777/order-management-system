@@ -22,6 +22,17 @@
         pendingFetch: null,
     };
 
+    const parseTimestamp = (value) => {
+        if (!value) {
+            return null;
+        }
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) {
+            return null;
+        }
+        return date;
+    };
+
     const getReminderKey = (reminder) => {
         if (!reminder) {
             return '';
@@ -190,8 +201,25 @@
             if (Number.isNaN(targetDate.getTime())) {
                 return;
             }
+            const lastNotifiedDate = parseTimestamp(reminder.last_notified_at);
+            if (lastNotifiedDate && lastNotifiedDate.getTime() >= targetDate.getTime()) {
+                if (state.timers.has(key)) {
+                    window.clearTimeout(state.timers.get(key));
+                    state.timers.delete(key);
+                }
+                state.notified.add(key);
+                return;
+            }
             const delay = targetDate.getTime() - Date.now();
             if (delay <= 0) {
+                if (lastNotifiedDate && lastNotifiedDate.getTime() >= Date.now()) {
+                    state.notified.add(key);
+                    if (state.timers.has(key)) {
+                        window.clearTimeout(state.timers.get(key));
+                        state.timers.delete(key);
+                    }
+                    return;
+                }
                 showNotification(reminder);
                 if (state.timers.has(key)) {
                     window.clearTimeout(state.timers.get(key));

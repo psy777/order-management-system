@@ -3,7 +3,7 @@ import shutil
 from pathlib import Path
 import uuid
 import webbrowser
-from threading import Timer
+from threading import Event, Lock, Thread, Timer
 import socket
 import sqlite3
 import sys
@@ -80,6 +80,8 @@ def _ensure_database_initialized():
         finally:
             bootstrap_conn.close()
         _db_bootstrapped = True
+        if not app.config.get('TESTING'):
+            _ensure_reminder_dispatcher_started()
     except Exception as exc:  # pragma: no cover - defensive logging
         app.logger.exception("Failed to initialize database before request: %s", exc)
 
@@ -154,6 +156,12 @@ DEFAULT_NAV_SHORTCUT_IDS = ['orders', 'contacts', 'analytics', 'tasks', 'reminde
 UPLOAD_FOLDER = DATA_DIR
 UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = str(UPLOAD_FOLDER)
+
+_REMINDER_DISPATCH_INTERVAL_SECONDS = 30
+_reminder_dispatcher_lock = Lock()
+_reminder_dispatcher_thread: Optional[Thread] = None
+_reminder_dispatcher_started = False
+_reminder_dispatcher_stop_event = Event()
 
 def read_json_file(file_path):
     if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
@@ -1155,6 +1163,7 @@ def _handle_reminder_command(conn: sqlite3.Connection, note_id: str, content: st
         'notes': notes_part or f'Created from chat command: {body}',
         'timezone': timezone_name,
         'kind': 'reminder',
+        'context_note_id': note_id,
     }
     if due_part:
         payload['due_at'] = due_part
@@ -4033,6 +4042,20 @@ def _ensure_unique_reminder_handle(
         suffix += 1
 
 
+def _coerce_boolean(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {'true', '1', 'yes', 'y', 'on'}:
+            return True
+        if lowered in {'false', '0', 'no', 'n', 'off', ''}:
+            return False
+    return bool(value)
+
+
 def _parse_timer_expression(text: Optional[str]) -> Optional[int]:
     if not text:
         return None
@@ -4258,6 +4281,33 @@ def _normalize_reminder_payload(
         else:
             completed_dt = None
 
+    persistent_source = payload.get('persistent', MISSING)
+    if persistent_source is MISSING:
+        persistent_flag = _coerce_boolean(existing_data.get('persistent'))
+    else:
+        persistent_flag = _coerce_boolean(persistent_source)
+
+    context_note_source = payload.get('context_note_id', MISSING)
+    if context_note_source is MISSING:
+        context_note_id = (existing_data.get('context_note_id') or '').strip()
+    else:
+        context_note_id = str(context_note_source or '').strip()
+    if not context_note_id:
+        context_note_id = None
+
+    last_notified_present = 'last_notified_at' in payload
+    last_notified_source_value = (
+        payload.get('last_notified_at') if last_notified_present else existing_data.get('last_notified_at')
+    )
+    if last_notified_source_value in (None, ''):
+        last_notified_dt: Optional[datetime] = None
+    else:
+        last_notified_dt = _coerce_optional_reminder_datetime(
+            last_notified_source_value,
+            timezone_value,
+            'last_notified_at',
+        )
+
     handle_source = payload.get('handle', MISSING)
     if handle_source is MISSING:
         incoming_handle = (existing_data.get('handle') or '').strip()
@@ -4282,6 +4332,9 @@ def _normalize_reminder_payload(
         'timezone': timezone_value,
         'completed': completed,
         'completed_at': completed_dt.isoformat() if completed_dt else None,
+        'persistent': bool(persistent_flag),
+        'context_note_id': context_note_id,
+        'last_notified_at': last_notified_dt.isoformat() if last_notified_dt else None,
     }
 
 
@@ -4328,6 +4381,9 @@ def _serialize_reminder(data: Dict[str, Any]) -> Dict[str, Any]:
     payload['completed'] = bool(payload.get('completed'))
     payload['completed_at'] = payload.get('completed_at') or None
     payload['handle'] = (payload.get('handle') or '').strip()
+    payload['persistent'] = bool(payload.get('persistent'))
+    payload['context_note_id'] = (payload.get('context_note_id') or '').strip() or None
+    payload['last_notified_at'] = payload.get('last_notified_at') or None
     return payload
 
 
@@ -4337,6 +4393,144 @@ def _reminder_sort_key(reminder: Dict[str, Any]):
     title_value = (reminder.get('title') or '').lower()
     return (has_no_due, due_value, title_value)
 
+
+def _parse_utc_datetime(value: Any) -> Optional[datetime]:
+    if value in (None, ''):
+        return None
+    try:
+        parsed = dateutil_parse(str(value))
+    except (ValueError, TypeError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
+    return parsed
+
+
+def _reminder_should_fire(reminder: Dict[str, Any], now: datetime) -> bool:
+    kind_value = (reminder.get('kind') or 'reminder').strip().lower() or 'reminder'
+    if kind_value != 'reminder':
+        return False
+    if reminder.get('completed'):
+        return False
+    remind_value = reminder.get('remind_at') or reminder.get('due_at')
+    remind_dt = _parse_utc_datetime(remind_value)
+    if not remind_dt:
+        return False
+    if remind_dt > now:
+        return False
+    last_notified_dt = _parse_utc_datetime(reminder.get('last_notified_at'))
+    if last_notified_dt and last_notified_dt >= remind_dt:
+        return False
+    return True
+
+
+def _build_reminder_fire_message(reminder: Dict[str, Any]) -> str:
+    title = reminder.get('title') or 'Reminder'
+    timer_value = reminder.get('timer_seconds')
+    try:
+        timer_seconds = int(timer_value) if timer_value not in (None, '') else None
+    except (TypeError, ValueError):
+        timer_seconds = None
+    if timer_seconds:
+        timer_label = _format_timer_label(timer_seconds)
+        if timer_label:
+            return f"⏰ Reminder \"{title}\" timer {timer_label} is done."
+    due_label = _format_reminder_due(reminder)
+    if due_label and due_label != 'no due date':
+        return f"⏰ Reminder \"{title}\" {due_label}."
+    return f"⏰ Reminder \"{title}\" is due now."
+
+
+def _deliver_reminder_notification(
+    conn: sqlite3.Connection,
+    reminder: Dict[str, Any],
+    now: datetime,
+) -> Dict[str, Any]:
+    reminder_id = reminder.get('id')
+    if not reminder_id:
+        return reminder
+    service = get_record_service()
+    update_payload: Dict[str, Any] = {
+        'last_notified_at': now.isoformat(),
+    }
+    if not reminder.get('persistent'):
+        update_payload['completed'] = True
+        update_payload['completed_at'] = now.isoformat()
+    normalized = _normalize_reminder_payload(conn, update_payload, existing_id=str(reminder_id))
+    updated = service.update_record(
+        conn,
+        'reminder',
+        str(reminder_id),
+        normalized,
+        actor='reminder-dispatcher',
+    )
+    serialized = _serialize_reminder(updated['data'])
+    note_id = serialized.get('context_note_id')
+    if note_id:
+        try:
+            message_text = _build_reminder_fire_message(serialized)
+            metadata = {'action': 'reminder_fired', 'reminder': serialized}
+            _store_chat_message(conn, str(note_id), 'assistant', message_text, metadata=metadata)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            app.logger.exception('Failed to post reminder notification for %s: %s', reminder_id, exc)
+    return serialized
+
+
+def _dispatch_due_reminders(now: Optional[datetime] = None) -> List[Dict[str, Any]]:
+    effective_now = now or datetime.now(timezone.utc)
+    conn = get_db_connection()
+    fired: List[Dict[str, Any]] = []
+    try:
+        service = get_record_service()
+        records = service.list_records(conn, 'reminder')
+        for record in records:
+            payload = dict(record)
+            serialized = _serialize_reminder(payload)
+            serialized['id'] = payload.get('id') or serialized.get('id')
+            if not serialized.get('id'):
+                continue
+            if not _reminder_should_fire(serialized, effective_now):
+                continue
+            try:
+                updated = _deliver_reminder_notification(conn, serialized, effective_now)
+                fired.append(updated)
+            except Exception as exc:  # pragma: no cover - defensive logging
+                app.logger.exception('Reminder delivery failed for %s: %s', serialized.get('id'), exc)
+        conn.commit()
+        return fired
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def run_reminder_dispatch_cycle(now: Optional[datetime] = None) -> List[Dict[str, Any]]:
+    return _dispatch_due_reminders(now=now)
+
+
+def _reminder_dispatcher_loop() -> None:
+    while not _reminder_dispatcher_stop_event.is_set():
+        try:
+            _dispatch_due_reminders()
+        except Exception as exc:  # pragma: no cover - defensive logging
+            app.logger.exception('Reminder dispatch cycle failed: %s', exc)
+        _reminder_dispatcher_stop_event.wait(_REMINDER_DISPATCH_INTERVAL_SECONDS)
+
+
+def _ensure_reminder_dispatcher_started() -> None:
+    global _reminder_dispatcher_started, _reminder_dispatcher_thread
+    with _reminder_dispatcher_lock:
+        if _reminder_dispatcher_started or app.config.get('TESTING'):
+            return
+        if _reminder_dispatcher_stop_event.is_set():
+            _reminder_dispatcher_stop_event.clear()
+        thread = Thread(target=_reminder_dispatcher_loop, name='ReminderDispatcher', daemon=True)
+        thread.start()
+        _reminder_dispatcher_thread = thread
+        _reminder_dispatcher_started = True
 
 @app.route('/api/records/handles', methods=['GET'])
 def api_record_handles():

@@ -116,6 +116,21 @@ class ReminderNormalizationTests(unittest.TestCase):
         self.assertGreater(due_dt, before)
         self.assertLess(due_dt, after + timedelta(seconds=910))
 
+    def test_persistent_and_context_fields_are_preserved(self):
+        payload = {
+            'title': 'Shift check-in',
+            'persistent': True,
+            'context_note_id': 'note-123',
+            'last_notified_at': '2024-02-02T08:30:00-05:00',
+            'timezone': 'America/New_York',
+        }
+        normalized = _normalize_reminder_payload(self.conn, payload)
+        self.assertTrue(normalized['persistent'])
+        self.assertEqual(normalized['context_note_id'], 'note-123')
+        self.assertIsNotNone(normalized['last_notified_at'])
+        last_notified = isoparse(normalized['last_notified_at'])
+        self.assertEqual(last_notified.tzinfo.utcoffset(last_notified), timedelta(0))
+
 class ReminderRecordServiceTests(unittest.TestCase):
     def setUp(self):
         self.conn = sqlite3.connect(':memory:')
