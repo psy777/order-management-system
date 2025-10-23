@@ -586,8 +586,8 @@
 
 .fc-message__toolbar {
     position: absolute;
-    top: -0.25rem;
-    right: -0.2rem;
+    top: -0.7rem;
+    right: -0.1rem;
     display: inline-flex;
     align-items: center;
     gap: 0.25rem;
@@ -613,16 +613,16 @@
     display: inline-flex;
     align-items: center;
     gap: 0.2rem;
-    background: rgba(15, 23, 42, 0.88);
+    background: rgba(15, 23, 42, 0.9);
     padding: 0.22rem 0.45rem;
     border-radius: 999px;
-    border: 1px solid rgba(148, 163, 184, 0.25);
-    box-shadow: 0 16px 32px -26px rgba(15, 23, 42, 0.85);
+    border: 1px solid rgba(249, 115, 22, 0.35);
+    box-shadow: 0 16px 32px -26px rgba(15, 23, 42, 0.9), 0 0 0 1px rgba(249, 115, 22, 0.18);
     backdrop-filter: blur(6px);
 }
 
 .fc-message__toolbar-group--reactions {
-    background: rgba(15, 23, 42, 0.76);
+    background: rgba(15, 23, 42, 0.82);
 }
 
 
@@ -640,8 +640,8 @@
 
 .fc-message__toolbar-button:hover:not(:disabled),
 .fc-message__toolbar-button:focus-visible {
-    background: rgba(59, 130, 246, 0.35);
-    color: #ffffff;
+    background: rgba(249, 115, 22, 0.35);
+    color: #fff7ed;
     outline: none;
 }
 
@@ -732,13 +732,16 @@
     position: absolute;
     z-index: 40;
     --fc-popover-bg: #0f172a;
+    --fc-popover-accent: #f97316;
+    --fc-popover-accent-strong: #fb923c;
+    --fc-popover-accent-rgb: 249, 115, 22;
     background: var(--fc-popover-bg);
     color: #f8fafc;
     border-radius: 14px;
     padding: 0.65rem;
     min-width: 180px;
-    border: 1px solid rgba(15, 23, 42, 0.65);
-    box-shadow: 0 24px 48px -24px rgba(15, 23, 42, 0.8), 0 0 0 1px rgba(30, 41, 59, 0.35);
+    border: 1px solid rgba(15, 23, 42, 0.7);
+    box-shadow: 0 24px 48px -28px rgba(15, 23, 42, 0.85), 0 0 0 1px rgba(15, 23, 42, 0.5);
 }
 
 .fc-popover--placement-top-end {
@@ -758,7 +761,7 @@
 .fc-popover__title {
     font-size: 0.82rem;
     font-weight: 600;
-    color: #cbd5f5;
+    color: #fdba74;
 }
 
 .fc-popover__list {
@@ -771,7 +774,7 @@
 
 .fc-popover__item {
     border: none;
-    background: rgba(148, 163, 184, 0.16);
+    background: rgba(248, 250, 252, 0.08);
     border-radius: 10px;
     padding: 0.45rem 0.65rem;
     text-align: left;
@@ -783,8 +786,8 @@
 
 .fc-popover__item:hover:not(:disabled),
 .fc-popover__item:focus-visible {
-    background: rgba(59, 130, 246, 0.3);
-    color: #f8fafc;
+    background: rgba(var(--fc-popover-accent-rgb), 0.35);
+    color: #fff7ed;
     transform: translateY(-1px);
     outline: none;
 }
@@ -796,7 +799,7 @@
 
 .fc-popover__empty {
     font-size: 0.8rem;
-    color: #a8b5d8;
+    color: #fcd34d;
     padding: 0.3rem 0;
 }
 
@@ -820,8 +823,8 @@
 
 .fc-popover__menu-item:hover:not(:disabled),
 .fc-popover__menu-item:focus-visible {
-    background: rgba(59, 130, 246, 0.32);
-    color: #ffffff;
+    background: rgba(var(--fc-popover-accent-rgb), 0.36);
+    color: #fff7ed;
     transform: translateY(-1px);
     outline: none;
 }
@@ -844,30 +847,31 @@
 
 .fc-popover__emoji-button {
     border: none;
-    background: rgba(30, 41, 59, 0.85);
+    background: rgba(15, 23, 42, 0.85);
     border-radius: 10px;
     font-size: 1.2rem;
     padding: 0.4rem;
     cursor: pointer;
-    border: 1px solid rgba(148, 163, 184, 0.25);
+    border: 1px solid rgba(var(--fc-popover-accent-rgb), 0.35);
     color: #f8fafc;
     transition: background 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
 }
 
 .fc-popover__emoji-button:hover,
 .fc-popover__emoji-button:focus-visible {
-    background: rgba(59, 130, 246, 0.35);
-    border-color: rgba(59, 130, 246, 0.55);
+    background: rgba(var(--fc-popover-accent-rgb), 0.4);
+    border-color: rgba(var(--fc-popover-accent-rgb), 0.6);
     transform: translateY(-1px);
     outline: none;
 }
 
 .fc-popover--badge {
-    --fc-popover-bg: #111c2f;
+    --fc-popover-bg: #0b1221;
     padding: 0.35rem 0.45rem;
     border-radius: 12px;
     min-width: auto;
-    box-shadow: 0 22px 40px -28px rgba(15, 23, 42, 0.85), 0 0 0 1px rgba(30, 41, 59, 0.45);
+    border: 1px solid rgba(var(--fc-popover-accent-rgb), 0.35);
+    box-shadow: 0 22px 40px -28px rgba(15, 23, 42, 0.9), 0 0 0 1px rgba(var(--fc-popover-accent-rgb), 0.2);
 }
 
 .fc-popover--badge .fc-popover__menu {
@@ -882,7 +886,8 @@
 
 .fc-popover--badge .fc-popover__menu-item:hover:not(:disabled),
 .fc-popover--badge .fc-popover__menu-item:focus-visible {
-    background: rgba(59, 130, 246, 0.45);
+    background: rgba(var(--fc-popover-accent-rgb), 0.5);
+    color: #fff7ed;
 }
 
 .fc-popover--badge .fc-popover__menu-item.is-destructive {
@@ -898,13 +903,14 @@
 .fc-popover--badge.fc-popover--placement-top-end::after {
     content: '';
     position: absolute;
-    bottom: -5px;
-    right: 18px;
+    bottom: -6px;
+    right: 16px;
     width: 12px;
     height: 12px;
     background: var(--fc-popover-bg);
     transform: rotate(45deg);
     border-radius: 3px;
+    border: 1px solid rgba(var(--fc-popover-accent-rgb), 0.28);
     box-shadow: 0 8px 16px -12px rgba(15, 23, 42, 0.85);
 }
 
