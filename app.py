@@ -21,7 +21,7 @@ import time
 import json
 import csv
 import pytz
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from dotenv import load_dotenv
 from flask import (
@@ -1160,153 +1160,169 @@ def _format_event_window(event_payload: Dict[str, Any], timezone_name: str) -> s
 
 def _handle_clear_command(
     conn: sqlite3.Connection, message: Dict[str, Any]
-) -> List[Dict[str, Any]]:
-    note_id = message.get('note_id') or ''
+) -> Dict[str, Any]:
+    note_id = (message.get('note_id') or '').strip()
+    message_id = str(message.get('id') or '')
     content = (message.get('content') or '')
-    if not note_id:
-        return []
+    result: Dict[str, Any] = {
+        'status': 'error',
+        'reason': 'missing_note',
+        'criteria': {},
+        'deleted_message_ids': [],
+        'cleared_target_count': 0,
+        'message': 'Note not found for clear command.' if not note_id else None,
+        'command_message_id': message_id or None,
+    }
+    if not note_id or not message_id:
+        return result
+
     body = content[len('.clear'):].strip()
     criteria: Dict[str, Any] = {}
     if not body:
-        feedback = (
-            "Tell me what to clear. Try `.clear 4 @firecoast`, `.clear tasks`, or `.clear commands`."
+        result.update(
+            {
+                'status': 'error',
+                'reason': 'missing_target',
+                'message': "Tell me what to clear. Try `.clear 4`, `.clear 4 @firecoast`, or `.clear tasks`.",
+                'criteria': criteria,
+            }
         )
-        metadata = {
-            'action': 'clear_result',
-            'status': 'error',
-            'reason': 'missing_target',
-            'criteria': criteria,
-        }
-        return [_store_chat_message(conn, note_id, 'assistant', feedback, metadata=metadata)]
+        return result
 
     tokens = body.split()
     category: Optional[str] = None
     author: Optional[str] = None
     count: Optional[int] = None
+    pointer = 0
 
-    if tokens:
-        keyword = tokens[0].lower()
-        if keyword in CLEAR_CATEGORY_ACTIONS or keyword == 'commands':
-            category = keyword
-            remaining = tokens[1:]
-            if remaining:
-                head = remaining[0].lower()
-                if head == 'all':
-                    count = None
-                elif head.isdigit():
-                    count = max(1, int(head))
-            if count is None:
+    keyword = tokens[0].lower() if tokens else ''
+    if keyword in CLEAR_CATEGORY_ACTIONS or keyword == 'commands':
+        category = keyword
+        pointer = 1
+        if len(tokens) > 1:
+            head = tokens[1].lower()
+            if head == 'all':
                 count = None
-        else:
-            pointer = 0
-            if keyword == 'all':
-                count = None
-                pointer += 1
-            elif keyword.isdigit():
-                count = max(1, int(keyword))
-                pointer += 1
-            else:
-                count = 1
-            if pointer >= len(tokens):
-                feedback = (
-                    "I couldn't understand that clear command. Try `.clear 4 @firecoast` or `.clear tasks`."
-                )
-                metadata = {
-                    'action': 'clear_result',
-                    'status': 'error',
-                    'reason': 'missing_target',
-                    'criteria': criteria,
-                }
-                return [_store_chat_message(conn, note_id, 'assistant', feedback, metadata=metadata)]
-            handle_token = tokens[pointer]
-            author = _normalize_clear_author_handle(handle_token)
-            if not author:
-                feedback = f"I don't recognize {handle_token}. Try @you or @firecoast."
-                metadata = {
-                    'action': 'clear_result',
-                    'status': 'error',
-                    'reason': 'unknown_author',
-                    'criteria': criteria,
-                }
-                return [_store_chat_message(conn, note_id, 'assistant', feedback, metadata=metadata)]
+            elif head.isdigit():
+                count = max(1, int(head))
+    else:
+        if keyword == 'all':
+            count = None
             pointer += 1
-            if pointer < len(tokens):
-                tail = tokens[pointer].lower()
-                if tail == 'all':
-                    count = None
-                elif tail.isdigit():
-                    count = max(1, int(tail))
+        elif keyword.isdigit():
+            count = max(1, int(keyword))
+            pointer += 1
+        if pointer < len(tokens):
+            handle_token = tokens[pointer]
+            normalized_author = _normalize_clear_author_handle(handle_token)
+            if not normalized_author:
+                result.update(
+                    {
+                        'status': 'error',
+                        'reason': 'unknown_author',
+                        'message': f"I don't recognize {handle_token}. Try @you or @firecoast.",
+                        'criteria': criteria,
+                    }
+                )
+                return result
+            author = normalized_author
+            pointer += 1
+        elif count is None:
+            # A lone token that isn't a category must be an author shorthand.
+            normalized_author = _normalize_clear_author_handle(tokens[0]) if tokens else None
+            if normalized_author:
+                author = normalized_author
+            else:
+                result.update(
+                    {
+                        'status': 'error',
+                        'reason': 'missing_target',
+                        'message': "I couldn't understand that clear command. Try `.clear 4` or `.clear tasks`.",
+                        'criteria': criteria,
+                    }
+                )
+                return result
+        if pointer < len(tokens):
+            tail = tokens[pointer].lower()
+            if tail == 'all':
+                count = None
+            elif tail.isdigit():
+                count = max(1, int(tail))
 
     if category:
         criteria['category'] = category
+        criteria['count'] = 'all' if count is None else count
+    elif author is not None or count is not None:
+        if author is not None:
+            criteria['author'] = author
         if count is not None:
             criteria['count'] = count
-        else:
-            criteria['count'] = 'all'
-    elif author:
-        criteria['author'] = author
-        criteria['count'] = 'all' if count is None else count
     else:
-        feedback = (
-            "I couldn't understand that clear command. Try `.clear tasks` or `.clear 4 @firecoast`."
+        result.update(
+            {
+                'status': 'error',
+                'reason': 'missing_target',
+                'message': "I couldn't understand that clear command. Try `.clear 4` or `.clear tasks`.",
+                'criteria': criteria,
+            }
         )
-        metadata = {
-            'action': 'clear_result',
-            'status': 'error',
-            'reason': 'missing_target',
-            'criteria': criteria,
-        }
-        return [_store_chat_message(conn, note_id, 'assistant', feedback, metadata=metadata)]
+        return result
 
-    skip_ids = [message.get('id')]
     targets = _collect_messages_for_clear(
         conn,
         note_id,
         author=author,
         category=category,
         count=count,
-        skip_ids=skip_ids,
     )
 
-    if not targets:
-        feedback = "I couldn't find any matching messages to clear."
-        metadata = {
-            'action': 'clear_result',
-            'status': 'noop',
-            'reason': 'no_matches',
-            'criteria': criteria,
-        }
-        return [_store_chat_message(conn, note_id, 'assistant', feedback, metadata=metadata)]
-
-    cleared: List[Dict[str, Any]] = []
+    seen_ids: Set[str] = set()
+    filtered_targets: List[Dict[str, Any]] = []
     for target in targets:
-        deleted = _delete_chat_message(conn, target['id'])
-        cleared.append(
-            {
-                'id': deleted.get('id'),
-                'author': target.get('author'),
-            }
-        )
+        target_id = str(target.get('id') or '')
+        if not target_id or target_id in seen_ids:
+            continue
+        seen_ids.add(target_id)
+        filtered_targets.append(target)
 
-    cleared_count = len(cleared)
-    metadata = {
-        'action': 'clear_result',
-        'status': 'success',
-        'cleared_count': cleared_count,
-        'criteria': criteria,
-        'cleared_message_ids': [entry.get('id') for entry in cleared if entry.get('id')],
-        'cleared_authors': sorted({(entry.get('author') or '').lower() for entry in cleared if entry.get('author')}),
-    }
+    cleared_target_count = len([entry for entry in filtered_targets if str(entry.get('id') or '') != message_id])
+    status = 'success'
+    reason = None
+    message_text = None
 
-    if category:
-        label = _format_clear_category_label(category, cleared_count)
-        feedback = f"Cleared {cleared_count} {label}."
+    if not filtered_targets:
+        status = 'noop'
+        reason = 'no_matches'
+        message_text = "I couldn't find any matching messages to clear."
+
+    delete_ids: List[str] = []
+    if status in {'success', 'noop'}:
+        if message_id not in seen_ids:
+            filtered_targets.insert(0, {'id': message_id, 'author': message.get('author')})
+            seen_ids.add(message_id)
+        for target in filtered_targets:
+            target_id = str(target.get('id') or '')
+            if not target_id:
+                continue
+            try:
+                _delete_chat_message(conn, target_id)
+            except ValueError:
+                continue
+            delete_ids.append(target_id)
     else:
-        label = _format_clear_target_label(author)
-        noun = 'message' if cleared_count == 1 else 'messages'
-        feedback = f"Cleared {cleared_count} {noun} from {label}."
+        cleared_target_count = 0
 
-    return [_store_chat_message(conn, note_id, 'assistant', feedback, metadata=metadata)]
+    result.update(
+        {
+            'status': status,
+            'reason': reason,
+            'message': message_text,
+            'criteria': criteria,
+            'deleted_message_ids': delete_ids,
+            'cleared_target_count': cleared_target_count,
+        }
+    )
+    return result
 
 def _handle_event_command(conn: sqlite3.Connection, note_id: str, content: str) -> List[Dict[str, Any]]:
     body = content[len('.event'):].strip()
@@ -1774,8 +1790,6 @@ def _handle_chat_message(conn: sqlite3.Connection, message: Dict[str, Any]) -> L
     if not note_id:
         return []
     lowered = content.lower()
-    if lowered.startswith('.clear'):
-        return _handle_clear_command(conn, message)
     if lowered.startswith('.event'):
         return _handle_event_command(conn, note_id, content)
     if lowered.startswith('.reminder'):
@@ -5911,9 +5925,14 @@ def api_firenotes_chat():
             return jsonify({'message': 'Add a note or attachment before sending.'}), 400
         stored = _store_chat_message(conn, note_id, author, content, attachments=attachments or None)
         responses: List[Dict[str, Any]] = []
+        clear_result: Optional[Dict[str, Any]] = None
         if author == 'user':
             try:
-                responses = _handle_chat_message(conn, stored)
+                lowered = content.lower()
+                if lowered.startswith('.clear'):
+                    clear_result = _handle_clear_command(conn, stored)
+                else:
+                    responses = _handle_chat_message(conn, stored)
             except (ValueError, RecordValidationError) as exc:
                 error_message = _store_chat_message(
                     conn,
@@ -5923,9 +5942,18 @@ def api_firenotes_chat():
                     metadata={'action': 'error', 'reason': str(exc)},
                 )
                 responses = [error_message]
+        deleted_ids: Set[str] = set()
+        if clear_result and clear_result.get('deleted_message_ids'):
+            deleted_ids = {str(value) for value in clear_result['deleted_message_ids'] if value}
         conn.commit()
         refreshed_note = _get_note(conn, note_id)
-        return jsonify({'messages': [stored] + responses, 'note': refreshed_note})
+        messages = [stored] + responses
+        if deleted_ids:
+            messages = [msg for msg in messages if str(msg.get('id')) not in deleted_ids]
+        payload: Dict[str, Any] = {'messages': messages, 'note': refreshed_note}
+        if clear_result:
+            payload['clear'] = clear_result
+        return jsonify(payload)
     except Exception as exc:
         conn.rollback()
         app.logger.exception("Failed to process FireNotes chat request: %s", exc)

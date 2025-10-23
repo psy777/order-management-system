@@ -2151,6 +2151,33 @@
                 }
             };
 
+            const applyClearResult = (clearResult) => {
+                if (!clearResult || typeof clearResult !== 'object') {
+                    return false;
+                }
+                const deletedIds = Array.isArray(clearResult.deleted_message_ids)
+                    ? clearResult.deleted_message_ids.map((value) => String(value)).filter(Boolean)
+                    : [];
+                if (deletedIds.length) {
+                    const toDelete = new Set(deletedIds);
+                    state.messages = state.messages.filter((entry) => {
+                        if (!entry || !entry.id) {
+                            return true;
+                        }
+                        return !toDelete.has(String(entry.id));
+                    });
+                }
+                if (
+                    clearResult.status &&
+                    clearResult.status !== 'success' &&
+                    clearResult.message
+                ) {
+                    showError(clearResult.message);
+                    return true;
+                }
+                return false;
+            };
+
             const selectNote = async (noteId, options = {}) => {
                 if (!noteId) {
                     return;
@@ -2284,13 +2311,18 @@
                     incoming.forEach((entry) => {
                         upsertMessage(entry);
                     });
+                    const displayedClearError = payload.clear
+                        ? applyClearResult(payload.clear)
+                        : false;
                     if (payload.note) {
                         updateNoteFromResponse(payload.note);
                     }
                     resetComposer();
                     pendingScrollToBottom = true;
                     renderMessages();
-                    clearError();
+                    if (!displayedClearError) {
+                        clearError();
+                    }
                 } catch (error) {
                     console.error('Failed to send message', error);
                     showError('Unable to send that message.');

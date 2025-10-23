@@ -223,14 +223,44 @@ def test_clear_command_removes_firecoast_messages_by_count(configure_chat_enviro
     )
     assert clear_response.status_code == 200
     payload = clear_response.get_json()
-    summary = payload['messages'][-1]
-    assert summary['metadata']['action'] == 'clear_result'
-    assert summary['metadata']['status'] == 'success'
-    assert summary['metadata']['cleared_count'] == 1
-    assert summary['metadata']['criteria']['author'] == 'assistant'
+    clear_meta = payload['clear']
+    assert clear_meta['status'] == 'success'
+    assert clear_meta['criteria']['author'] == 'assistant'
+    deleted_ids = clear_meta['deleted_message_ids']
+    assert assistant_task['id'] in deleted_ids
+    assert len(deleted_ids) >= 2
+    assert not any((msg.get('metadata') or {}).get('action') == 'clear_result' for msg in payload['messages'])
 
     remaining = _list_note_messages(client, note['id'])
     assert not any((msg.get('metadata') or {}).get('action') == 'task_created' for msg in remaining)
+
+
+def test_clear_command_without_target_clears_recent_messages(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Clear latest note')
+
+    for label in ['first message', 'second message', 'third message']:
+        response = client.post(
+            '/api/firenotes/chat',
+            json={'note_id': note['id'], 'content': label},
+        )
+        assert response.status_code == 200
+
+    clear_response = client.post(
+        '/api/firenotes/chat',
+        json={'note_id': note['id'], 'content': '.clear 2'},
+    )
+    assert clear_response.status_code == 200
+    payload = clear_response.get_json()
+    clear_meta = payload['clear']
+    assert clear_meta['status'] == 'success'
+    assert clear_meta['cleared_target_count'] == 1
+    deleted_ids = clear_meta['deleted_message_ids']
+    assert len(deleted_ids) == 2
+
+    remaining = _list_note_messages(client, note['id'])
+    contents = [msg['content'] for msg in remaining]
+    assert contents == ['first message', 'second message']
 
 
 def test_clear_command_category_tasks(configure_chat_environment):
@@ -252,10 +282,12 @@ def test_clear_command_category_tasks(configure_chat_environment):
         json={'note_id': note['id'], 'content': '.clear tasks'},
     )
     assert clear_response.status_code == 200
-    summary = clear_response.get_json()['messages'][-1]
-    assert summary['metadata']['action'] == 'clear_result'
-    assert summary['metadata']['criteria']['category'] == 'tasks'
-    assert summary['metadata']['cleared_count'] == 2
+    payload = clear_response.get_json()
+    clear_meta = payload['clear']
+    assert clear_meta['criteria']['category'] == 'tasks'
+    assert clear_meta['status'] == 'success'
+    assert clear_meta['cleared_target_count'] == 2
+    assert not payload['messages']
 
     remaining = _list_note_messages(client, note['id'])
     assert not any((msg.get('metadata') or {}).get('action') == 'task_created' for msg in remaining)
@@ -277,10 +309,11 @@ def test_clear_command_prunes_user_commands(configure_chat_environment):
     )
     assert clear_response.status_code == 200
     payload = clear_response.get_json()
-    clear_command_message = payload['messages'][0]
-    summary = payload['messages'][-1]
-    assert summary['metadata']['criteria']['category'] == 'commands'
-    assert summary['metadata']['cleared_count'] == 1
+    clear_meta = payload['clear']
+    assert clear_meta['criteria']['category'] == 'commands'
+    assert clear_meta['cleared_target_count'] >= 1
+    deleted_ids = set(clear_meta['deleted_message_ids'])
+    assert deleted_ids
 
     remaining = _list_note_messages(client, note['id'])
     remaining_commands = [
@@ -288,8 +321,7 @@ def test_clear_command_prunes_user_commands(configure_chat_environment):
         for msg in remaining
         if msg.get('author') == 'user' and (msg.get('content') or '').lstrip().startswith('.')
     ]
-    assert remaining_commands
-    assert {msg['id'] for msg in remaining_commands} == {clear_command_message['id']}
+    assert not remaining_commands
 
 
 def test_task_completion_toggled_with_checkmark_reaction(configure_chat_environment):
