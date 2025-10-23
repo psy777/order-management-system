@@ -46,6 +46,7 @@ from database import (
 from data_paths import DATA_ROOT, ensure_data_root
 from services.analytics import get_analytics_engine
 from services.backup import BackupError, create_backup_archive, restore_backup_from_stream
+from services.upgrade import UpgradeError, perform_upgrade
 from services.records import (
     RecordValidationError,
     bootstrap_record_service,
@@ -4920,6 +4921,56 @@ def update_invoice_settings():
 
     write_json_file(SETTINGS_FILE, existing_settings)
     return jsonify({"message": "Invoice appearance updated.", "settings": existing_settings}), 200
+
+
+@app.route('/api/system/upgrade', methods=['POST'])
+def trigger_system_upgrade():
+    """Upgrade the application to the latest master commit and return details."""
+
+    if not app.config.get('TESTING'):
+        app.logger.info('Upgrade requested via settings UI')
+
+    payload = request.get_json(silent=True) or {}
+    remote = (payload.get('remote') or 'origin').strip() or 'origin'
+    branch = (payload.get('branch') or 'master').strip() or 'master'
+    skip_dependencies = bool(payload.get('skipDependencies'))
+
+    try:
+        result = perform_upgrade(
+            remote=remote,
+            branch=branch,
+            install_dependencies=not skip_dependencies,
+        )
+    except UpgradeError as exc:
+        app.logger.warning('Upgrade failed: %s', exc)
+        return (
+            jsonify({'status': 'error', 'message': str(exc)}),
+            400,
+        )
+    except Exception:  # pragma: no cover - defensive
+        app.logger.exception('Unexpected error during upgrade')
+        return (
+            jsonify(
+                {
+                    'status': 'error',
+                    'message': 'An unexpected error occurred while upgrading.',
+                }
+            ),
+            500,
+        )
+
+    return (
+        jsonify(
+            {
+                'status': 'ok',
+                'backupPath': str(result.backup_path),
+                'previousRevision': result.previous_revision,
+                'currentRevision': result.current_revision,
+                'dependenciesInstalled': not skip_dependencies,
+            }
+        ),
+        200,
+    )
 
 
 @app.route('/api/passwords', methods=['GET', 'POST'])

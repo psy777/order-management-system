@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import app as firenotes_app
 from services import upgrade
 
 
@@ -12,6 +13,19 @@ class DummyResult:
     def __init__(self, stdout: str = "") -> None:
         self.stdout = stdout
         self.stderr = ""
+
+
+@pytest.fixture(autouse=True)
+def enable_testing_flag():
+    original = firenotes_app.app.config.get('TESTING')
+    firenotes_app.app.config['TESTING'] = True
+    try:
+        yield
+    finally:
+        if original is None:
+            firenotes_app.app.config.pop('TESTING', None)
+        else:
+            firenotes_app.app.config['TESTING'] = original
 
 
 def test_perform_upgrade_executes_expected_git_commands(monkeypatch):
@@ -93,3 +107,61 @@ def test_perform_upgrade_aborts_when_repository_is_dirty(monkeypatch):
         upgrade.perform_upgrade(runner=fake_runner, install_dependencies=False)
 
     assert not called
+
+
+def test_upgrade_endpoint_invokes_service(monkeypatch, tmp_path):
+    client = firenotes_app.app.test_client()
+
+    def fake_perform_upgrade(remote: str, branch: str, install_dependencies: bool):
+        assert remote == 'origin'
+        assert branch == 'master'
+        assert install_dependencies is True
+        return upgrade.UpgradeResult(
+            backup_path=tmp_path / 'backup.zip',
+            previous_revision='abc123',
+            current_revision='def456',
+        )
+
+    monkeypatch.setattr(firenotes_app, 'perform_upgrade', fake_perform_upgrade)
+
+    response = client.post('/api/system/upgrade', json={})
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload['status'] == 'ok'
+    assert payload['previousRevision'] == 'abc123'
+    assert payload['currentRevision'] == 'def456'
+    assert payload['dependenciesInstalled'] is True
+
+
+def test_upgrade_endpoint_respects_skip_dependencies(monkeypatch, tmp_path):
+    client = firenotes_app.app.test_client()
+
+    def fake_perform_upgrade(remote: str, branch: str, install_dependencies: bool):
+        assert not install_dependencies
+        return upgrade.UpgradeResult(
+            backup_path=tmp_path / 'backup.zip',
+            previous_revision='abc123',
+            current_revision='def456',
+        )
+
+    monkeypatch.setattr(firenotes_app, 'perform_upgrade', fake_perform_upgrade)
+
+    response = client.post('/api/system/upgrade', json={'skipDependencies': True})
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload['dependenciesInstalled'] is False
+
+
+def test_upgrade_endpoint_returns_error_on_failure(monkeypatch):
+    client = firenotes_app.app.test_client()
+
+    def failing_upgrade(*_, **__):
+        raise upgrade.UpgradeError('dirty tree detected')
+
+    monkeypatch.setattr(firenotes_app, 'perform_upgrade', failing_upgrade)
+
+    response = client.post('/api/system/upgrade', json={})
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload['status'] == 'error'
+    assert 'dirty tree detected' in payload['message']
