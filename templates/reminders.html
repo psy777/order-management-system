@@ -47,6 +47,35 @@
             return `reminder-${Math.random().toString(36).slice(2, 10)}`;
         };
 
+        const getReminderNotifier = () => {
+            if (typeof window === 'undefined') {
+                return null;
+            }
+            return window.FireCoastReminderNotifier || null;
+        };
+
+        const registerGlobalReminderNotification = (reminder) => {
+            const notifier = getReminderNotifier();
+            if (notifier && typeof notifier.registerNotification === 'function') {
+                return notifier.registerNotification(reminder);
+            }
+            return true;
+        };
+
+        const syncGlobalReminderSchedule = (reminders) => {
+            const notifier = getReminderNotifier();
+            if (notifier && typeof notifier.ingestReminders === 'function') {
+                notifier.ingestReminders(Array.isArray(reminders) ? reminders : []);
+            }
+        };
+
+        const signalGlobalReminderRefresh = () => {
+            if (typeof window === 'undefined') {
+                return;
+            }
+            window.dispatchEvent(new CustomEvent('firecoast:reminders-changed'));
+        };
+
         const getTimezoneOffsetMinutes = (date, timeZone) => {
             try {
                 const parts = new Intl.DateTimeFormat('en-US', {
@@ -345,6 +374,10 @@
             }, [statusFilter, fetchReminders]);
 
             useEffect(() => {
+                syncGlobalReminderSchedule(reminders);
+            }, [reminders]);
+
+            useEffect(() => {
                 if (typeof window === 'undefined' || !('Notification' in window)) {
                     return;
                 }
@@ -366,7 +399,8 @@
                 const timerSummary = describeTimerCountdown(reminder);
                 const dueSummary = formatDueDescription(reminder);
                 const body = timerSummary || dueSummary || 'Reminder is due now.';
-                if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+                const allowDesktop = registerGlobalReminderNotification(reminder);
+                if (allowDesktop && typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
                     try {
                         new Notification(title, { body });
                     } catch (error) {
@@ -540,6 +574,7 @@
                         throw new Error(result.message || 'Unable to save reminder');
                     }
                     await fetchReminders(statusFilter);
+                    signalGlobalReminderRefresh();
                     resetForm();
                 } catch (error) {
                     console.error('Failed to save reminder', error);
@@ -562,6 +597,7 @@
                         throw new Error(result.message || 'Unable to update reminder');
                     }
                     await fetchReminders(statusFilter);
+                    signalGlobalReminderRefresh();
                 } catch (error) {
                     console.error('Failed to toggle reminder', error);
                     alert(error.message || 'Unable to update reminder.');
@@ -579,6 +615,7 @@
                         throw new Error(result.message || 'Unable to delete reminder');
                     }
                     await fetchReminders(statusFilter);
+                    signalGlobalReminderRefresh();
                     if (editingReminder && editingReminder.id === reminder.id) {
                         resetForm();
                     }
