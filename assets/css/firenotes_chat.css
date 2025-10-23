@@ -1269,7 +1269,7 @@
     display: inline-flex;
     align-items: center;
     width: fit-content;
-    border-radius: 999px;
+    border-radius: 0.3rem;
     padding: 0.18rem 0.5rem;
     font-size: 0.66rem;
     font-weight: 600;
