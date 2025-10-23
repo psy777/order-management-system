@@ -26,8 +26,8 @@
     flex-direction: column;
     min-height: 0;
     height: 100%;
-    padding-top: 2rem;
-    padding-bottom: 2rem;
+    padding-top: 1.25rem;
+    padding-bottom: 1.25rem;
     box-sizing: border-box;
     overflow: hidden;
 }
@@ -47,8 +47,8 @@
 .fc-chat-layout {
     width: 100%;
     display: grid;
-    grid-template-columns: 280px minmax(0, 1fr);
-    gap: 1.75rem;
+    grid-template-columns: 264px minmax(0, 1fr);
+    gap: 1.5rem;
     height: 100%;
     min-height: 0;
 }
@@ -230,9 +230,9 @@
     display: grid;
     grid-template-rows: auto minmax(0, 1fr) auto;
     background: #ffffff;
-    border: 1px solid #d7dde8;
-    border-radius: 12px;
-    box-shadow: 0 24px 48px -28px rgba(15, 23, 42, 0.32);
+    border: 1px solid #d0d7e5;
+    border-radius: 18px;
+    box-shadow: 0 20px 40px -30px rgba(15, 23, 42, 0.45);
     min-height: 0;
     height: 100%;
     max-height: 100%;
@@ -240,7 +240,7 @@
 }
 
 .fc-chat-panel__header {
-    padding: 1.1rem 1.5rem 1rem;
+    padding: 0.85rem 1.75rem;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -362,7 +362,7 @@
 .fc-chat-panel__body {
     position: relative;
     min-height: 0;
-    background: #ffffff;
+    background: #f1f5f9;
     display: flex;
     flex-direction: column;
     flex: 1 1 auto;
@@ -379,6 +379,7 @@
     overflow-y: auto;
     overflow-x: hidden;
     display: block;
+    padding: 0 0 0.25rem;
     overscroll-behavior: contain;
     scrollbar-gutter: stable both-edges;
     scrollbar-width: thin;
@@ -396,13 +397,15 @@
 
 .fc-chat-log {
     min-height: 100%;
-    padding: 1.5rem;
+    width: 100%;
+    padding: 1rem 1.75rem 1.5rem;
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
-    gap: 1rem;
+    gap: 0;
     background: transparent;
     box-sizing: border-box;
+    align-items: stretch;
 }
 
 .fc-chat-bottom-anchor {
@@ -424,25 +427,28 @@
 .fc-message {
     display: flex;
     flex-direction: column;
-    gap: 0.35rem;
-    padding: 0.35rem 0;
+    gap: 0;
+    padding: 0;
+    margin: 0;
     position: relative;
+    width: 100%;
 }
 
 .fc-message--grouped {
-    gap: 0.2rem;
-    padding-top: 0.1rem;
+    gap: 0;
+    padding-top: 0;
 }
 
 .fc-message--grouped .fc-message__bubble {
-    padding-top: 0.45rem;
+    padding-top: 0;
 }
 
 .fc-message__bubble {
     position: relative;
-    padding: 0.75rem 1rem 0.85rem;
-    border-radius: 14px;
+    padding: 0.65rem 1.25rem;
+    border-radius: 12px;
     transition: background 0.16s ease, box-shadow 0.16s ease;
+    width: 100%;
 }
 
 .fc-message:hover .fc-message__bubble,
@@ -458,8 +464,8 @@
 .fc-message__main {
     display: flex;
     flex-direction: column;
-    gap: 0.6rem;
-    padding-right: 3.25rem;
+    gap: 0.5rem;
+    padding-right: 2.5rem;
     min-width: 0;
 }
 
@@ -496,9 +502,8 @@
 .fc-message__body {
     display: flex;
     flex-direction: column;
-    gap: 0.6rem;
+    gap: 0.5rem;
     color: #1f2937;
-    max-width: 760px;
     width: 100%;
     min-width: 0;
 }
@@ -511,8 +516,8 @@
 
 .fc-message__text {
     white-space: pre-wrap;
-    line-height: 1.6;
-    font-size: 0.98rem;
+    line-height: 1.5;
+    font-size: 0.96rem;
     word-break: break-word;
     overflow-wrap: anywhere;
 }
@@ -581,14 +586,15 @@
 
 .fc-message__toolbar {
     position: absolute;
-    top: 0.35rem;
-    right: 0.45rem;
+    top: -0.55rem;
+    right: -0.05rem;
     display: inline-flex;
     align-items: center;
-    gap: 0.35rem;
+    gap: 0.25rem;
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.15s ease;
+    z-index: 2;
 }
 
 .fc-message:hover .fc-message__toolbar,
@@ -606,20 +612,24 @@
 .fc-message__toolbar-group {
     display: inline-flex;
     align-items: center;
-    gap: 0.25rem;
-    background: rgba(15, 23, 42, 0.08);
-    padding: 0.2rem 0.4rem;
+    gap: 0.2rem;
+    background: rgba(12, 19, 33, 0.94);
+    padding: 0.22rem 0.45rem;
     border-radius: 999px;
+    border: 1px solid rgba(249, 115, 22, 0.35);
+    box-shadow: 0 16px 32px -26px rgba(8, 13, 24, 0.9), 0 0 0 1px rgba(249, 115, 22, 0.18);
+    backdrop-filter: blur(6px);
 }
 
 .fc-message__toolbar-group--reactions {
-    background: rgba(15, 23, 42, 0.05);
+    background: rgba(15, 23, 42, 0.82);
 }
+
 
 .fc-message__toolbar-button {
     border: none;
     background: transparent;
-    color: #475569;
+    color: #e2e8f0;
     cursor: pointer;
     padding: 0.2rem 0.35rem;
     border-radius: 999px;
@@ -630,8 +640,8 @@
 
 .fc-message__toolbar-button:hover:not(:disabled),
 .fc-message__toolbar-button:focus-visible {
-    background: rgba(59, 130, 246, 0.16);
-    color: #1d4ed8;
+    background: rgba(249, 115, 22, 0.35);
+    color: #fff7ed;
     outline: none;
 }
 
@@ -717,26 +727,42 @@
     border-color: #1d4ed8;
 }
 
+
 .fc-popover {
     position: absolute;
     z-index: 40;
-    background: #ffffff;
+    --fc-popover-bg: #101b2f;
+    --fc-popover-border: rgba(12, 18, 31, 0.72);
+    --fc-popover-accent: #f97316;
+    --fc-popover-accent-strong: #fb923c;
+    --fc-popover-accent-rgb: 249, 115, 22;
+    background: var(--fc-popover-bg);
+    color: #f8fafc;
     border-radius: 14px;
-    padding: 0.6rem;
-    box-shadow: 0 22px 44px -24px rgba(15, 23, 42, 0.55), 0 0 0 1px rgba(148, 163, 184, 0.3);
+    padding: 0.65rem;
     min-width: 180px;
+    border: 1px solid var(--fc-popover-border);
+    box-shadow: 0 24px 48px -28px rgba(8, 13, 24, 0.88), 0 0 0 1px rgba(8, 13, 24, 0.5);
+}
+
+.fc-popover--placement-top-end {
+    transform-origin: top right;
+}
+
+.fc-popover--placement-bottom-end {
+    transform-origin: bottom right;
 }
 
 .fc-popover__panel {
     display: flex;
     flex-direction: column;
-    gap: 0.45rem;
+    gap: 0.5rem;
 }
 
 .fc-popover__title {
     font-size: 0.82rem;
     font-weight: 600;
-    color: #475569;
+    color: #fdba74;
 }
 
 .fc-popover__list {
@@ -749,20 +775,21 @@
 
 .fc-popover__item {
     border: none;
-    background: rgba(148, 163, 184, 0.12);
+    background: rgba(248, 250, 252, 0.08);
     border-radius: 10px;
     padding: 0.45rem 0.65rem;
     text-align: left;
     cursor: pointer;
     font-size: 0.85rem;
-    color: #1f2937;
-    transition: background 0.15s ease, color 0.15s ease;
+    color: #e2e8f0;
+    transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
 }
 
 .fc-popover__item:hover:not(:disabled),
 .fc-popover__item:focus-visible {
-    background: rgba(59, 130, 246, 0.2);
-    color: #1d4ed8;
+    background: rgba(var(--fc-popover-accent-rgb), 0.35);
+    color: #fff7ed;
+    transform: translateY(-1px);
     outline: none;
 }
 
@@ -773,43 +800,44 @@
 
 .fc-popover__empty {
     font-size: 0.8rem;
-    color: #94a3b8;
+    color: #fcd34d;
     padding: 0.3rem 0;
 }
 
 .fc-popover__menu {
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
+    gap: 0.2rem;
 }
 
 .fc-popover__menu-item {
     border: none;
-    background: transparent;
-    padding: 0.35rem 0.4rem;
+    background: rgba(11, 18, 33, 0.65);
+    padding: 0.35rem 0.5rem;
     text-align: left;
-    border-radius: 8px;
-    font-size: 0.85rem;
-    color: #1f2937;
+    border-radius: 10px;
+    font-size: 0.84rem;
+    color: #e2e8f0;
     cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease;
+    transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
 }
 
 .fc-popover__menu-item:hover:not(:disabled),
 .fc-popover__menu-item:focus-visible {
-    background: rgba(59, 130, 246, 0.15);
-    color: #1d4ed8;
+    background: rgba(var(--fc-popover-accent-rgb), 0.36);
+    color: #fff7ed;
+    transform: translateY(-1px);
     outline: none;
 }
 
 .fc-popover__menu-item.is-destructive {
-    color: #b91c1c;
+    color: #fca5a5;
 }
 
 .fc-popover__menu-item.is-destructive:hover:not(:disabled),
 .fc-popover__menu-item.is-destructive:focus-visible {
-    background: rgba(248, 113, 113, 0.15);
-    color: #991b1b;
+    background: rgba(248, 113, 113, 0.25);
+    color: #fee2e2;
 }
 
 .fc-popover__emoji {
@@ -820,23 +848,77 @@
 
 .fc-popover__emoji-button {
     border: none;
-    background: rgba(241, 245, 249, 0.9);
+    background: rgba(12, 19, 33, 0.88);
     border-radius: 10px;
     font-size: 1.2rem;
     padding: 0.4rem;
     cursor: pointer;
-    transition: background 0.15s ease, transform 0.15s ease;
+    border: 1px solid rgba(var(--fc-popover-accent-rgb), 0.35);
+    color: #f8fafc;
+    transition: background 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
 }
 
 .fc-popover__emoji-button:hover,
 .fc-popover__emoji-button:focus-visible {
-    background: rgba(59, 130, 246, 0.18);
+    background: rgba(var(--fc-popover-accent-rgb), 0.4);
+    border-color: rgba(var(--fc-popover-accent-rgb), 0.6);
     transform: translateY(-1px);
     outline: none;
 }
 
+.fc-popover--badge {
+    --fc-popover-bg: #111f35;
+    --fc-popover-border: rgba(249, 115, 22, 0.42);
+    padding: 0.32rem 0.42rem;
+    border-radius: 12px;
+    min-width: auto;
+    border: 1px solid var(--fc-popover-border);
+    box-shadow: 0 22px 38px -28px rgba(8, 13, 24, 0.9), 0 0 0 1px rgba(249, 115, 22, 0.24);
+}
+
+.fc-popover--badge .fc-popover__menu {
+    gap: 0.15rem;
+}
+
+.fc-popover--badge .fc-popover__menu-item {
+    padding: 0.3rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.82rem;
+    background: rgba(12, 19, 33, 0.78);
+}
+
+.fc-popover--badge .fc-popover__menu-item:hover:not(:disabled),
+.fc-popover--badge .fc-popover__menu-item:focus-visible {
+    background: rgba(var(--fc-popover-accent-rgb), 0.5);
+    color: #fff7ed;
+}
+
+.fc-popover--badge .fc-popover__menu-item.is-destructive {
+    color: #fca5a5;
+}
+
+.fc-popover--badge .fc-popover__menu-item.is-destructive:hover:not(:disabled),
+.fc-popover--badge .fc-popover__menu-item.is-destructive:focus-visible {
+    background: rgba(248, 113, 113, 0.35);
+    color: #fee2e2;
+}
+
+.fc-popover--badge.fc-popover--placement-top-end::after {
+    content: '';
+    position: absolute;
+    bottom: -5px;
+    right: 18px;
+    width: 12px;
+    height: 12px;
+    background: var(--fc-popover-bg);
+    transform: rotate(45deg);
+    border-radius: 3px;
+    border: 1px solid rgba(var(--fc-popover-accent-rgb), 0.28);
+    box-shadow: 0 8px 16px -12px rgba(8, 13, 24, 0.85);
+}
+
 .fc-chat-panel__footer {
-    padding: 1rem 1.5rem 1.5rem;
+    padding: 0.9rem 1.75rem 1.4rem;
     border-top: 1px solid #e2e8f0;
     background: #f8fafc;
 }
