@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import sys
 from pathlib import Path
 
@@ -109,13 +110,91 @@ def test_perform_upgrade_aborts_when_repository_is_dirty(monkeypatch):
     assert not called
 
 
+def test_perform_upgrade_clones_when_git_metadata_missing(monkeypatch, tmp_path):
+    repo_root = tmp_path / 'firecoast'
+    repo_root.mkdir()
+    data_dir = repo_root / 'data'
+    data_dir.mkdir()
+    backups_dir = repo_root / 'upgrade_backups'
+    backups_dir.mkdir()
+    preserved_file = repo_root / '.env'
+    preserved_file.write_text('keep me')
+    obsolete_file = repo_root / 'obsolete.txt'
+    obsolete_file.write_text('remove me')
+    revision_marker = repo_root / upgrade.REVISION_MARKER
+    revision_marker.write_text('prev')
+
+    clone_root = tmp_path / 'clone'
+    clone_root.mkdir()
+    (clone_root / 'app.py').write_text('new contents')
+    (clone_root / 'requirements.txt').write_text('dependency')
+    (clone_root / 'new_only.txt').write_text('new file')
+    (clone_root / 'data').mkdir()
+
+    backup_path = backups_dir / 'backup.zip'
+
+    def fake_backup(destination_dir: Path | None = None) -> Path:
+        assert destination_dir == backups_dir
+        backup_path.write_text('backup')
+        return backup_path
+
+    def fake_repo_root() -> Path:
+        return repo_root
+
+    def fake_is_git(path: Path) -> bool:
+        assert path == repo_root
+        return False
+
+    rev_outputs = ['newrev\n']
+
+    def fake_runner(args, *, cwd=None):
+        if tuple(args[:2]) == ('git', 'rev-parse'):
+            assert cwd == clone_root
+            return DummyResult(rev_outputs.pop(0))
+        raise AssertionError(f'Unexpected command: {args}')
+
+    @contextlib.contextmanager
+    def fake_clone_repository(remote_url, branch, runner, repo_root_path):
+        assert remote_url == upgrade.DEFAULT_REPOSITORY_URL
+        assert branch == 'master'
+        assert repo_root_path == repo_root
+        yield clone_root
+
+    monkeypatch.setattr(upgrade, 'ensure_data_root', lambda: data_dir)
+    monkeypatch.setattr(upgrade, 'create_backup_archive', fake_backup)
+    monkeypatch.setattr(upgrade, '_resolve_repo_root', fake_repo_root)
+    monkeypatch.setattr(upgrade, '_is_git_repository', fake_is_git)
+    monkeypatch.setattr(upgrade, '_clone_repository', fake_clone_repository)
+
+    result = upgrade.perform_upgrade(runner=fake_runner, install_dependencies=False)
+
+    assert result.previous_revision == 'prev'
+    assert result.current_revision == 'newrev'
+    assert result.backup_path == backup_path
+
+    assert not rev_outputs
+
+    assert preserved_file.exists() and preserved_file.read_text() == 'keep me'
+    assert not obsolete_file.exists()
+    assert (repo_root / 'app.py').read_text() == 'new contents'
+    assert (repo_root / 'new_only.txt').read_text() == 'new file'
+    assert (repo_root / upgrade.REVISION_MARKER).read_text() == 'newrev'
+
+
 def test_upgrade_endpoint_invokes_service(monkeypatch, tmp_path):
     client = firenotes_app.app.test_client()
 
-    def fake_perform_upgrade(remote: str, branch: str, install_dependencies: bool):
+    def fake_perform_upgrade(
+        remote: str,
+        branch: str,
+        *,
+        install_dependencies: bool,
+        repository_url: str | None,
+    ):
         assert remote == 'origin'
         assert branch == 'master'
         assert install_dependencies is True
+        assert repository_url is None
         return upgrade.UpgradeResult(
             backup_path=tmp_path / 'backup.zip',
             previous_revision='abc123',
@@ -136,8 +215,15 @@ def test_upgrade_endpoint_invokes_service(monkeypatch, tmp_path):
 def test_upgrade_endpoint_respects_skip_dependencies(monkeypatch, tmp_path):
     client = firenotes_app.app.test_client()
 
-    def fake_perform_upgrade(remote: str, branch: str, install_dependencies: bool):
+    def fake_perform_upgrade(
+        remote: str,
+        branch: str,
+        *,
+        install_dependencies: bool,
+        repository_url: str | None,
+    ):
         assert not install_dependencies
+        assert repository_url is None
         return upgrade.UpgradeResult(
             backup_path=tmp_path / 'backup.zip',
             previous_revision='abc123',

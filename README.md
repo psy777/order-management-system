@@ -43,6 +43,13 @@ On success the command prints where the backup archive lives (under
 wrong you can restore the backup through the `/api/import-data` endpoint or the
 `services.backup` helpers.
 
+Installations deployed without Git metadata (for example from a ZIP archive)
+will still upgrade successfully: the helper clones the
+`https://github.com/psy777/FireCoast.git` repository, replaces the application
+files while preserving your `data/` directory, and records the new revision in
+`.firecoast_revision`. Set the `FIRECOAST_UPGRADE_REPO` environment variable or
+provide a `repositoryUrl` in the API request to override the source repository.
+
 ## Schema-driven records
 
 The backend now exposes a reusable record framework in `services/records.py`. A `RecordSchema` describes the fields for each entity type, including which attributes support @mentions. Schemas are persisted in the `record_schemas` table and can be registered at runtime through the new API:

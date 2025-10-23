@@ -4934,12 +4934,14 @@ def trigger_system_upgrade():
     remote = (payload.get('remote') or 'origin').strip() or 'origin'
     branch = (payload.get('branch') or 'master').strip() or 'master'
     skip_dependencies = bool(payload.get('skipDependencies'))
+    repository_url = (payload.get('repositoryUrl') or '').strip() or None
 
     try:
         result = perform_upgrade(
             remote=remote,
             branch=branch,
             install_dependencies=not skip_dependencies,
+            repository_url=repository_url,
         )
     except UpgradeError as exc:
         app.logger.warning('Upgrade failed: %s', exc)

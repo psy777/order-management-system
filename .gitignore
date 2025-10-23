@@ -29,6 +29,7 @@ Thumbs.db
 /uploads
 /data
 upgrade_backups/
+.firecoast_revision
 
 # Distribution directory
 /dist
