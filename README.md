@@ -8,6 +8,32 @@ Backups produced by `/api/export-data` capture the entire contents of this direc
 
 Uploaded files served from `/data/<filename>` are stored directly inside this shared directory. If you manage the application manually, you only need to back up the `data/` folder to retain all persistent state.
 
+## Upgrading to the latest release
+
+The repository ships with an `upgrade.py` helper that safely fast-forwards the
+codebase to the latest commit on the `master` branch while preserving user
+data. The script first verifies that your working tree is clean, creates a ZIP
+backup of the `data/` directory, pulls the newest code, and finally reinstalls
+Python dependencies.
+
+To upgrade an installation, run the following from the project root:
+
+```
+python upgrade.py
+```
+
+By default the script pulls from the `origin` remote and the `master` branch.
+You can customise the source remote or branch, or skip dependency installation
+if you prefer to manage it manually:
+
+```
+python upgrade.py --remote upstream --branch master --skip-deps
+```
+
+If anything goes wrong during the process you can find the generated backup
+under `upgrade_backups/` and restore the previous state via the `/api/import-data`
+endpoint or the `services.backup` helpers.
+
 ## Schema-driven records
 
 The backend now exposes a reusable record framework in `services/records.py`. A `RecordSchema` describes the fields for each entity type, including which attributes support @mentions. Schemas are persisted in the `record_schemas` table and can be registered at runtime through the new API:
