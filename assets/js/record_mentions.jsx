@@ -469,7 +469,7 @@ function useMentionContextMenu({ handlesMap, refresh, containerRef }) {
     const ContextMenu = contextMenu.isOpen ? (
         <div
             ref={menuRef}
-            className="fixed z-50 w-64 rounded-xl border border-slate-200 bg-white p-4 shadow-2xl ring-1 ring-slate-100"
+            className="fixed z-50 w-64 rounded-xl border border-slate-200 bg-white p-4 shadow-xl ring-1 ring-slate-100 record-mention-context-menu"
             style={{ top: contextMenu.position.top, left: contextMenu.position.left }}
         >
             <div className="record-mention-context-header">
