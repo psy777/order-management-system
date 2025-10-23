@@ -1416,11 +1416,12 @@ def _handle_reminder_command(conn: sqlite3.Connection, note_id: str, content: st
     timezone_name = _resolve_timezone_setting()
     payload = {
         'title': title,
-        'notes': notes_part or f'Created from chat command: {body}',
         'timezone': timezone_name,
         'kind': 'reminder',
         'context_note_id': note_id,
     }
+    if notes_part:
+        payload['notes'] = notes_part
     if due_part:
         payload['due_at'] = due_part
     if timer_seconds:
@@ -1433,10 +1434,13 @@ def _handle_reminder_command(conn: sqlite3.Connection, note_id: str, content: st
         timer_value = reminder_payload.get('timer_seconds')
         if timer_value:
             timer_label = _format_timer_label(int(timer_value))
-            message_text = f"Reminder \"{reminder_payload['title']}\" in {timer_label}."
+            message_text = f"Reminder set for {timer_label}."
         else:
             due_label = _format_reminder_due(reminder_payload)
-            message_text = f"Reminder \"{reminder_payload['title']}\" {due_label}."
+            if due_label == 'no due date':
+                message_text = "Reminder set."
+            else:
+                message_text = f"Reminder {due_label}."
         metadata = {
             'action': 'reminder_created',
             'reminder': reminder_payload,
@@ -1490,10 +1494,11 @@ def _handle_task_command(conn: sqlite3.Connection, note_id: str, content: str) -
     timezone_name = _resolve_timezone_setting()
     payload = {
         'title': title,
-        'notes': notes_part or f'Created from chat command: {body}',
         'timezone': timezone_name,
         'kind': 'task',
     }
+    if notes_part:
+        payload['notes'] = notes_part
     if due_part:
         payload['due_at'] = due_part
     if timer_seconds:
@@ -1506,14 +1511,13 @@ def _handle_task_command(conn: sqlite3.Connection, note_id: str, content: str) -
         timer_value = task_payload.get('timer_seconds')
         if timer_value:
             timer_label = _format_timer_label(int(timer_value))
-            message_text = (
-                f"Task \"{task_payload['title']}\" in {timer_label}. React with ✅ when complete."
-            )
+            message_text = f"Task timer set for {timer_label}. React with ✅ when complete."
         else:
             due_label = _format_reminder_due(task_payload)
-            message_text = (
-                f"Task \"{task_payload['title']}\" {due_label}. React with ✅ when complete."
-            )
+            if due_label == 'no due date':
+                message_text = "Task created. React with ✅ when complete."
+            else:
+                message_text = f"Task {due_label}. React with ✅ when complete."
         metadata = {
             'action': 'task_created',
             'task': task_payload,
