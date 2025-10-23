@@ -401,19 +401,66 @@ function useMentionContextMenu({ handlesMap, refresh, containerRef }) {
         : null;
     const resolvedHandleForDisplay = contextMenu.rawHandle || contextMenu.handle || '';
     const contactDetails = contextMetadata && contextMetadata.contact ? contextMetadata.contact : null;
+    const contactEmails = Array.isArray(contactDetails?.emails) ? contactDetails.emails : [];
+    const contactPhones = Array.isArray(contactDetails?.phones) ? contactDetails.phones : [];
+    const contactAddresses = Array.isArray(contactDetails?.addresses) ? contactDetails.addresses : [];
+    const hasAnyContactInfo = contactDetails
+        ? Boolean(
+            (contactDetails.contactName && contactDetails.contactName.trim()) ||
+            (contactDetails.companyName && contactDetails.companyName.trim()) ||
+            (contactDetails.email && contactDetails.email.toString().trim()) ||
+            (contactDetails.phone && contactDetails.phone.toString().trim()) ||
+            contactEmails.some(entry => entry && entry.value) ||
+            contactPhones.some(entry => entry && entry.value) ||
+            contactAddresses.length > 0
+        )
+        : false;
 
-    const renderContactInfoButton = (label, value) => {
+    const renderCopyTile = (label, value, options = {}) => {
         if (!value) {
             return null;
         }
+        const {
+            badge = '',
+            lines = null,
+            displayValue = null,
+            key = null,
+        } = options;
+        const displayLines = Array.isArray(lines) && lines.length > 0 ? lines.filter(Boolean) : null;
+        const resolvedDisplay = displayValue != null ? displayValue : value;
+        const handleCopy = () => copyValueToClipboard(value, label);
         return (
             <button
+                key={key ?? undefined}
                 type="button"
                 className="w-full rounded-lg border border-slate-200 px-3 py-2 text-left transition hover:border-orange-300 hover:bg-orange-50"
-                onClick={() => copyValueToClipboard(value, label)}
+                onClick={handleCopy}
             >
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{label}</div>
-                <div className="mt-0.5 break-words text-sm font-medium text-slate-700">{value}</div>
+                <div className="flex items-center justify-between gap-2">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{label}</div>
+                    {badge && (
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                            {badge}
+                        </span>
+                    )}
+                </div>
+                <div className="mt-0.5 text-sm font-medium text-slate-700">
+                    {displayLines ? (
+                        displayLines.map((line, index) => (
+                            <span key={`${label}-line-${index}`} className="block break-words">
+                                {line}
+                            </span>
+                        ))
+                    ) : Array.isArray(resolvedDisplay) ? (
+                        resolvedDisplay.filter(Boolean).map((line, index) => (
+                            <span key={`${label}-display-${index}`} className="block break-words">
+                                {line}
+                            </span>
+                        ))
+                    ) : (
+                        <span className="break-words">{resolvedDisplay}</span>
+                    )}
+                </div>
                 <div className="mt-1 text-[10px] uppercase tracking-wide text-slate-300">Click to copy</div>
             </button>
         );
@@ -456,10 +503,40 @@ function useMentionContextMenu({ handlesMap, refresh, containerRef }) {
             </div>
             {contactDetails ? (
                 <div className="mt-3 flex flex-col gap-2 text-sm">
-                    {renderContactInfoButton('Contact', contactDetails.contactName)}
-                    {renderContactInfoButton('Company', contactDetails.companyName)}
-                    {renderContactInfoButton('Email', contactDetails.email)}
-                    {renderContactInfoButton('Phone', contactDetails.phone)}
+                    {renderCopyTile('Contact', contactDetails.contactName)}
+                    {renderCopyTile('Company', contactDetails.companyName)}
+                    {renderCopyTile(contactDetails.emailLabel || 'Email', contactDetails.emailValue || contactDetails.email, {
+                        badge: contactDetails.emailIsPrimary ? 'Primary' : '',
+                        displayValue: contactDetails.email,
+                    })}
+                    {contactEmails
+                        .filter(entry => entry?.value && entry.value !== (contactDetails.emailValue || contactDetails.email))
+                        .map((entry, index) => renderCopyTile(entry.label || 'Email', entry.value, {
+                            badge: entry.isPrimary ? 'Primary' : '',
+                            displayValue: entry.value,
+                            key: `contact-email-${index}`,
+                        }))}
+                    {renderCopyTile(contactDetails.phoneLabel || 'Phone', contactDetails.phoneValue || contactDetails.phone, {
+                        badge: contactDetails.phoneIsPrimary ? 'Primary' : '',
+                        displayValue: contactDetails.phone,
+                    })}
+                    {contactPhones
+                        .filter(entry => entry?.value && entry.value !== (contactDetails.phoneValue || contactDetails.phone))
+                        .map((entry, index) => renderCopyTile(entry.label || 'Phone', entry.value, {
+                            badge: entry.isPrimary ? 'Primary' : '',
+                            displayValue: entry.formatted || entry.value,
+                            key: `contact-phone-${index}`,
+                        }))}
+                    {contactAddresses.map((entry, index) => renderCopyTile(entry.label || 'Address', entry.value, {
+                        badge: entry.isPrimary ? 'Primary' : '',
+                        lines: entry.lines,
+                        key: `contact-address-${index}`,
+                    }))}
+                    {!hasAnyContactInfo && (
+                        <div className="rounded-lg border border-dashed border-slate-200 px-3 py-2 text-sm text-slate-500">
+                            No saved contact details yet.
+                        </div>
+                    )}
                 </div>
             ) : (
                 <div className="mt-3 flex flex-col gap-1 text-sm">
