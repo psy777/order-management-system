@@ -181,6 +181,15 @@ def test_perform_upgrade_clones_when_git_metadata_missing(monkeypatch, tmp_path)
     assert (repo_root / upgrade.REVISION_MARKER).read_text() == 'newrev'
 
 
+def test_is_git_repository_handles_broken_worktree_reference(tmp_path):
+    repo_root = tmp_path / 'firecoast'
+    repo_root.mkdir()
+    git_file = repo_root / '.git'
+    git_file.write_text('gitdir: /nonexistent/worktree\n')
+
+    assert not upgrade._is_git_repository(repo_root)
+
+
 def test_upgrade_endpoint_invokes_service(monkeypatch, tmp_path):
     client = firenotes_app.app.test_client()
 

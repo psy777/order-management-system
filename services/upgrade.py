@@ -204,7 +204,24 @@ def _resolve_repo_root() -> Path:
 
 
 def _is_git_repository(path: Path) -> bool:
-    return (path / ".git").exists()
+    git_metadata = path / ".git"
+
+    if git_metadata.is_dir():
+        return (git_metadata / "HEAD").exists()
+
+    if git_metadata.is_file():
+        try:
+            contents = git_metadata.read_text().strip()
+        except OSError:
+            return False
+
+        if contents.startswith("gitdir:"):
+            target = contents.split(":", 1)[1].strip()
+            if target:
+                git_dir = (git_metadata.parent / target).resolve()
+                return (git_dir / "HEAD").exists()
+
+    return False
 
 
 def _run_command(args: Sequence[str], *, cwd: Optional[Path] = None) -> subprocess.CompletedProcess[str]:
