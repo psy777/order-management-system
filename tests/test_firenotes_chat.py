@@ -262,6 +262,32 @@ def test_reminders_endpoint_returns_tasks_and_reminders(configure_chat_environme
     assert kinds['Prep briefing'] == 'reminder'
     assert kinds['Call vendor'] == 'task'
 
+    tasks_only = client.get('/api/reminders?status=all&kind=task')
+    assert tasks_only.status_code == 200
+    task_payload = tasks_only.get_json()
+    assert all(item['kind'] == 'task' for item in task_payload['reminders'])
+
+    reminders_only = client.get('/api/reminders?status=all&kind=reminder')
+    assert reminders_only.status_code == 200
+    reminder_payload = reminders_only.get_json()
+    assert all(item['kind'] == 'reminder' for item in reminder_payload['reminders'])
+
+
+def test_tasks_page_renders(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    response = client.get('/tasks')
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert 'id="tasks-root"' in html
+
+
+def test_reminders_page_renders(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    response = client.get('/reminders')
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert 'id="reminders-root"' in html
+
 
 def test_password_lookup_responds_with_matches(configure_chat_environment):
     firenotes_app.write_password_entries([

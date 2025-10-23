@@ -112,6 +112,13 @@ NAV_SHORTCUT_CATALOG = [
         },
     ),
     (
+        'tasks',
+        {
+            'label': 'Tasks',
+            'href': '/tasks',
+        },
+    ),
+    (
         'reminders',
         {
             'label': 'Reminders',
@@ -142,7 +149,7 @@ NAV_SHORTCUT_CATALOG = [
 ]
 
 NAV_SHORTCUT_REGISTRY = {key: dict(value, id=key) for key, value in NAV_SHORTCUT_CATALOG}
-DEFAULT_NAV_SHORTCUT_IDS = ['orders', 'contacts', 'analytics', 'reminders', 'calendar', 'passwords']
+DEFAULT_NAV_SHORTCUT_IDS = ['orders', 'contacts', 'analytics', 'tasks', 'reminders', 'calendar', 'passwords']
 
 UPLOAD_FOLDER = DATA_DIR
 UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
@@ -5602,6 +5609,11 @@ def passwords_page():
 @app.route('/reminders')
 def reminders_page():
     return render_with_navigation('reminders.html', active_nav='reminders')
+
+
+@app.route('/tasks')
+def tasks_page():
+    return render_with_navigation('tasks.html', active_nav='tasks')
 
 
 @app.route('/calendar')
