@@ -578,6 +578,30 @@
                 return new Intl.DateTimeFormat(undefined, options).format(date);
             };
 
+            const formatTimerLabel = (seconds) => {
+                if (!Number.isFinite(seconds) || seconds <= 0) {
+                    return '';
+                }
+                let remaining = Math.floor(seconds);
+                const parts = [];
+                const units = [
+                    { value: 86400, label: 'd' },
+                    { value: 3600, label: 'h' },
+                    { value: 60, label: 'm' },
+                ];
+                units.forEach(({ value, label }) => {
+                    if (remaining >= value) {
+                        const count = Math.floor(remaining / value);
+                        remaining -= count * value;
+                        parts.push(`${count}${label}`);
+                    }
+                });
+                if (remaining || parts.length === 0) {
+                    parts.push(`${remaining}s`);
+                }
+                return parts.join('');
+            };
+
             const formatEventWindow = (event) => {
                 if (!event || !event.start_at) {
                     return '';
@@ -967,6 +991,34 @@
                         parts.push(reminder.notes);
                     }
                     body.textContent = parts.join(' • ');
+                    container.appendChild(heading);
+                    container.appendChild(body);
+                    return container;
+                }
+
+                if (action === 'task_created' && metadata.task) {
+                    const heading = document.createElement('div');
+                    heading.className = 'fc-message__meta-heading';
+                    heading.textContent = 'Task';
+                    const body = document.createElement('div');
+                    body.className = 'fc-message__meta-body';
+                    const task = metadata.task;
+                    const parts = [task.title];
+                    if (task.due_at) {
+                        const dueLabel = formatTimestamp(task.due_at, Boolean(task.due_has_time));
+                        if (dueLabel) {
+                            parts.push(`due ${dueLabel}`);
+                        }
+                    } else if (task.timer_seconds) {
+                        const timerLabel = formatTimerLabel(Number(task.timer_seconds));
+                        if (timerLabel) {
+                            parts.push(`timer ${timerLabel}`);
+                        }
+                    }
+                    if (task.notes) {
+                        parts.push(task.notes);
+                    }
+                    body.textContent = parts.filter(Boolean).join(' • ');
                     container.appendChild(heading);
                     container.appendChild(body);
                     return container;
@@ -1564,15 +1616,16 @@
                     addItem('Copy Message Link', () => {
                         handleCopyMessageLink(message);
                     });
-                    if (isUserMessage(message)) {
-                        addItem(
-                            'Delete Message',
-                            () => {
-                                handleDeleteMessage(message);
-                            },
-                            { destructive: true }
-                        );
-                    }
+                    addItem(
+                        'Delete Message',
+                        () => {
+                            handleDeleteMessage(message);
+                        },
+                        {
+                            destructive: true,
+                            disabled: !message.id || isMessageActionPending(message.id),
+                        }
+                    );
                     return menu;
                 }, {
                     placement: 'top-end',
@@ -1733,6 +1786,12 @@
                     wrapper.classList.add('is-processing');
                 }
                 const metadata = message.metadata || {};
+                if (metadata.action === 'task_created' && metadata.task) {
+                    wrapper.classList.add('fc-message--task');
+                    if (metadata.task.completed) {
+                        wrapper.classList.add('fc-message--task-completed');
+                    }
+                }
                 const editingState = isMessageBeingEdited(message.id) ? state.activeMessageEdit : null;
                 if (editingState) {
                     wrapper.classList.add('is-editing');
@@ -2092,6 +2151,33 @@
                 }
             };
 
+            const applyClearResult = (clearResult) => {
+                if (!clearResult || typeof clearResult !== 'object') {
+                    return false;
+                }
+                const deletedIds = Array.isArray(clearResult.deleted_message_ids)
+                    ? clearResult.deleted_message_ids.map((value) => String(value)).filter(Boolean)
+                    : [];
+                if (deletedIds.length) {
+                    const toDelete = new Set(deletedIds);
+                    state.messages = state.messages.filter((entry) => {
+                        if (!entry || !entry.id) {
+                            return true;
+                        }
+                        return !toDelete.has(String(entry.id));
+                    });
+                }
+                if (
+                    clearResult.status &&
+                    clearResult.status !== 'success' &&
+                    clearResult.message
+                ) {
+                    showError(clearResult.message);
+                    return true;
+                }
+                return false;
+            };
+
             const selectNote = async (noteId, options = {}) => {
                 if (!noteId) {
                     return;
@@ -2225,13 +2311,18 @@
                     incoming.forEach((entry) => {
                         upsertMessage(entry);
                     });
+                    const displayedClearError = payload.clear
+                        ? applyClearResult(payload.clear)
+                        : false;
                     if (payload.note) {
                         updateNoteFromResponse(payload.note);
                     }
                     resetComposer();
                     pendingScrollToBottom = true;
                     renderMessages();
-                    clearError();
+                    if (!displayedClearError) {
+                        clearError();
+                    }
                 } catch (error) {
                     console.error('Failed to send message', error);
                     showError('Unable to send that message.');

@@ -317,11 +317,17 @@ class RecordService:
                 "title": FieldDefinition("title", field_type="string", required=True),
                 "handle": FieldDefinition("handle", field_type="string", required=True),
                 "notes": FieldDefinition("notes", field_type="text", mention=True),
+                "kind": FieldDefinition("kind", field_type="string", default="reminder"),
                 "due_at": FieldDefinition("due_at", field_type="string"),
                 "due_has_time": FieldDefinition("due_has_time", field_type="boolean", default=False),
+                "remind_at": FieldDefinition("remind_at", field_type="string"),
+                "timer_seconds": FieldDefinition("timer_seconds", field_type="integer"),
                 "timezone": FieldDefinition("timezone", field_type="string", default="UTC"),
                 "completed": FieldDefinition("completed", field_type="boolean", default=False),
                 "completed_at": FieldDefinition("completed_at", field_type="string"),
+                "persistent": FieldDefinition("persistent", field_type="boolean", default=False),
+                "last_notified_at": FieldDefinition("last_notified_at", field_type="string"),
+                "context_note_id": FieldDefinition("context_note_id", field_type="string"),
             },
             handle_field="handle",
             display_field="title",
@@ -572,16 +578,146 @@ class RecordService:
             sql += " WHERE " + " AND ".join(conditions)
         sql += " ORDER BY display_name COLLATE NOCASE ASC"
         cursor = conn.execute(sql, params)
-        results = []
-        for row in cursor.fetchall():
+        rows = cursor.fetchall()
+        results: List[Dict[str, Any]] = []
+        contact_ids: List[str] = []
+
+        for row in rows:
+            entity_type = row["entity_type"]
+            entity_id = row["entity_id"]
+            if entity_type and entity_type.lower() == "contact" and entity_id:
+                contact_ids.append(str(entity_id))
             results.append(
                 {
                     "handle": row["handle"],
-                    "entityType": row["entity_type"],
-                    "entityId": row["entity_id"],
+                    "entityType": entity_type,
+                    "entityId": entity_id,
                     "displayName": row["display_name"],
                 }
             )
+
+        if contact_ids:
+            placeholders = ",".join(["?"] * len(contact_ids))
+            contact_cursor = conn.execute(
+                f"""
+                SELECT id, company_name, contact_name, email, phone, details_json
+                FROM contacts
+                WHERE id IN ({placeholders})
+                """,
+                contact_ids,
+            )
+            contact_rows = {}
+            for contact_row in contact_cursor.fetchall():
+                contact_id = str(contact_row["id"])
+                contact_name = (contact_row["contact_name"] or "").strip()
+                company_name = (contact_row["company_name"] or "").strip()
+                fallback_email = (contact_row["email"] or "").strip()
+                fallback_phone = (contact_row["phone"] or "").strip()
+                raw_details = contact_row["details_json"]
+                details_payload: Dict[str, Any] = {}
+                if raw_details:
+                    try:
+                        details_payload = json.loads(raw_details) or {}
+                    except json.JSONDecodeError:
+                        details_payload = {}
+
+                def _normalise_entries(values: Any, *, allow_blank: bool = False) -> List[Dict[str, Any]]:
+                    if not isinstance(values, list):
+                        return []
+                    normalised: List[Dict[str, Any]] = []
+                    for entry in values:
+                        if not isinstance(entry, dict):
+                            continue
+                        value = (entry.get("value") or "").strip()
+                        if not value and not allow_blank:
+                            continue
+                        normalised.append(
+                            {
+                                "label": (entry.get("label") or "").strip(),
+                                "value": value,
+                                "isPrimary": bool(entry.get("isPrimary")),
+                                "formatted": (entry.get("formatted") or "").strip(),
+                            }
+                        )
+                    return normalised
+
+                email_entries = _normalise_entries(details_payload.get("emails"))
+                phone_entries = _normalise_entries(details_payload.get("phones"))
+
+                def _ensure_entry(entries: List[Dict[str, Any]], value: str, *, label: str = "") -> None:
+                    cleaned = (value or "").strip()
+                    if not cleaned:
+                        return
+                    for entry in entries:
+                        if entry["value"].lower() == cleaned.lower():
+                            return
+                    entries.append({"label": label.strip(), "value": cleaned, "isPrimary": False, "formatted": cleaned})
+
+                _ensure_entry(email_entries, fallback_email)
+                _ensure_entry(phone_entries, fallback_phone)
+
+                def _pick_primary(entries: List[Dict[str, Any]], fallback: str = "") -> Dict[str, Any]:
+                    for entry in entries:
+                        if entry.get("isPrimary"):
+                            return entry
+                    if entries:
+                        return entries[0]
+                    cleaned_fallback = (fallback or "").strip()
+                    if cleaned_fallback:
+                        return {"label": "", "value": cleaned_fallback, "isPrimary": True, "formatted": cleaned_fallback}
+                    return {}
+
+                primary_email_entry = _pick_primary(email_entries, fallback_email)
+                primary_phone_entry = _pick_primary(phone_entries, fallback_phone)
+
+                address_entries_raw = details_payload.get("addresses")
+                address_entries: List[Dict[str, Any]] = []
+                if isinstance(address_entries_raw, list):
+                    for entry in address_entries_raw:
+                        if not isinstance(entry, dict):
+                            continue
+                        street = (entry.get("street") or "").strip()
+                        city = (entry.get("city") or "").strip()
+                        state = (entry.get("state") or "").strip()
+                        postal_code = (entry.get("postalCode") or "").strip()
+                        if not any([street, city, state, postal_code]):
+                            continue
+                        city_state = ", ".join(part for part in [city, state] if part)
+                        line_two = " ".join(part for part in [city_state, postal_code] if part)
+                        lines = [line for line in [street, line_two] if line]
+                        address_entries.append(
+                            {
+                                "label": (entry.get("label") or "").strip() or "Address",
+                                "value": "\n".join(lines),
+                                "lines": lines,
+                                "isPrimary": bool(entry.get("isPrimary")),
+                            }
+                        )
+
+                contact_rows[contact_id] = {
+                    "companyName": company_name,
+                    "contactName": contact_name,
+                    "email": primary_email_entry.get("value", "").strip(),
+                    "emailLabel": (primary_email_entry.get("label") or "").strip(),
+                    "emailIsPrimary": bool(primary_email_entry.get("isPrimary")),
+                    "emailValue": primary_email_entry.get("value", "").strip(),
+                    "phone": primary_phone_entry.get("formatted") or primary_phone_entry.get("value", "").strip(),
+                    "phoneLabel": (primary_phone_entry.get("label") or "").strip(),
+                    "phoneIsPrimary": bool(primary_phone_entry.get("isPrimary")),
+                    "phoneValue": primary_phone_entry.get("value", "").strip(),
+                    "emails": email_entries,
+                    "phones": phone_entries,
+                    "addresses": address_entries,
+                }
+        else:
+            contact_rows = {}
+
+        for entry in results:
+            if entry["entityType"] and entry["entityType"].lower() == "contact":
+                contact_details = contact_rows.get(str(entry["entityId"]))
+                if contact_details:
+                    entry["contact"] = contact_details
+
         return results
 
     def resolve_handles(self, conn: sqlite3.Connection, handles: Sequence[str]) -> Dict[str, Dict[str, Any]]:

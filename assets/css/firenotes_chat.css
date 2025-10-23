@@ -461,6 +461,25 @@
     opacity: 0.65;
 }
 
+.fc-message--task .fc-message__bubble {
+    border-left: 4px solid #6366f1;
+    background: rgba(99, 102, 241, 0.08);
+}
+
+.fc-message--task .fc-message__author {
+    color: #4338ca;
+}
+
+.fc-message--task.fc-message--task-completed .fc-message__bubble {
+    border-left-color: #10b981;
+    background: rgba(16, 185, 129, 0.15);
+}
+
+.fc-message--task.fc-message--task-completed .fc-message__text,
+.fc-message--task.fc-message--task-completed .fc-message__meta-body {
+    color: #047857;
+}
+
 .fc-message__main {
     display: flex;
     flex-direction: column;
@@ -1166,7 +1185,7 @@
 
 .firenotes-chat .record-mention-text button {
     border: 1px solid #d0d5dd;
-    border-radius: 999px;
+    border-radius: 0.3rem;
     padding: 2px 8px;
     background: #f8fafc;
     color: #1f2933;
@@ -1179,6 +1198,131 @@
     background: rgba(246, 108, 64, 0.1);
     color: #d05832;
     outline: none;
+}
+
+.firenotes-chat .record-mention-context-menu {
+    max-height: 22rem;
+    overflow-y: auto;
+    padding-right: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.firenotes-chat .record-mention-context-menu::-webkit-scrollbar {
+    width: 6px;
+}
+
+.firenotes-chat .record-mention-context-menu::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.4);
+    border-radius: 999px;
+}
+
+.firenotes-chat .record-mention-context-header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.firenotes-chat .record-mention-context-name {
+    text-align: left;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #0f172a;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    transition: color 0.18s ease;
+}
+
+.firenotes-chat .record-mention-context-name:hover,
+.firenotes-chat .record-mention-context-name:focus-visible {
+    color: #f97316;
+    outline: none;
+}
+
+.firenotes-chat .record-mention-context-name,
+.firenotes-chat .record-mention-context-handle,
+.firenotes-chat .record-mention-context-pill {
+    margin: 0;
+}
+
+.firenotes-chat .record-mention-context-handle {
+    text-align: left;
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: 0.8rem;
+    color: #475569;
+    cursor: pointer;
+    transition: color 0.18s ease;
+}
+
+.firenotes-chat .record-mention-context-handle:hover,
+.firenotes-chat .record-mention-context-handle:focus-visible {
+    color: #f97316;
+    outline: none;
+}
+
+.firenotes-chat .record-mention-context-pill {
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    border-radius: 0.3rem;
+    padding: 0.18rem 0.5rem;
+    font-size: 0.66rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    background: rgba(226, 232, 240, 0.65);
+    color: #1f2937;
+}
+
+.firenotes-chat .record-mention-contact-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    font-size: 0.9rem;
+}
+
+.firenotes-chat .record-mention-contact-entry {
+    width: 100%;
+    border: none;
+    background: none;
+    padding: 0;
+    margin: 0;
+    text-align: left;
+    color: #0f172a;
+    font-size: inherit;
+    line-height: 1.4;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    transition: color 0.16s ease;
+}
+
+.firenotes-chat .record-mention-contact-entry:hover,
+.firenotes-chat .record-mention-contact-entry:focus-visible {
+    color: #f97316;
+    outline: none;
+}
+
+.firenotes-chat .record-mention-contact-entry__value {
+    font-weight: 600;
+    word-break: break-word;
+}
+
+.firenotes-chat .record-mention-contact-entry__meta {
+    font-size: 0.75rem;
+    color: #64748b;
+}
+
+.firenotes-chat .record-mention-contact-empty {
+    font-size: 0.85rem;
+    color: #94a3b8;
+    padding: 0.25rem 0;
 }
 
 .fc-message__text-content {

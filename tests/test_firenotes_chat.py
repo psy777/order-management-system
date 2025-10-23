@@ -2,6 +2,9 @@ import io
 import json
 import pathlib
 import sys
+from datetime import datetime, timedelta, timezone
+
+from dateutil.parser import isoparse
 
 import pytest
 
@@ -51,6 +54,13 @@ def _create_note(client, title='New note'):
     payload = response.get_json()
     assert 'note' in payload
     return payload['note']
+
+
+def _list_note_messages(client, note_id, limit=100):
+    response = client.get(f'/api/firenotes/chat?noteId={note_id}&limit={limit}')
+    assert response.status_code == 200
+    payload = response.get_json()
+    return payload['messages']
 
 
 def test_init_db_upgrades_record_handles_schema(configure_chat_environment):
@@ -127,14 +137,369 @@ def test_chat_creates_reminder_entry(configure_chat_environment):
     assert assistant['metadata']['action'] == 'reminder_created'
     reminder = assistant['metadata']['reminder']
     assert reminder['title'] == 'Follow up'
+    assert reminder['kind'] == 'reminder'
+    assert reminder['context_note_id'] == note['id']
 
     conn = get_db_connection()
     try:
         reminders = get_record_service().list_records(conn, 'reminder')
-        titles = [entry.get('title') for entry in reminders]
-        assert 'Follow up' in titles
+        kinds = {entry.get('title'): entry.get('kind') for entry in reminders}
+        assert kinds.get('Follow up') == 'reminder'
     finally:
         conn.close()
+
+
+def test_chat_creates_task_entry(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Task note')
+
+    response = client.post(
+        '/api/firenotes/chat',
+        json={
+            'note_id': note['id'],
+            'content': '.task Call @wes | 2030-02-01 15:00 | confirm availability',
+        },
+    )
+    assert response.status_code == 200
+    payload = response.get_json()
+    assistant = payload['messages'][1]
+    assert assistant['metadata']['action'] == 'task_created'
+    task = assistant['metadata']['task']
+    assert task['title'] == 'Call @wes'
+    assert task['kind'] == 'task'
+    assert not task['completed']
+
+    conn = get_db_connection()
+    try:
+        reminders = get_record_service().list_records(conn, 'reminder')
+        matches = [entry for entry in reminders if entry.get('title') == 'Call @wes']
+        assert matches and matches[0].get('kind') == 'task'
+    finally:
+        conn.close()
+
+
+def test_chat_creates_timer_reminder_from_short_command(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Timers note')
+
+    before = datetime.now(timezone.utc)
+    response = client.post(
+        '/api/firenotes/chat',
+        json={
+            'note_id': note['id'],
+            'content': '.reminder 3h20m call @wes',
+        },
+    )
+    after = datetime.now(timezone.utc)
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assistant = payload['messages'][1]
+    reminder = assistant['metadata']['reminder']
+    assert reminder['timer_seconds'] == 12000
+    assert reminder['due_at'] is not None
+    due_dt = isoparse(reminder['due_at'])
+    baseline = due_dt - timedelta(seconds=reminder['timer_seconds'])
+    assert before <= baseline <= after
+
+
+def test_clear_command_removes_firecoast_messages_by_count(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Clear count note')
+
+    create_response = client.post(
+        '/api/firenotes/chat',
+        json={'note_id': note['id'], 'content': '.task Send recap | 2030-01-01 09:00'},
+    )
+    assert create_response.status_code == 200
+    assistant_task = create_response.get_json()['messages'][-1]
+    assert assistant_task['metadata']['action'] == 'task_created'
+    history = _list_note_messages(client, note['id'])
+    assert any((msg.get('metadata') or {}).get('action') == 'task_created' for msg in history)
+
+    clear_response = client.post(
+        '/api/firenotes/chat',
+        json={'note_id': note['id'], 'content': '.clear 1 @firecoast'},
+    )
+    assert clear_response.status_code == 200
+    payload = clear_response.get_json()
+    clear_meta = payload['clear']
+    assert clear_meta['status'] == 'success'
+    assert clear_meta['criteria']['author'] == 'assistant'
+    deleted_ids = clear_meta['deleted_message_ids']
+    assert assistant_task['id'] in deleted_ids
+    assert len(deleted_ids) >= 2
+    assert not any((msg.get('metadata') or {}).get('action') == 'clear_result' for msg in payload['messages'])
+
+    remaining = _list_note_messages(client, note['id'])
+    assert not any((msg.get('metadata') or {}).get('action') == 'task_created' for msg in remaining)
+
+
+def test_clear_command_without_target_clears_recent_messages(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Clear latest note')
+
+    for label in ['first message', 'second message', 'third message']:
+        response = client.post(
+            '/api/firenotes/chat',
+            json={'note_id': note['id'], 'content': label},
+        )
+        assert response.status_code == 200
+
+    clear_response = client.post(
+        '/api/firenotes/chat',
+        json={'note_id': note['id'], 'content': '.clear 2'},
+    )
+    assert clear_response.status_code == 200
+    payload = clear_response.get_json()
+    clear_meta = payload['clear']
+    assert clear_meta['status'] == 'success'
+    assert clear_meta['cleared_target_count'] == 1
+    deleted_ids = clear_meta['deleted_message_ids']
+    assert len(deleted_ids) == 2
+
+    remaining = _list_note_messages(client, note['id'])
+    contents = [msg['content'] for msg in remaining]
+    assert contents == ['first message', 'second message']
+
+
+def test_clear_command_category_tasks(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Clear tasks note')
+
+    for index, title in enumerate(['Check invoices', 'Draft follow-up'], start=1):
+        response = client.post(
+            '/api/firenotes/chat',
+            json={
+                'note_id': note['id'],
+                'content': f'.task {title} | 2030-01-0{index} 10:00',
+            },
+        )
+        assert response.status_code == 200
+
+    clear_response = client.post(
+        '/api/firenotes/chat',
+        json={'note_id': note['id'], 'content': '.clear tasks'},
+    )
+    assert clear_response.status_code == 200
+    payload = clear_response.get_json()
+    clear_meta = payload['clear']
+    assert clear_meta['criteria']['category'] == 'tasks'
+    assert clear_meta['status'] == 'success'
+    assert clear_meta['cleared_target_count'] == 2
+    assert not payload['messages']
+
+    remaining = _list_note_messages(client, note['id'])
+    assert not any((msg.get('metadata') or {}).get('action') == 'task_created' for msg in remaining)
+
+
+def test_clear_command_prunes_user_commands(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Clear commands note')
+
+    first = client.post(
+        '/api/firenotes/chat',
+        json={'note_id': note['id'], 'content': '.task Prepare agenda'},
+    )
+    assert first.status_code == 200
+
+    clear_response = client.post(
+        '/api/firenotes/chat',
+        json={'note_id': note['id'], 'content': '.clear commands'},
+    )
+    assert clear_response.status_code == 200
+    payload = clear_response.get_json()
+    clear_meta = payload['clear']
+    assert clear_meta['criteria']['category'] == 'commands'
+    assert clear_meta['cleared_target_count'] >= 1
+    deleted_ids = set(clear_meta['deleted_message_ids'])
+    assert deleted_ids
+
+    remaining = _list_note_messages(client, note['id'])
+    remaining_commands = [
+        msg
+        for msg in remaining
+        if msg.get('author') == 'user' and (msg.get('content') or '').lstrip().startswith('.')
+    ]
+    assert not remaining_commands
+
+
+def test_task_completion_toggled_with_checkmark_reaction(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Reaction note')
+
+    response = client.post(
+        '/api/firenotes/chat',
+        json={
+            'note_id': note['id'],
+            'content': '.task 45m follow up with @client',
+        },
+    )
+    assert response.status_code == 200
+    payload = response.get_json()
+    assistant = payload['messages'][1]
+    task_metadata = assistant['metadata']['task']
+    assert task_metadata['timer_seconds'] == 2700
+    assert not task_metadata['completed']
+
+    message_id = assistant['id']
+
+    add_response = client.post(
+        '/api/firenotes/chat/reactions',
+        json={'message_id': message_id, 'emoji': '✅'},
+    )
+    assert add_response.status_code == 200
+    add_payload = add_response.get_json()
+    updated_message = add_payload['message']
+    assert updated_message['metadata']['task']['completed']
+
+    remove_response = client.post(
+        '/api/firenotes/chat/reactions',
+        json={'message_id': message_id, 'emoji': '✅'},
+    )
+    assert remove_response.status_code == 200
+    remove_payload = remove_response.get_json()
+    reverted_message = remove_payload['message']
+    assert not reverted_message['metadata']['task']['completed']
+
+    task_id = reverted_message['metadata']['task']['id']
+    conn = get_db_connection()
+    try:
+        records = get_record_service().list_records(conn, 'reminder')
+        stored = next(entry for entry in records if entry['id'] == task_id)
+        assert stored['completed'] is False
+    finally:
+        conn.close()
+
+
+def test_reminders_endpoint_returns_tasks_and_reminders(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+
+    first = client.post('/api/reminders', json={'title': 'Prep briefing', 'kind': 'reminder'})
+    assert first.status_code == 201
+
+    second = client.post(
+        '/api/reminders',
+        json={'title': 'Call vendor', 'kind': 'task', 'timer_seconds': 600},
+    )
+    assert second.status_code == 201
+
+    response = client.get('/api/reminders?status=all')
+    assert response.status_code == 200
+    payload = response.get_json()
+    kinds = {item['title']: item['kind'] for item in payload['reminders']}
+    assert kinds['Prep briefing'] == 'reminder'
+    assert kinds['Call vendor'] == 'task'
+
+    tasks_only = client.get('/api/reminders?status=all&kind=task')
+    assert tasks_only.status_code == 200
+    task_payload = tasks_only.get_json()
+    assert all(item['kind'] == 'task' for item in task_payload['reminders'])
+
+    reminders_only = client.get('/api/reminders?status=all&kind=reminder')
+    assert reminders_only.status_code == 200
+    reminder_payload = reminders_only.get_json()
+    assert all(item['kind'] == 'reminder' for item in reminder_payload['reminders'])
+
+
+def test_tasks_page_renders(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    response = client.get('/tasks')
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert 'id="tasks-root"' in html
+
+
+def test_reminders_page_renders(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    response = client.get('/reminders')
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert 'id="reminders-root"' in html
+
+
+def test_due_reminder_dispatch_cycle_posts_chat_message(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Dispatch note')
+    now = datetime.now(timezone.utc)
+
+    conn = get_db_connection()
+    try:
+        service = get_record_service()
+        payload = {
+            'title': 'Dispatch me',
+            'notes': 'Check the timer',
+            'timezone': 'UTC',
+            'kind': 'reminder',
+            'due_at': (now - timedelta(minutes=5)).isoformat(),
+            'remind_at': (now - timedelta(minutes=5)).isoformat(),
+            'context_note_id': note['id'],
+        }
+        normalized = firenotes_app._normalize_reminder_payload(conn, payload)
+        created = service.create_record(conn, 'reminder', normalized, actor='pytest')
+        reminder_id = created['id']
+        conn.commit()
+    finally:
+        conn.close()
+
+    fired = firenotes_app.run_reminder_dispatch_cycle(now=now)
+    assert any(entry['id'] == reminder_id for entry in fired)
+
+    reminder_response = client.get(f'/api/reminders/{reminder_id}')
+    assert reminder_response.status_code == 200
+    reminder_payload = reminder_response.get_json()['reminder']
+    assert reminder_payload['completed'] is True
+    assert reminder_payload['last_notified_at']
+
+    chat_history = client.get(f"/api/firenotes/chat?noteId={note['id']}&limit=5").get_json()['messages']
+    fired_messages = [msg for msg in chat_history if (msg.get('metadata') or {}).get('action') == 'reminder_fired']
+    assert fired_messages
+    assert 'Dispatch me' in fired_messages[-1]['content']
+
+
+def test_persistent_reminder_dispatch_cycle_stays_active(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Persistent dispatch')
+    now = datetime.now(timezone.utc)
+
+    conn = get_db_connection()
+    try:
+        service = get_record_service()
+        payload = {
+            'title': 'Standup ping',
+            'timezone': 'UTC',
+            'kind': 'reminder',
+            'due_at': (now - timedelta(minutes=10)).isoformat(),
+            'remind_at': (now - timedelta(minutes=10)).isoformat(),
+            'context_note_id': note['id'],
+            'persistent': True,
+        }
+        normalized = firenotes_app._normalize_reminder_payload(conn, payload)
+        created = service.create_record(conn, 'reminder', normalized, actor='pytest')
+        reminder_id = created['id']
+        conn.commit()
+    finally:
+        conn.close()
+
+    first_cycle = firenotes_app.run_reminder_dispatch_cycle(now=now)
+    assert any(entry['id'] == reminder_id for entry in first_cycle)
+
+    reminder_response = client.get(f'/api/reminders/{reminder_id}')
+    reminder_payload = reminder_response.get_json()['reminder']
+    assert reminder_payload['persistent'] is True
+    assert reminder_payload['completed'] is False
+    assert reminder_payload['last_notified_at']
+
+    history_payload = client.get(f"/api/firenotes/chat?noteId={note['id']}&limit=5").get_json()
+    initial_fired = [msg for msg in history_payload['messages'] if (msg.get('metadata') or {}).get('action') == 'reminder_fired']
+    assert len(initial_fired) == 1
+
+    second_cycle = firenotes_app.run_reminder_dispatch_cycle(now=now + timedelta(minutes=1))
+    assert all(entry['id'] != reminder_id for entry in second_cycle)
+
+    history_after = client.get(f"/api/firenotes/chat?noteId={note['id']}&limit=5").get_json()['messages']
+    fired_after = [msg for msg in history_after if (msg.get('metadata') or {}).get('action') == 'reminder_fired']
+    assert len(fired_after) == 1
 
 
 def test_password_lookup_responds_with_matches(configure_chat_environment):
@@ -374,6 +739,36 @@ def test_note_handles_available_in_directory(configure_chat_environment):
     payload = response.get_json()
     handles = {entry['handle'] for entry in payload.get('handles', [])}
     assert note.get('handle') in handles
+
+
+def test_contact_handles_include_contact_details(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    response = client.post(
+        '/api/contacts',
+        json={
+            'companyName': 'Fire Coast Logistics',
+            'contactName': 'David Tucker',
+            'email': 'david@example.com',
+            'phone': '555-0100',
+            'handle': 'davidtucker',
+        },
+    )
+    assert response.status_code == 201
+    payload = response.get_json()
+    created_contact = payload['contact']
+    contact_id = created_contact['id']
+
+    handles_response = client.get('/api/records/handles?entity_types=contact')
+    assert handles_response.status_code == 200
+    handles_payload = handles_response.get_json()
+    directory = handles_payload.get('handles', [])
+    match = next((entry for entry in directory if entry['entityId'] == contact_id), None)
+    assert match is not None
+    assert match['handle'] == 'davidtucker'
+    assert match['contact']['contactName'] == 'David Tucker'
+    assert match['contact']['companyName'] == 'Fire Coast Logistics'
+    assert match['contact']['email'] == 'david@example.com'
+    assert match['contact']['phone'] == '5550100'
 
 
 def test_delete_note_removes_history_and_files(configure_chat_environment):

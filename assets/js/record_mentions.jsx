@@ -310,7 +310,13 @@ function useMentionContextMenu({ handlesMap, refresh, containerRef }) {
             }
             closeContextMenu();
         };
-        const handleGlobalScroll = () => closeContextMenu();
+        const handleGlobalScroll = event => {
+            if (menuRef.current && event && event.target && menuRef.current.contains(event.target)) {
+                return;
+            }
+            closeContextMenu();
+        };
+        const handleGlobalResize = () => closeContextMenu();
         const handleGlobalKey = event => {
             if (event.key === 'Escape') {
                 event.preventDefault();
@@ -319,24 +325,29 @@ function useMentionContextMenu({ handlesMap, refresh, containerRef }) {
         };
         window.addEventListener('mousedown', handleGlobalClick);
         window.addEventListener('scroll', handleGlobalScroll, true);
-        window.addEventListener('resize', handleGlobalScroll);
+        window.addEventListener('resize', handleGlobalResize);
         window.addEventListener('keydown', handleGlobalKey);
         return () => {
             window.removeEventListener('mousedown', handleGlobalClick);
             window.removeEventListener('scroll', handleGlobalScroll, true);
-            window.removeEventListener('resize', handleGlobalScroll);
+            window.removeEventListener('resize', handleGlobalResize);
             window.removeEventListener('keydown', handleGlobalKey);
         };
     }, [closeContextMenu, containerRef, contextMenu.isOpen]);
 
-    const copyHandleToClipboard = useCallback(async handleValue => {
-        const handleText = `@${handleValue}`;
+    const copyValueToClipboard = useCallback(async (value, label) => {
+        if (!value) {
+            setMenuFeedback(`No ${label.toLowerCase()} available to copy`);
+            setTimeout(() => setMenuFeedback(''), 2000);
+            return;
+        }
+        const textValue = value;
         try {
             if (navigator.clipboard && navigator.clipboard.writeText) {
-                await navigator.clipboard.writeText(handleText);
+                await navigator.clipboard.writeText(textValue);
             } else {
                 const input = document.createElement('textarea');
-                input.value = handleText;
+                input.value = textValue;
                 input.setAttribute('readonly', '');
                 input.style.position = 'absolute';
                 input.style.left = '-9999px';
@@ -345,14 +356,19 @@ function useMentionContextMenu({ handlesMap, refresh, containerRef }) {
                 document.execCommand('copy');
                 document.body.removeChild(input);
             }
-            setMenuFeedback('Handle copied to clipboard');
+            setMenuFeedback(`${label} copied to clipboard`);
             setTimeout(() => setMenuFeedback(''), 2000);
         } catch (err) {
-            console.error('Failed to copy handle', err);
+            console.error('Failed to copy value', err);
             setMenuFeedback('Unable to copy automatically');
             setTimeout(() => setMenuFeedback(''), 2500);
         }
-    }, []);
+    }, [setMenuFeedback]);
+
+    const copyHandleToClipboard = useCallback(async handleValue => {
+        const handleText = handleValue ? `@${handleValue}` : '';
+        await copyValueToClipboard(handleText, 'Handle');
+    }, [copyValueToClipboard]);
 
     const openContextMenuAtRect = useCallback((handle, metadata, rect, options = {}) => {
         const normalisedHandle = normaliseHandle(handle);
@@ -390,90 +406,215 @@ function useMentionContextMenu({ handlesMap, refresh, containerRef }) {
         ? `/api/records/${(contextMetadata.entityType || '').toLowerCase()}/${encodeURIComponent(contextMetadata.entityId)}`
         : null;
     const resolvedHandleForDisplay = contextMenu.rawHandle || contextMenu.handle || '';
+    const contactDetails = contextMetadata && contextMetadata.contact ? contextMetadata.contact : null;
+    const contactEmails = Array.isArray(contactDetails?.emails) ? contactDetails.emails : [];
+    const contactPhones = Array.isArray(contactDetails?.phones) ? contactDetails.phones : [];
+    const contactAddresses = Array.isArray(contactDetails?.addresses) ? contactDetails.addresses : [];
+    const hasAnyContactInfo = contactDetails
+        ? Boolean(
+            (contactDetails.contactName && contactDetails.contactName.trim()) ||
+            (contactDetails.companyName && contactDetails.companyName.trim()) ||
+            (contactDetails.email && contactDetails.email.toString().trim()) ||
+            (contactDetails.phone && contactDetails.phone.toString().trim()) ||
+            contactEmails.some(entry => entry && entry.value) ||
+            contactPhones.some(entry => entry && entry.value) ||
+            contactAddresses.length > 0
+        )
+        : false;
+
+    const renderCopyTile = (label, value, options = {}) => {
+        if (!value) {
+            return null;
+        }
+        const {
+            badge = '',
+            note = '',
+            lines = null,
+            displayValue = null,
+            key = null,
+        } = options;
+        const displayLines = Array.isArray(lines) && lines.length > 0 ? lines.filter(Boolean) : null;
+        const resolvedDisplay = displayValue != null ? displayValue : value;
+        const handleCopy = () => copyValueToClipboard(value, label);
+        const metaParts = [];
+        if (note && note.trim()) {
+            metaParts.push(note.trim());
+        }
+        if (badge && badge.trim()) {
+            metaParts.push(badge.trim());
+        }
+        return (
+            <button
+                key={key ?? undefined}
+                type="button"
+                className="record-mention-contact-entry"
+                onClick={handleCopy}
+            >
+                <div className="record-mention-contact-entry__value">
+                    {displayLines ? (
+                        displayLines.map((line, index) => (
+                            <span key={`${label}-line-${index}`} className="block break-words">
+                                {line}
+                            </span>
+                        ))
+                    ) : Array.isArray(resolvedDisplay) ? (
+                        resolvedDisplay.filter(Boolean).map((line, index) => (
+                            <span key={`${label}-display-${index}`} className="block break-words">
+                                {line}
+                            </span>
+                        ))
+                    ) : (
+                        <span className="break-words">{resolvedDisplay}</span>
+                    )}
+                </div>
+                {metaParts.length > 0 && (
+                    <div className="record-mention-contact-entry__meta">
+                        {metaParts.join(' • ')}
+                    </div>
+                )}
+            </button>
+        );
+    };
 
     const ContextMenu = contextMenu.isOpen ? (
         <div
             ref={menuRef}
-            className="fixed z-50 w-64 rounded-xl border border-slate-200 bg-white p-4 shadow-2xl ring-1 ring-slate-100"
+            className="fixed z-50 w-64 rounded-xl border border-slate-200 bg-white p-4 shadow-xl ring-1 ring-slate-100 record-mention-context-menu"
             style={{ top: contextMenu.position.top, left: contextMenu.position.left }}
         >
-            <div className="space-y-1">
-                <div className="text-sm font-semibold text-slate-900">{getDisplayLabel(contextMetadata, resolvedHandleForDisplay)}</div>
-                <div className="text-xs text-slate-500">@{resolvedHandleForDisplay}</div>
-                {contextEntityLabel && (
-                    <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
-                        {contextEntityLabel}
-                    </span>
-                )}
-            </div>
-            <div className="mt-3 flex flex-col gap-1 text-sm">
+            <div className="record-mention-context-header">
                 <button
                     type="button"
-                    className="flex items-center justify-between rounded-md px-2 py-2 text-left transition hover:bg-orange-50 hover:text-orange-700"
+                    className="record-mention-context-name"
                     onClick={() => {
                         if (!recordUrl) {
                             setMenuFeedback('No record destination yet.');
+                            setTimeout(() => setMenuFeedback(''), 2000);
                             return;
                         }
                         window.open(recordUrl, '_blank');
                         closeContextMenu();
                     }}
-                    disabled={!recordUrl}
                 >
-                    <span>{hasUiDestination ? 'Open record' : 'View record JSON'}</span>
-                    {!recordUrl && <span className="text-xs text-slate-400">Unavailable</span>}
+                    {getDisplayLabel(contextMetadata, resolvedHandleForDisplay)}
                 </button>
                 <button
                     type="button"
-                    className="flex items-center justify-between rounded-md px-2 py-2 text-left transition hover:bg-orange-50 hover:text-orange-700"
-                    onClick={() => {
-                        if (!activityUrl) {
-                            setMenuFeedback('No activity log available yet.');
-                            return;
-                        }
-                        window.open(activityUrl, '_blank');
-                        closeContextMenu();
-                    }}
-                    disabled={!activityUrl}
-                >
-                    <span>Open activity log</span>
-                    {!activityUrl && <span className="text-xs text-slate-400">Unavailable</span>}
-                </button>
-                <button
-                    type="button"
-                    className="flex items-center justify-between rounded-md px-2 py-2 text-left transition hover:bg-orange-50 hover:text-orange-700"
+                    className="record-mention-context-handle"
                     onClick={() => copyHandleToClipboard(resolvedHandleForDisplay)}
                 >
-                    <span>Copy handle</span>
-                    <span className="text-xs text-slate-400">@{resolvedHandleForDisplay}</span>
+                    @{resolvedHandleForDisplay}
                 </button>
-                {apiUrl && (
+                {contextEntityLabel && (
+                    <span className="record-mention-context-pill">
+                        {contextEntityLabel}
+                    </span>
+                )}
+            </div>
+            {contactDetails ? (
+                <div className="record-mention-contact-list">
+                    {renderCopyTile('Contact', contactDetails.contactName)}
+                    {renderCopyTile('Company', contactDetails.companyName)}
+                    {renderCopyTile(contactDetails.emailLabel || 'Email', contactDetails.emailValue || contactDetails.email, {
+                        badge: contactDetails.emailIsPrimary ? 'Primary' : '',
+                        displayValue: contactDetails.email,
+                        note: contactDetails.emailLabel || '',
+                    })}
+                    {contactEmails
+                        .filter(entry => entry?.value && entry.value !== (contactDetails.emailValue || contactDetails.email))
+                        .map((entry, index) => renderCopyTile(entry.label || 'Email', entry.value, {
+                            badge: entry.isPrimary ? 'Primary' : '',
+                            displayValue: entry.value,
+                            note: entry.label || '',
+                            key: `contact-email-${index}`,
+                        }))}
+                    {renderCopyTile(contactDetails.phoneLabel || 'Phone', contactDetails.phoneValue || contactDetails.phone, {
+                        badge: contactDetails.phoneIsPrimary ? 'Primary' : '',
+                        displayValue: contactDetails.phone,
+                        note: contactDetails.phoneLabel || '',
+                    })}
+                    {contactPhones
+                        .filter(entry => entry?.value && entry.value !== (contactDetails.phoneValue || contactDetails.phone))
+                        .map((entry, index) => renderCopyTile(entry.label || 'Phone', entry.value, {
+                            badge: entry.isPrimary ? 'Primary' : '',
+                            displayValue: entry.formatted || entry.value,
+                            note: entry.label || '',
+                            key: `contact-phone-${index}`,
+                        }))}
+                    {contactAddresses.map((entry, index) => renderCopyTile(entry.label || 'Address', entry.value, {
+                        badge: entry.isPrimary ? 'Primary' : '',
+                        lines: entry.lines,
+                        note: entry.label || '',
+                        key: `contact-address-${index}`,
+                    }))}
+                    {!hasAnyContactInfo && (
+                        <div className="record-mention-contact-empty">
+                            No saved contact details yet.
+                        </div>
+                    )}
+                </div>
+            ) : (
+                <div className="mt-3 flex flex-col gap-1 text-sm">
                     <button
                         type="button"
                         className="flex items-center justify-between rounded-md px-2 py-2 text-left transition hover:bg-orange-50 hover:text-orange-700"
                         onClick={() => {
-                            window.open(apiUrl, '_blank');
+                            if (!recordUrl) {
+                                setMenuFeedback('No record destination yet.');
+                                return;
+                            }
+                            window.open(recordUrl, '_blank');
                             closeContextMenu();
                         }}
+                        disabled={!recordUrl}
                     >
-                        <span>Open raw record</span>
-                        <span className="text-xs text-slate-400">API</span>
+                        <span>{hasUiDestination ? 'Open record' : 'View record JSON'}</span>
+                        {!recordUrl && <span className="text-xs text-slate-400">Unavailable</span>}
                     </button>
-                )}
-                <button
-                    type="button"
-                    className="flex items-center justify-between rounded-md px-2 py-2 text-left transition hover:bg-orange-50 hover:text-orange-700"
-                    onClick={() => {
-                        if (typeof refresh === 'function') {
-                            refresh();
-                        }
-                        setMenuFeedback('Directory refresh requested');
-                        setTimeout(() => setMenuFeedback(''), 2000);
-                    }}
-                >
-                    <span>Refresh directory</span>
-                </button>
-            </div>
+                    <button
+                        type="button"
+                        className="flex items-center justify-between rounded-md px-2 py-2 text-left transition hover:bg-orange-50 hover:text-orange-700"
+                        onClick={() => {
+                            if (!activityUrl) {
+                                setMenuFeedback('No activity log available yet.');
+                                return;
+                            }
+                            window.open(activityUrl, '_blank');
+                            closeContextMenu();
+                        }}
+                        disabled={!activityUrl}
+                    >
+                        <span>Open activity log</span>
+                        {!activityUrl && <span className="text-xs text-slate-400">Unavailable</span>}
+                    </button>
+                    {apiUrl && (
+                        <button
+                            type="button"
+                            className="flex items-center justify-between rounded-md px-2 py-2 text-left transition hover:bg-orange-50 hover:text-orange-700"
+                            onClick={() => {
+                                window.open(apiUrl, '_blank');
+                                closeContextMenu();
+                            }}
+                        >
+                            <span>Open raw record</span>
+                            <span className="text-xs text-slate-400">API</span>
+                        </button>
+                    )}
+                    <button
+                        type="button"
+                        className="flex items-center justify-between rounded-md px-2 py-2 text-left transition hover:bg-orange-50 hover:text-orange-700"
+                        onClick={() => {
+                            if (typeof refresh === 'function') {
+                                refresh();
+                            }
+                            setMenuFeedback('Directory refresh requested');
+                            setTimeout(() => setMenuFeedback(''), 2000);
+                        }}
+                    >
+                        <span>Refresh directory</span>
+                    </button>
+                </div>
+            )}
             {menuFeedback && (
                 <div className="mt-3 text-xs font-medium text-emerald-600">{menuFeedback}</div>
             )}
@@ -738,8 +879,8 @@ function RecordMentionTextarea({
             const mentionText = `@${rawHandle || handle}`;
             const pillLabel = isCaretInside ? mentionText : displayLabel;
             const pillClasses = isCaretInside
-                ? 'mention-pill pointer-events-auto inline-flex max-w-full items-center gap-1 rounded-full border border-orange-300 bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700 shadow-sm'
-                : 'mention-pill pointer-events-auto inline-flex max-w-full items-center gap-1 rounded-full border border-orange-200 bg-orange-50 px-2 py-0.5 text-xs font-semibold text-orange-700 shadow-sm transition-colors hover:bg-orange-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500';
+                ? 'mention-pill pointer-events-auto inline-flex max-w-full items-center gap-1 rounded-md border border-orange-300 bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700 shadow-sm'
+                : 'mention-pill pointer-events-auto inline-flex max-w-full items-center gap-1 rounded-md border border-orange-200 bg-orange-50 px-2 py-0.5 text-xs font-semibold text-orange-700 shadow-sm transition-colors hover:bg-orange-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500';
             const caretWithinMention = isCaretInside && typeof caretOffset === 'number'
                 ? Math.max(0, Math.min(mentionText.length, caretOffset))
                 : null;
@@ -775,7 +916,7 @@ function RecordMentionTextarea({
                         <span className="truncate">{pillLabel}</span>
                     )}
                     {!isCaretInside && badgeLabel && (
-                        <span className="rounded-full bg-orange-100 px-1 text-[10px] font-semibold uppercase tracking-wide text-orange-600">
+                        <span className="rounded-md bg-orange-100 px-1 text-[10px] font-semibold uppercase tracking-wide text-orange-600">
                             {badgeLabel}
                         </span>
                     )}
@@ -856,7 +997,7 @@ function RecordMentionTextarea({
                                         <div className="record-mention-textarea__option-main flex items-center justify-between gap-2">
                                             <span className="record-mention-textarea__item-label font-semibold">{displayLabel}</span>
                                             {entityLabel && (
-                                                <span className="record-mention-textarea__item-entity rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                                                <span className="record-mention-textarea__item-entity rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                                                     {entityLabel}
                                                 </span>
                                             )}
@@ -926,7 +1067,7 @@ function RecordMentionText({
                     key={`mention-${start}-${handle}`}
                     type="button"
                     data-mention-handle={handle}
-                    className="pointer-events-auto inline-flex max-w-full items-center gap-1 rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-sm font-medium text-slate-700 transition-colors hover:bg-orange-50 hover:text-orange-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500"
+                    className="pointer-events-auto inline-flex max-w-full items-center gap-1 rounded-md border border-slate-300 bg-slate-50 px-2 py-0.5 text-sm font-medium text-slate-700 transition-colors hover:bg-orange-50 hover:text-orange-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500"
                     style={{ pointerEvents: 'auto' }}
                     onClick={event => openContextMenuFromEvent(event, handle, metadata)}
                     aria-label={metadata?.displayName ? `Mention: ${metadata.displayName}` : `Mention handle ${handle}`}
@@ -934,7 +1075,7 @@ function RecordMentionText({
                 >
                     <span className="truncate">{displayLabel}</span>
                     {badgeLabel && (
-                        <span className="rounded-full bg-slate-200 px-1 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                        <span className="rounded-md bg-slate-200 px-1 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
                             {badgeLabel}
                         </span>
                     )}

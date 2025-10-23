@@ -1,4 +1,5 @@
 import os
+import json
 import sqlite3
 import sys
 import unittest
@@ -99,6 +100,15 @@ class RecordServiceIntegrationTests(unittest.TestCase):
                 actor TEXT,
                 payload TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE contacts (
+                id TEXT PRIMARY KEY,
+                company_name TEXT,
+                contact_name TEXT,
+                email TEXT,
+                phone TEXT,
+                details_json TEXT
             );
             """
         )
@@ -206,6 +216,61 @@ class RecordServiceIntegrationTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]['mentioned_entity_type'], 'order')
         self.assertEqual(rows[0]['mentioned_handle'], 'order-1001')
+
+    def test_list_handles_includes_contact_copy_metadata(self):
+        contact_details = {
+            'emails': [
+                {'label': 'Support', 'value': 'support@example.com', 'isPrimary': True},
+                {'label': 'Billing', 'value': 'billing@example.com'},
+            ],
+            'phones': [
+                {'label': 'Desk', 'value': '1234567890', 'formatted': '(123) 456-7890', 'isPrimary': True},
+                {'label': 'Mobile', 'value': '9876543210'},
+            ],
+            'addresses': [
+                {
+                    'label': 'HQ',
+                    'street': '123 Main St',
+                    'city': 'Townsville',
+                    'state': 'CA',
+                    'postalCode': '90001',
+                    'isPrimary': True,
+                },
+            ],
+        }
+
+        self.conn.execute(
+            "INSERT INTO contacts (id, company_name, contact_name, email, phone, details_json) VALUES (?, ?, ?, ?, ?, ?)",
+            ('contact-1', 'Acme Corp', 'Pat Customer', '', '', json.dumps(contact_details)),
+        )
+
+        self.service.register_handle(
+            self.conn,
+            'contact',
+            'contact-1',
+            'acme',
+            display_name='Pat Customer',
+            search_blob='acme pat customer',
+        )
+
+        handles = self.service.list_handles(self.conn, ['contact'])
+        self.assertEqual(len(handles), 1)
+        enriched = handles[0]
+        self.assertIn('contact', enriched)
+
+        contact_meta = enriched['contact']
+        self.assertEqual(contact_meta['contactName'], 'Pat Customer')
+        self.assertEqual(contact_meta['companyName'], 'Acme Corp')
+        self.assertEqual(contact_meta['email'], 'support@example.com')
+        self.assertEqual(contact_meta['emailValue'], 'support@example.com')
+        self.assertTrue(contact_meta['emailIsPrimary'])
+        self.assertEqual(contact_meta['phone'], '(123) 456-7890')
+        self.assertEqual(contact_meta['phoneValue'], '1234567890')
+        self.assertTrue(contact_meta['phoneIsPrimary'])
+        self.assertEqual(contact_meta['emails'][1]['value'], 'billing@example.com')
+        self.assertEqual(contact_meta['phones'][1]['value'], '9876543210')
+        self.assertTrue(contact_meta['addresses'][0]['value'].startswith('123 Main St'))
+        self.assertIn('Townsville', contact_meta['addresses'][0]['value'])
 
     def test_validation_errors_are_raised_for_missing_fields(self):
         with self.assertRaises(RecordValidationError):
