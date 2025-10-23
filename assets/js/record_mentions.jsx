@@ -310,7 +310,13 @@ function useMentionContextMenu({ handlesMap, refresh, containerRef }) {
             }
             closeContextMenu();
         };
-        const handleGlobalScroll = () => closeContextMenu();
+        const handleGlobalScroll = event => {
+            if (menuRef.current && event && event.target && menuRef.current.contains(event.target)) {
+                return;
+            }
+            closeContextMenu();
+        };
+        const handleGlobalResize = () => closeContextMenu();
         const handleGlobalKey = event => {
             if (event.key === 'Escape') {
                 event.preventDefault();
@@ -319,12 +325,12 @@ function useMentionContextMenu({ handlesMap, refresh, containerRef }) {
         };
         window.addEventListener('mousedown', handleGlobalClick);
         window.addEventListener('scroll', handleGlobalScroll, true);
-        window.addEventListener('resize', handleGlobalScroll);
+        window.addEventListener('resize', handleGlobalResize);
         window.addEventListener('keydown', handleGlobalKey);
         return () => {
             window.removeEventListener('mousedown', handleGlobalClick);
             window.removeEventListener('scroll', handleGlobalScroll, true);
-            window.removeEventListener('resize', handleGlobalScroll);
+            window.removeEventListener('resize', handleGlobalResize);
             window.removeEventListener('keydown', handleGlobalKey);
         };
     }, [closeContextMenu, containerRef, contextMenu.isOpen]);
@@ -422,6 +428,7 @@ function useMentionContextMenu({ handlesMap, refresh, containerRef }) {
         }
         const {
             badge = '',
+            note = '',
             lines = null,
             displayValue = null,
             key = null,
@@ -429,22 +436,21 @@ function useMentionContextMenu({ handlesMap, refresh, containerRef }) {
         const displayLines = Array.isArray(lines) && lines.length > 0 ? lines.filter(Boolean) : null;
         const resolvedDisplay = displayValue != null ? displayValue : value;
         const handleCopy = () => copyValueToClipboard(value, label);
+        const metaParts = [];
+        if (note && note.trim()) {
+            metaParts.push(note.trim());
+        }
+        if (badge && badge.trim()) {
+            metaParts.push(badge.trim());
+        }
         return (
             <button
                 key={key ?? undefined}
                 type="button"
-                className="record-mention-contact-tile"
+                className="record-mention-contact-entry"
                 onClick={handleCopy}
             >
-                <div className="record-mention-contact-tile__header">
-                    <div className="record-mention-contact-tile__label">{label}</div>
-                    {badge && (
-                        <span className="record-mention-contact-tile__badge">
-                            {badge}
-                        </span>
-                    )}
-                </div>
-                <div className="record-mention-contact-tile__value">
+                <div className="record-mention-contact-entry__value">
                     {displayLines ? (
                         displayLines.map((line, index) => (
                             <span key={`${label}-line-${index}`} className="block break-words">
@@ -461,7 +467,11 @@ function useMentionContextMenu({ handlesMap, refresh, containerRef }) {
                         <span className="break-words">{resolvedDisplay}</span>
                     )}
                 </div>
-                <div className="record-mention-contact-tile__hint">Click to copy</div>
+                {metaParts.length > 0 && (
+                    <div className="record-mention-contact-entry__meta">
+                        {metaParts.join(' • ')}
+                    </div>
+                )}
             </button>
         );
     };
@@ -502,34 +512,39 @@ function useMentionContextMenu({ handlesMap, refresh, containerRef }) {
                 )}
             </div>
             {contactDetails ? (
-                <div className="record-mention-contact-grid">
+                <div className="record-mention-contact-list">
                     {renderCopyTile('Contact', contactDetails.contactName)}
                     {renderCopyTile('Company', contactDetails.companyName)}
                     {renderCopyTile(contactDetails.emailLabel || 'Email', contactDetails.emailValue || contactDetails.email, {
                         badge: contactDetails.emailIsPrimary ? 'Primary' : '',
                         displayValue: contactDetails.email,
+                        note: contactDetails.emailLabel || '',
                     })}
                     {contactEmails
                         .filter(entry => entry?.value && entry.value !== (contactDetails.emailValue || contactDetails.email))
                         .map((entry, index) => renderCopyTile(entry.label || 'Email', entry.value, {
                             badge: entry.isPrimary ? 'Primary' : '',
                             displayValue: entry.value,
+                            note: entry.label || '',
                             key: `contact-email-${index}`,
                         }))}
                     {renderCopyTile(contactDetails.phoneLabel || 'Phone', contactDetails.phoneValue || contactDetails.phone, {
                         badge: contactDetails.phoneIsPrimary ? 'Primary' : '',
                         displayValue: contactDetails.phone,
+                        note: contactDetails.phoneLabel || '',
                     })}
                     {contactPhones
                         .filter(entry => entry?.value && entry.value !== (contactDetails.phoneValue || contactDetails.phone))
                         .map((entry, index) => renderCopyTile(entry.label || 'Phone', entry.value, {
                             badge: entry.isPrimary ? 'Primary' : '',
                             displayValue: entry.formatted || entry.value,
+                            note: entry.label || '',
                             key: `contact-phone-${index}`,
                         }))}
                     {contactAddresses.map((entry, index) => renderCopyTile(entry.label || 'Address', entry.value, {
                         badge: entry.isPrimary ? 'Primary' : '',
                         lines: entry.lines,
+                        note: entry.label || '',
                         key: `contact-address-${index}`,
                     }))}
                     {!hasAnyContactInfo && (

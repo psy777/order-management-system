@@ -1279,83 +1279,50 @@
     color: #1f2937;
 }
 
-.firenotes-chat .record-mention-contact-grid {
-    display: grid;
-    gap: 0.65rem;
+.firenotes-chat .record-mention-contact-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
     font-size: 0.9rem;
 }
 
-.firenotes-chat .record-mention-contact-tile {
+.firenotes-chat .record-mention-contact-entry {
     width: 100%;
-    border: 1px solid rgba(148, 163, 184, 0.35);
-    border-radius: 12px;
-    padding: 0.75rem 0.85rem;
+    border: none;
+    background: none;
+    padding: 0;
+    margin: 0;
     text-align: left;
-    background: #ffffff;
-    color: #1e293b;
+    color: #0f172a;
+    font-size: inherit;
+    line-height: 1.4;
+    cursor: pointer;
     display: flex;
     flex-direction: column;
-    gap: 0.35rem;
-    cursor: pointer;
-    transition: border-color 0.16s ease, background-color 0.16s ease, box-shadow 0.16s ease;
+    gap: 0.2rem;
+    transition: color 0.16s ease;
 }
 
-.firenotes-chat .record-mention-contact-tile:hover,
-.firenotes-chat .record-mention-contact-tile:focus-visible {
-    border-color: rgba(249, 115, 22, 0.4);
-    background-color: #fffbeb;
-    box-shadow: 0 8px 18px -14px rgba(249, 115, 22, 0.6);
+.firenotes-chat .record-mention-contact-entry:hover,
+.firenotes-chat .record-mention-contact-entry:focus-visible {
+    color: #f97316;
     outline: none;
 }
 
-.firenotes-chat .record-mention-contact-tile__header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.35rem;
-}
-
-.firenotes-chat .record-mention-contact-tile__label {
-    font-size: 0.68rem;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: #475569;
-}
-
-.firenotes-chat .record-mention-contact-tile__badge {
-    border-radius: 999px;
-    padding: 0.1rem 0.45rem;
-    font-size: 0.6rem;
+.firenotes-chat .record-mention-contact-entry__value {
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    background: rgba(59, 130, 246, 0.12);
-    color: #1d4ed8;
+    word-break: break-word;
 }
 
-.firenotes-chat .record-mention-contact-tile__value {
-    font-size: 0.92rem;
-    font-weight: 600;
-    color: #0f172a;
-    line-height: 1.4;
-}
-
-.firenotes-chat .record-mention-contact-tile__hint {
-    font-size: 0.65rem;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: #94a3b8;
+.firenotes-chat .record-mention-contact-entry__meta {
+    font-size: 0.75rem;
+    color: #64748b;
 }
 
 .firenotes-chat .record-mention-contact-empty {
-    border: 1px dashed rgba(148, 163, 184, 0.55);
-    border-radius: 12px;
-    padding: 0.8rem 0.9rem;
     font-size: 0.85rem;
-    color: #64748b;
-    background: #f8fafc;
-    text-align: center;
+    color: #94a3b8;
+    padding: 0.25rem 0;
 }
 
 .fc-message__text-content {
