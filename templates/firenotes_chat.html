@@ -1933,20 +1933,50 @@
                 }
                 const noteId = reference.note_id || reference.noteId || '';
                 const contentText = (reference.content || reference.preview || '').trim();
-                if (!contentText) {
+                if (!contentText && !reference.note_title) {
                     return null;
                 }
+                const authorLabel = formatMessageAuthorLabel(reference.author || reference.author_label || '');
+                const timestampLabel = reference.created_at ? formatTimestamp(reference.created_at, true) : '';
+                const noteLabel = reference.note_title ? reference.note_title : '';
                 const button = document.createElement('button');
                 button.type = 'button';
                 button.className = 'fc-message__forwarded';
-                const text = document.createElement('span');
-                text.className = 'fc-message__forwarded-content';
-                text.textContent = contentText;
-                button.appendChild(text);
-                const ariaPreview = summarizeTextPreview(contentText, 160) || 'forwarded message';
-                const ariaLabel = options.ariaLabel || `View forwarded message: ${ariaPreview}`;
+                const header = document.createElement('span');
+                header.className = 'fc-message__forwarded-header';
+                header.textContent = authorLabel ? `Forwarded from ${authorLabel}` : 'Forwarded message';
+                button.appendChild(header);
+                if (noteLabel || timestampLabel) {
+                    const meta = document.createElement('span');
+                    meta.className = 'fc-message__forwarded-meta';
+                    const parts = [];
+                    if (noteLabel) {
+                        parts.push(noteLabel);
+                    }
+                    if (timestampLabel) {
+                        parts.push(timestampLabel);
+                    }
+                    meta.textContent = parts.join(' - ');
+                    button.appendChild(meta);
+                }
+                if (contentText) {
+                    const body = document.createElement('span');
+                    body.className = 'fc-message__forwarded-content';
+                    body.textContent = contentText;
+                    button.appendChild(body);
+                }
+                const ariaPreview = summarizeTextPreview(contentText || noteLabel, 160) || 'forwarded message';
+                const ariaLabel = options.ariaLabel
+                    || `View forwarded message${authorLabel ? ` from ${authorLabel}` : ''}: ${ariaPreview}`;
                 button.setAttribute('aria-label', ariaLabel);
-                button.title = contentText.length > 160 ? contentText : '';
+                const tooltipLines = [header.textContent];
+                if (noteLabel || timestampLabel) {
+                    tooltipLines.push((noteLabel && timestampLabel) ? `${noteLabel} - ${timestampLabel}` : (noteLabel || timestampLabel));
+                }
+                if (contentText) {
+                    tooltipLines.push(contentText);
+                }
+                button.title = tooltipLines.filter(Boolean).join('\n');
                 button.addEventListener('click', async (event) => {
                     event.preventDefault();
                     event.stopPropagation();
