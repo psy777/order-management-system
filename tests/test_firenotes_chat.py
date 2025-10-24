@@ -653,7 +653,7 @@ def test_message_forward_creates_new_entry(configure_chat_environment):
     assert forwarded_meta['id'] == original['id']
     assert forwarded_meta['preview'] == 'Forward me'
     assert forwarded_meta['note_title'] == source_note['title']
-    assert forwarded['content'].startswith('Forwarded from')
+    assert forwarded['content'] == original['content']
 
     dest_history = client.get(f"/api/firenotes/chat?noteId={target_note['id']}&limit=5").get_json()['messages']
     assert any(entry['id'] == forwarded['id'] for entry in dest_history)

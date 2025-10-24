@@ -955,17 +955,12 @@ def _forward_chat_message(
                 'created_at': original.get('created_at'),
             }
         }
-    prefix_author = original.get('author') or 'assistant'
     forwarded_body = original.get('content') or ''
-    if forwarded_body:
-        preface = f"Forwarded from {prefix_author}:\n\n"
-    else:
-        preface = f"Forwarded message from {prefix_author}"
     stored = _store_chat_message(
         conn,
         target_note_id,
         actor,
-        f"{preface}{forwarded_body}".strip(),
+        forwarded_body,
         metadata=forwarded_metadata,
         attachments=attachments,
     )

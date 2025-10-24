@@ -1874,7 +1874,7 @@
                 const target = document.getElementById(`message-${pending.messageId}`);
                 if (!target) {
                     pending.attempts = (pending.attempts || 0) + 1;
-                    if (pending.attempts > 5) {
+                    if (pending.attempts > 20) {
                         state.pendingMessageFocus = null;
                     }
                     return false;
@@ -1893,6 +1893,15 @@
                 return true;
             };
 
+            const scheduleMessageFocus = () => {
+                if (focusMessageIfNeeded()) {
+                    return;
+                }
+                window.setTimeout(() => {
+                    focusMessageIfNeeded();
+                }, 120);
+            };
+
             const navigateToMessageReference = async (reference) => {
                 if (!reference || !reference.id) {
                     return;
@@ -1905,9 +1914,12 @@
                         await selectNote(targetNoteId, { focusComposer: false });
                     } catch (error) {
                         console.error('Failed to navigate to referenced message', error);
+                    } finally {
+                        scheduleMessageFocus();
                     }
                 } else {
                     renderMessages();
+                    scheduleMessageFocus();
                 }
             };
 
