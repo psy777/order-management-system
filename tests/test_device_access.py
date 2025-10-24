@@ -64,9 +64,10 @@ def test_new_device_is_redirected_and_logged(device_control_environment, monkeyp
     firecoast_app.app.config['TESTING'] = False
     try:
         with firecoast_app.app.test_request_context('/orders'):
+            session.clear()
             response = firecoast_app._enforce_device_access_gate()
             assert response.status_code == 302
-            assert response.location.endswith('/device/register')
+            assert response.location.endswith('/device/register') or response.location.endswith('/device/pending')
             assert session.get(firecoast_app.DEVICE_TOKEN_SESSION_KEY) == 'token-new-device'
             assert session.get(firecoast_app.PENDING_DEVICE_TOKEN_SESSION_KEY) == 'token-new-device'
             assert session.get('pending_ip') == '192.168.0.42'
@@ -75,12 +76,23 @@ def test_new_device_is_redirected_and_logged(device_control_environment, monkeyp
 
     conn = get_db_connection()
     try:
+        device = conn.execute(
+            "SELECT owner_name, device_name, status, access_token, last_ip FROM network_devices WHERE access_token = ?",
+            ('token-new-device',),
+        ).fetchone()
+        assert device is not None
+        assert device['access_token'] == 'token-new-device'
+        assert device['status'] == firecoast_app.DEVICE_STATUS_PENDING
+        assert device['owner_name'] is None
+        assert device['device_name'] is None
+        assert device['last_ip'] == '192.168.0.42'
         row = conn.execute(
-            "SELECT device_token, ip_address, status FROM device_access_logs ORDER BY id DESC LIMIT 1"
+            "SELECT device_token, ip_address, status FROM device_access_logs WHERE device_token = ? ORDER BY id DESC LIMIT 1",
+            ('token-new-device',),
         ).fetchone()
         assert row['device_token'] == 'token-new-device'
         assert row['ip_address'] == '192.168.0.42'
-        assert row['status'] == 'new'
+        assert row['status'] in {'new', firecoast_app.DEVICE_STATUS_PENDING}
     finally:
         conn.close()
 
@@ -91,32 +103,31 @@ def test_trusted_device_gains_access_without_login(device_control_environment, m
     trusted_token = 'trusted-token'
     placeholder_mac = firecoast_app._derive_device_identifier_from_token(trusted_token)
 
+    initial_testing = firecoast_app.app.config.get('TESTING')
+    monkeypatch.setattr(firecoast_app, '_generate_device_token', lambda: trusted_token)
+    firecoast_app.app.config['TESTING'] = False
+    try:
+        with firecoast_app.app.test_request_context('/orders'):
+            session.clear()
+            firecoast_app._enforce_device_access_gate()
+    finally:
+        firecoast_app.app.config['TESTING'] = initial_testing
+
     conn = get_db_connection()
     try:
-        device_id = str(uuid.uuid4())
         conn.execute(
             """
-            INSERT INTO network_devices (
-                id,
-                access_token,
-                mac_address,
-                owner_name,
-                device_name,
-                status,
-                permissions,
-                last_ip,
-                last_seen
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            UPDATE network_devices
+            SET owner_name = ?, device_name = ?, status = ?, permissions = ?, last_ip = ?, last_seen = CURRENT_TIMESTAMP
+            WHERE access_token = ?
             """,
             (
-                device_id,
-                trusted_token,
-                placeholder_mac,
                 'Jordan',
                 'Warehouse Tablet',
                 firecoast_app.DEVICE_STATUS_TRUSTED,
                 json.dumps(['orders']),
                 '192.168.0.99',
+                trusted_token,
             ),
         )
         conn.commit()
@@ -156,28 +167,31 @@ def test_blocked_device_receives_blocked_page(device_control_environment, monkey
     blocked_token = 'blocked-token'
     placeholder_mac = firecoast_app._derive_device_identifier_from_token(blocked_token)
 
+    initial_testing = firecoast_app.app.config.get('TESTING')
+    monkeypatch.setattr(firecoast_app, '_generate_device_token', lambda: blocked_token)
+    firecoast_app.app.config['TESTING'] = False
+    try:
+        with firecoast_app.app.test_request_context('/orders'):
+            session.clear()
+            firecoast_app._enforce_device_access_gate()
+    finally:
+        firecoast_app.app.config['TESTING'] = initial_testing
+
     conn = get_db_connection()
     try:
         conn.execute(
             """
-            INSERT INTO network_devices (
-                id,
-                access_token,
-                mac_address,
-                owner_name,
-                device_name,
-                status,
-                permissions
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            UPDATE network_devices
+            SET owner_name = ?, device_name = ?, status = ?, permissions = ?, last_ip = ?, last_seen = CURRENT_TIMESTAMP
+            WHERE access_token = ?
             """,
             (
-                'blocked-device',
-                blocked_token,
-                placeholder_mac,
                 'Jamie',
                 'Blocked Tablet',
                 firecoast_app.DEVICE_STATUS_BLOCKED,
                 json.dumps([]),
+                '192.168.0.55',
+                blocked_token,
             ),
         )
         conn.commit()

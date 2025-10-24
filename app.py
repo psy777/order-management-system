@@ -399,12 +399,43 @@ def _enforce_device_access_gate():
 
     conn = get_db_connection()
     device_row: Optional[Dict[str, Any]] = None
+    created_new_device = False
     log_status = 'new'
     try:
         device_row = _fetch_device_by_token(conn, device_token)
+        if not device_row:
+            placeholder_identifier = _derive_device_identifier_from_token(device_token)
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO network_devices (
+                    id,
+                    access_token,
+                    mac_address,
+                    owner_name,
+                    device_name,
+                    status,
+                    permissions,
+                    last_ip,
+                    last_seen
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    device_token,
+                    placeholder_identifier,
+                    None,
+                    None,
+                    DEVICE_STATUS_PENDING,
+                    json.dumps([]),
+                    ip_address,
+                ),
+            )
+            device_row = _fetch_device_by_token(conn, device_token)
+            if device_row:
+                created_new_device = True
         if device_row:
             current_status = device_row.get('status') or DEVICE_STATUS_PENDING
-            log_status = current_status
+            log_status = 'new' if created_new_device else current_status
             _update_device_last_seen(conn, device_row.get('id'), ip_address)
         _log_device_access(conn, device_row, device_token, ip_address, request.path, log_status)
         conn.commit()
@@ -419,6 +450,10 @@ def _enforce_device_access_gate():
 
     device_context = _build_device_context(device_row)
     status = device_context.get('status') or DEVICE_STATUS_PENDING
+    if created_new_device:
+        session[PENDING_DEVICE_TOKEN_SESSION_KEY] = device_context.get('device_token')
+        session['pending_ip'] = ip_address
+        return redirect(url_for('device_register'))
     if status == DEVICE_STATUS_BLOCKED:
         g.current_device = device_context
         session[PENDING_DEVICE_TOKEN_SESSION_KEY] = device_context.get('device_token')
