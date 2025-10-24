@@ -213,6 +213,59 @@ def test_trusted_device_gains_access_without_login(device_control_environment, m
         conn.close()
 
 
+def test_trusted_device_does_not_block_new_device_registration(device_control_environment, monkeypatch):
+    firecoast_app = device_control_environment
+
+    trusted_token = f'trusted-token-{uuid.uuid4()}'
+    new_token = f'new-token-{uuid.uuid4()}'
+
+    original_testing = firecoast_app.app.config.get('TESTING')
+    firecoast_app.app.config['TESTING'] = False
+
+    try:
+        monkeypatch.setattr(firecoast_app, '_get_request_ip_address', lambda: '192.168.0.10')
+        monkeypatch.setattr(firecoast_app, '_generate_device_token', lambda: trusted_token)
+
+        with firecoast_app.app.test_request_context('/orders'):
+            session.clear()
+            firecoast_app._enforce_device_access_gate()
+
+        conn = get_db_connection()
+        try:
+            conn.execute(
+                """
+                UPDATE network_devices
+                SET owner_name = ?, device_name = ?, status = ?, permissions = ?, last_ip = ?, last_seen = CURRENT_TIMESTAMP
+                WHERE access_token = ?
+                """,
+                (
+                    'Jordan',
+                    'Admin Laptop',
+                    firecoast_app.DEVICE_STATUS_TRUSTED,
+                    json.dumps(['orders']),
+                    '192.168.0.10',
+                    trusted_token,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        monkeypatch.setattr(firecoast_app, '_get_request_ip_address', lambda: '192.168.0.42')
+        monkeypatch.setattr(firecoast_app, '_generate_device_token', lambda: new_token)
+
+        with firecoast_app.app.test_request_context('/orders'):
+            session.clear()
+            response = firecoast_app._enforce_device_access_gate()
+            assert response is not None
+            assert response.status_code == 302
+            assert response.location.endswith('/device/register')
+            assert session.get(firecoast_app.DEVICE_TOKEN_SESSION_KEY) == new_token
+            assert session.get(firecoast_app.PENDING_DEVICE_TOKEN_SESSION_KEY) == new_token
+    finally:
+        firecoast_app.app.config['TESTING'] = original_testing
+
+
 def test_blocked_device_receives_blocked_page(device_control_environment, monkeypatch):
     firecoast_app = device_control_environment
 
