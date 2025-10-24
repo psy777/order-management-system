@@ -1923,7 +1923,7 @@
                 }
             };
 
-            const createMessageReferenceElement = (reference, options = {}) => {
+            const createForwardReferenceElement = (reference, options = {}) => {
                 if (!reference) {
                     return null;
                 }
@@ -1932,24 +1932,78 @@
                     return null;
                 }
                 const noteId = reference.note_id || reference.noteId || '';
-                const variant = options.variant || 'reply';
                 const authorLabel = formatMessageAuthorLabel(reference.author || reference.author_label || '');
                 const button = document.createElement('button');
                 button.type = 'button';
-                button.className = `fc-message__reference fc-message__reference--${variant}`;
+                button.className = 'fc-message__forwarded';
+                const icon = document.createElement('span');
+                icon.className = 'fc-message__forwarded-icon';
+                icon.textContent = options.icon || '↗︎';
+                button.appendChild(icon);
+                const textGroup = document.createElement('span');
+                textGroup.className = 'fc-message__forwarded-text';
+                button.appendChild(textGroup);
+                if (authorLabel) {
+                    const label = document.createElement('span');
+                    label.className = 'fc-message__forwarded-label';
+                    label.textContent = authorLabel;
+                    textGroup.appendChild(label);
+                }
+                const previewText = summarizeTextPreview(reference.preview || reference.content || '', 110);
+                if (previewText) {
+                    const preview = document.createElement('span');
+                    preview.className = 'fc-message__forwarded-preview';
+                    preview.textContent = previewText;
+                    textGroup.appendChild(preview);
+                }
+                const tooltipParts = [];
+                if (authorLabel) {
+                    tooltipParts.push(authorLabel);
+                }
+                if (previewText) {
+                    tooltipParts.push(previewText);
+                }
+                if (reference.note_title) {
+                    tooltipParts.push(`Note: ${reference.note_title}`);
+                }
+                if (tooltipParts.length) {
+                    button.title = tooltipParts.join(' · ');
+                }
+                const ariaLabel = options.ariaLabel
+                    || `View original message${authorLabel ? ` from ${authorLabel}` : ''}`;
+                button.setAttribute('aria-label', ariaLabel);
+                button.addEventListener('click', async (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    await navigateToMessageReference({ id: messageId, note_id: noteId });
+                });
+                return button;
+            };
+
+            const createMessageReferenceElement = (reference, options = {}) => {
+                if (!reference) {
+                    return null;
+                }
+                if ((options.variant || 'reply') === 'forward') {
+                    return createForwardReferenceElement(reference, options);
+                }
+                const messageId = reference.id || reference.message_id || reference.messageId;
+                if (!messageId) {
+                    return null;
+                }
+                const noteId = reference.note_id || reference.noteId || '';
+                const authorLabel = formatMessageAuthorLabel(reference.author || reference.author_label || '');
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'fc-message__reference';
                 const icon = document.createElement('span');
                 icon.className = 'fc-message__reference-icon';
-                icon.textContent = options.icon || (variant === 'forward' ? '↗︎' : '↩︎');
+                icon.textContent = options.icon || '↩︎';
                 button.appendChild(icon);
                 const textGroup = document.createElement('span');
                 textGroup.className = 'fc-message__reference-text';
                 button.appendChild(textGroup);
-                const labelText = (() => {
-                    if (variant === 'reply') {
-                        return authorLabel ? `Replying to ${authorLabel}` : 'Replying to message';
-                    }
-                    return authorLabel || '';
-                })();
+                const labelText = authorLabel ? `Replying to ${authorLabel}` : 'Replying to message';
                 if (labelText) {
                     const label = document.createElement('span');
                     label.className = 'fc-message__reference-label';
@@ -1981,9 +2035,7 @@
                     button.title = tooltipParts.join(' · ');
                 }
                 const ariaLabel = options.ariaLabel
-                    || (variant === 'forward'
-                        ? `View original message${authorLabel ? ` from ${authorLabel}` : ''}`
-                        : `View reply from ${authorLabel || 'the original message'}`);
+                    || `View reply from ${authorLabel || 'the original message'}`;
                 button.setAttribute('aria-label', ariaLabel);
                 button.addEventListener('click', async (event) => {
                     event.preventDefault();
