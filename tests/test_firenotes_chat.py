@@ -20,6 +20,13 @@ from services.records import get_record_service
 
 @pytest.fixture(autouse=True)
 def configure_chat_environment(tmp_path, monkeypatch):
+    """Route the app to a temp data directory for the duration of each test.
+
+    The production server continues to use the canonical ``data/`` directory,
+    so user-visible saves remain shared.  We only patch these globals inside the
+    test process so that schema setup and chat activity do not touch or depend
+    on the operator's real SQLite file when the test suite runs.
+    """
     data_dir = tmp_path / 'data'
     data_dir.mkdir()
 
