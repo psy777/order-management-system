@@ -190,6 +190,49 @@ def test_is_git_repository_handles_broken_worktree_reference(tmp_path):
     assert not upgrade._is_git_repository(repo_root)
 
 
+def test_schedule_restart_launches_new_process(monkeypatch):
+    firenotes_app.app.config['TESTING'] = False
+
+    timer_calls: dict[str, float] = {}
+
+    class ImmediateTimer:
+        def __init__(self, delay: float, callback):
+            timer_calls['delay'] = delay
+            self._callback = callback
+
+        def start(self) -> None:
+            self._callback()
+
+    monkeypatch.setattr(firenotes_app, 'Timer', ImmediateTimer)
+
+    popen_calls: dict[str, object] = {}
+
+    def fake_popen(cmd, *, cwd=None, env=None):
+        popen_calls['cmd'] = cmd
+        popen_calls['cwd'] = cwd
+        popen_calls['env'] = env
+
+    monkeypatch.setattr(firenotes_app.subprocess, 'Popen', fake_popen)
+
+    exit_calls: dict[str, int] = {}
+
+    def fake_exit(code: int) -> None:
+        exit_calls['code'] = code
+
+    monkeypatch.setattr(firenotes_app.os, '_exit', fake_exit)
+    monkeypatch.setattr(firenotes_app.sys, 'executable', '/usr/bin/python')
+    monkeypatch.setattr(firenotes_app.sys, 'argv', ['app.py', '--flag'])
+
+    firenotes_app._schedule_post_upgrade_restart(delay=3.5)
+
+    assert timer_calls['delay'] == 3.5
+    assert popen_calls['cmd'][0] == '/usr/bin/python'
+    assert popen_calls['cmd'][1:] == ['--flag']
+    assert popen_calls['cwd'] == Path.cwd()
+    assert isinstance(popen_calls['env'], dict)
+    assert exit_calls['code'] == 0
+
+
 def test_upgrade_endpoint_invokes_service(monkeypatch, tmp_path):
     client = firenotes_app.app.test_client()
 

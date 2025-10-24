@@ -8,6 +8,7 @@ import socket
 import sqlite3
 import sys
 import smtplib
+import subprocess
 import re
 from collections import defaultdict
 from email.mime.multipart import MIMEMultipart
@@ -70,19 +71,33 @@ _db_bootstrapped = False
 
 
 def _schedule_post_upgrade_restart(delay: float = RESTART_DELAY_SECONDS) -> None:
-    """Re-exec the current process after a short delay to load the new code."""
+    """Launch a fresh process after a short delay and exit the current one."""
 
     if app.config.get('TESTING'):
         app.logger.info('Skipping restart scheduling while running tests')
         return
+
+    python_executable = sys.executable or sys.argv[0]
+    argv_tail = sys.argv[1:]
+    current_env = os.environ.copy()
+    working_dir = Path.cwd()
 
     def _perform_restart() -> None:
         try:
             app.logger.info('Restarting process to finalize upgrade')
         except Exception:  # pragma: no cover - logging best effort
             pass
-        python_executable = sys.executable
-        os.execl(python_executable, python_executable, *sys.argv)
+
+        try:
+            subprocess.Popen(
+                [python_executable, *argv_tail],
+                cwd=working_dir,
+                env=current_env,
+            )
+        except Exception:  # pragma: no cover - process spawn best effort
+            app.logger.exception('Failed to launch replacement process')
+        finally:
+            os._exit(0)
 
     Timer(delay, _perform_restart).start()
 
