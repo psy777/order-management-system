@@ -525,6 +525,65 @@ def _serialize_chat_row(
     return message
 
 
+def _summarize_chat_preview(content: Optional[str], limit: int = 140) -> str:
+    if not content:
+        return ''
+    normalized = re.sub(r"\s+", ' ', str(content)).strip()
+    if not normalized:
+        return ''
+    if len(normalized) <= limit:
+        return normalized
+    truncated = normalized[: max(1, limit - 1)].rstrip()
+    return f"{truncated}…"
+
+
+def _build_message_reference(
+    conn: sqlite3.Connection,
+    message_id: str,
+) -> Optional[Dict[str, Any]]:
+    normalized = (message_id or '').strip()
+    if not normalized:
+        return None
+    row = _get_chat_message_row(conn, normalized)
+    if not row:
+        return None
+    if isinstance(row, sqlite3.Row):
+        data = dict(row)
+    else:
+        data = {
+            'id': row[0] if len(row) > 0 else None,
+            'note_id': row[1] if len(row) > 1 else None,
+            'author': row[2] if len(row) > 2 else None,
+            'content': row[3] if len(row) > 3 else None,
+            'metadata_json': row[4] if len(row) > 4 else None,
+            'attachments_json': row[5] if len(row) > 5 else None,
+            'created_at': row[6] if len(row) > 6 else None,
+        }
+    reference: Dict[str, Any] = {
+        'id': str(data.get('id') or normalized),
+        'note_id': str(data.get('note_id') or ''),
+        'author': data.get('author'),
+        'created_at': data.get('created_at'),
+        'preview': _summarize_chat_preview(data.get('content')),
+    }
+    if not reference['preview']:
+        attachments = _parse_json_column(data.get('attachments_json'))
+        if isinstance(attachments, list) and attachments:
+            if len(attachments) == 1:
+                attachment = attachments[0] or {}
+                reference['preview'] = attachment.get('filename') or (
+                    'Image attachment' if attachment.get('is_image') else 'Attachment'
+                )
+            else:
+                reference['preview'] = f"{len(attachments)} attachments"
+    note_id = reference.get('note_id')
+    if note_id:
+        note = _get_note(conn, note_id)
+        if note and note.get('title'):
+            reference['note_title'] = note.get('title')
+    return reference
+
+
 def _collect_chat_reactions(
     conn: sqlite3.Connection,
     message_ids: List[str],
@@ -884,14 +943,18 @@ def _forward_chat_message(
         raise ValueError('Target note not found.')
     original = _serialize_chat_row(original_row, None)
     attachments = _clone_chat_attachments(original.get('attachments'))
-    forwarded_metadata = {
-        'forwarded_from': {
-            'id': original.get('id'),
-            'note_id': original.get('note_id'),
-            'author': original.get('author'),
-            'created_at': original.get('created_at'),
+    forwarded_reference = _build_message_reference(conn, str(original.get('id') or ''))
+    if forwarded_reference:
+        forwarded_metadata = {'forwarded_from': forwarded_reference}
+    else:
+        forwarded_metadata = {
+            'forwarded_from': {
+                'id': original.get('id'),
+                'note_id': original.get('note_id'),
+                'author': original.get('author'),
+                'created_at': original.get('created_at'),
+            }
         }
-    }
     prefix_author = original.get('author') or 'assistant'
     forwarded_body = original.get('content') or ''
     if forwarded_body:
@@ -6031,16 +6094,26 @@ def api_firenotes_chat():
         author = 'user'
         note_id = ''
         content = ''
+        reply_to_payload: Optional[Dict[str, Any]] = None
         if request.content_type and 'multipart/form-data' in request.content_type:
             note_id = (request.form.get('note_id') or request.form.get('noteId') or '').strip()
             content = (request.form.get('content') or '').strip()
             author = (request.form.get('author') or 'user').strip().lower() or 'user'
             attachments = _save_note_attachments(request.files.getlist('attachments'))
+            raw_reply_to = (request.form.get('reply_to') or request.form.get('replyTo') or '').strip()
+            if raw_reply_to:
+                try:
+                    reply_to_payload = json.loads(raw_reply_to)
+                except json.JSONDecodeError:
+                    reply_to_payload = None
         else:
             payload = request.get_json(force=True, silent=True) or {}
             note_id = (payload.get('note_id') or payload.get('noteId') or '').strip()
             content = (payload.get('content') or '').strip()
             author = (payload.get('author') or 'user').strip().lower() or 'user'
+            candidate_reply = payload.get('reply_to') or payload.get('replyTo')
+            if isinstance(candidate_reply, dict):
+                reply_to_payload = candidate_reply
         if not note_id:
             return jsonify({'message': 'note_id is required.'}), 400
         note = _get_note(conn, note_id)
@@ -6048,7 +6121,24 @@ def api_firenotes_chat():
             return jsonify({'message': 'Note not found.'}), 404
         if not content and not attachments:
             return jsonify({'message': 'Add a note or attachment before sending.'}), 400
-        stored = _store_chat_message(conn, note_id, author, content, attachments=attachments or None)
+        reply_reference = None
+        if reply_to_payload:
+            reply_id = (
+                reply_to_payload.get('id')
+                or reply_to_payload.get('message_id')
+                or reply_to_payload.get('messageId')
+                or ''
+            )
+            reply_reference = _build_message_reference(conn, str(reply_id))
+        metadata = {'reply_to': reply_reference} if reply_reference else None
+        stored = _store_chat_message(
+            conn,
+            note_id,
+            author,
+            content,
+            metadata=metadata,
+            attachments=attachments or None,
+        )
         responses: List[Dict[str, Any]] = []
         clear_result: Optional[Dict[str, Any]] = None
         if author == 'user':

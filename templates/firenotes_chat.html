@@ -59,6 +59,7 @@
                 <footer class="fc-chat-panel__footer">
                     <p id="fc-error" class="fc-chat-error" role="status" aria-live="assertive" hidden></p>
                     <div class="fc-composer" data-disabled="true">
+                        <div id="fc-reply-preview" class="fc-composer__reply" hidden></div>
                         <div id="fc-attachment-chips" class="fc-composer__attachments" aria-live="polite"></div>
                         <label class="fc-screen-reader-only" for="fc-input">Write a message</label>
                         <div class="fc-composer__input-wrapper">
@@ -102,6 +103,7 @@
             const attachmentInputEl = document.getElementById('fc-attachment-input');
             const attachmentButtonEl = document.getElementById('fc-attach-button');
             const attachmentChipsEl = document.getElementById('fc-attachment-chips');
+            const replyPreviewEl = document.getElementById('fc-reply-preview');
             const composerEl = document.querySelector('.fc-composer');
             const mentionRootEl = document.getElementById('fc-mention-root');
             const errorEl = document.getElementById('fc-error');
@@ -213,6 +215,8 @@
                 recentReactions: REACTION_OPTIONS.slice(0, QUICK_REACTIONS_LIMIT),
                 activeMessageEdit: null,
                 pendingMessageAction: null,
+                activeReply: null,
+                pendingMessageFocus: null,
             };
             const pendingReactions = new Set();
             let activePopover = null;
@@ -564,6 +568,46 @@
                 return String(value).replace(/\s+/g, ' ').trim();
             };
 
+            const summarizeTextPreview = (value, limit = 140) => {
+                const normalized = normalizePreview(value || '');
+                if (!normalized) {
+                    return '';
+                }
+                if (normalized.length <= limit) {
+                    return normalized;
+                }
+                const truncated = normalized.slice(0, Math.max(1, limit - 1)).trimEnd();
+                return `${truncated}…`;
+            };
+
+            const buildAttachmentPreview = (attachments) => {
+                if (!Array.isArray(attachments) || !attachments.length) {
+                    return '';
+                }
+                if (attachments.length === 1) {
+                    const attachment = attachments[0] || {};
+                    if (attachment.filename) {
+                        return attachment.filename;
+                    }
+                    if (attachment.is_image) {
+                        return 'Image attachment';
+                    }
+                    return 'Attachment';
+                }
+                return `${attachments.length} attachments`;
+            };
+
+            const getMessagePreview = (message, limit = 140) => {
+                if (!message) {
+                    return '';
+                }
+                const text = summarizeTextPreview(message.content, limit);
+                if (text) {
+                    return text;
+                }
+                return buildAttachmentPreview(message.attachments);
+            };
+
             const formatTimestamp = (value, withTime = true) => {
                 if (!value) {
                     return '';
@@ -870,6 +914,51 @@
                     fragment.appendChild(chip);
                 });
                 attachmentChipsEl.appendChild(fragment);
+            };
+
+            const renderReplyPreview = () => {
+                if (!replyPreviewEl) {
+                    return;
+                }
+                replyPreviewEl.innerHTML = '';
+                const replyState = state.activeReply;
+                if (!replyState) {
+                    replyPreviewEl.hidden = true;
+                    return;
+                }
+                replyPreviewEl.hidden = false;
+                const details = document.createElement('div');
+                details.className = 'fc-composer__reply-details';
+                const label = document.createElement('div');
+                label.className = 'fc-composer__reply-label';
+                label.textContent = replyState.noteId && replyState.noteId !== state.activeNoteId && replyState.noteTitle
+                    ? `Replying to ${replyState.authorLabel} in ${replyState.noteTitle}`
+                    : `Replying to ${replyState.authorLabel}`;
+                details.appendChild(label);
+                if (replyState.preview) {
+                    const snippet = document.createElement('div');
+                    snippet.className = 'fc-composer__reply-snippet';
+                    snippet.textContent = replyState.preview;
+                    details.appendChild(snippet);
+                }
+                const cancelButton = document.createElement('button');
+                cancelButton.type = 'button';
+                cancelButton.className = 'fc-composer__reply-cancel';
+                cancelButton.setAttribute('aria-label', 'Cancel reply');
+                cancelButton.textContent = 'Cancel';
+                cancelButton.addEventListener('click', () => {
+                    clearActiveReply();
+                });
+                replyPreviewEl.appendChild(details);
+                replyPreviewEl.appendChild(cancelButton);
+            };
+
+            const clearActiveReply = () => {
+                if (!state.activeReply) {
+                    return;
+                }
+                state.activeReply = null;
+                renderReplyPreview();
             };
 
             if (noteHandleButton) {
@@ -1368,28 +1457,22 @@
                     return;
                 }
                 closeActivePopover();
-                const content = message.content || '';
-                const replyBlock = content
-                    ? content
-                          .split('\n')
-                          .map((line) => `> ${line}`)
-                          .join('\n')
-                    : '';
-                const existing = getComposerValue();
                 const authorLabel = formatMessageAuthorLabel(message.author);
-                const mention = authorLabel.startsWith('@')
-                    ? authorLabel
-                    : `@${authorLabel.toLowerCase()}`;
-                const segments = [];
-                if (existing) {
-                    segments.push(existing.trimEnd());
+                let noteTitle = '';
+                if (message.note_id && message.note_id !== state.activeNoteId) {
+                    const related = state.notes.find((entry) => entry.id === message.note_id);
+                    noteTitle = normalizePreview(related ? related.title : '') || 'Untitled note';
+                } else if (state.activeNote) {
+                    noteTitle = normalizePreview(state.activeNote.title) || '';
                 }
-                if (replyBlock) {
-                    segments.push(replyBlock);
-                }
-                segments.push(`${mention} `);
-                const composed = segments.join('\n');
-                setComposerValue(composed, { forceRender: true });
+                state.activeReply = {
+                    id: message.id || '',
+                    noteId: message.note_id || state.activeNoteId || '',
+                    noteTitle,
+                    authorLabel,
+                    preview: getMessagePreview(message, 120),
+                };
+                renderReplyPreview();
                 scheduleFrame(() => {
                     const textarea = getActiveTextarea();
                     if (textarea) {
@@ -1769,6 +1852,117 @@
                 return `@${normalized}`;
             };
 
+            const requestMessageFocus = (noteId, messageId) => {
+                if (!messageId) {
+                    return;
+                }
+                state.pendingMessageFocus = {
+                    noteId: noteId || '',
+                    messageId,
+                    attempts: 0,
+                };
+            };
+
+            const focusMessageIfNeeded = () => {
+                const pending = state.pendingMessageFocus;
+                if (!pending || !pending.messageId) {
+                    return false;
+                }
+                if (pending.noteId && pending.noteId !== state.activeNoteId) {
+                    return false;
+                }
+                const target = document.getElementById(`message-${pending.messageId}`);
+                if (!target) {
+                    pending.attempts = (pending.attempts || 0) + 1;
+                    if (pending.attempts > 5) {
+                        state.pendingMessageFocus = null;
+                    }
+                    return false;
+                }
+                pendingScrollToBottom = false;
+                try {
+                    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                } catch (error) {
+                    target.scrollIntoView({ block: 'center' });
+                }
+                target.classList.add('is-highlighted');
+                window.setTimeout(() => {
+                    target.classList.remove('is-highlighted');
+                }, 1800);
+                state.pendingMessageFocus = null;
+                return true;
+            };
+
+            const navigateToMessageReference = async (reference) => {
+                if (!reference || !reference.id) {
+                    return;
+                }
+                pendingScrollToBottom = false;
+                const targetNoteId = reference.note_id || state.activeNoteId || '';
+                requestMessageFocus(targetNoteId, reference.id);
+                if (targetNoteId && targetNoteId !== state.activeNoteId) {
+                    try {
+                        await selectNote(targetNoteId, { focusComposer: false });
+                    } catch (error) {
+                        console.error('Failed to navigate to referenced message', error);
+                    }
+                } else {
+                    renderMessages();
+                }
+            };
+
+            const createMessageReferenceElement = (reference, options = {}) => {
+                if (!reference) {
+                    return null;
+                }
+                const messageId = reference.id || reference.message_id || reference.messageId;
+                if (!messageId) {
+                    return null;
+                }
+                const noteId = reference.note_id || reference.noteId || '';
+                const variant = options.variant || 'reply';
+                const authorLabel = formatMessageAuthorLabel(reference.author || reference.author_label || '');
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = `fc-message__reference fc-message__reference--${variant}`;
+                const header = document.createElement('div');
+                header.className = 'fc-message__reference-label';
+                const defaultHeader = variant === 'forward' ? `Forwarded from ${authorLabel}` : `Replying to ${authorLabel}`;
+                header.textContent = options.header || defaultHeader;
+                button.appendChild(header);
+                const metaParts = [];
+                if (noteId && noteId !== state.activeNoteId && reference.note_title) {
+                    metaParts.push(reference.note_title);
+                }
+                if (reference.created_at) {
+                    const stamp = formatTimestamp(reference.created_at, true);
+                    if (stamp) {
+                        metaParts.push(stamp);
+                    }
+                }
+                if (metaParts.length) {
+                    const meta = document.createElement('div');
+                    meta.className = 'fc-message__reference-meta';
+                    meta.textContent = metaParts.join(' · ');
+                    button.appendChild(meta);
+                }
+                const previewText = summarizeTextPreview(reference.preview || reference.content || '', 120);
+                if (previewText) {
+                    const preview = document.createElement('div');
+                    preview.className = 'fc-message__reference-preview';
+                    preview.textContent = previewText;
+                    button.appendChild(preview);
+                }
+                const ariaLabel = options.ariaLabel || `View message from ${authorLabel}`;
+                button.setAttribute('aria-label', ariaLabel);
+                button.addEventListener('click', async (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    await navigateToMessageReference({ id: messageId, note_id: noteId });
+                });
+                return button;
+            };
+
             const createMessageElement = (message, previousMessage = null) => {
                 const author = (message.author || '').toLowerCase();
                 const isUser = author === 'user';
@@ -1875,17 +2069,19 @@
                     body.appendChild(createMessageEditForm(message, editingState));
                     appendAttachments();
                 } else {
+                    if (metadata.reply_to) {
+                        const replyReference = createMessageReferenceElement(metadata.reply_to, { variant: 'reply' });
+                        if (replyReference) {
+                            body.appendChild(replyReference);
+                        }
+                    }
                     if (metadata.forwarded_from) {
-                        const forwarded = document.createElement('div');
-                        forwarded.className = 'fc-message__forwarded';
-                        const forwardedAuthor = formatMessageAuthorLabel(metadata.forwarded_from.author);
-                        const forwardedStamp = metadata.forwarded_from.created_at
-                            ? formatTimestamp(metadata.forwarded_from.created_at, true)
-                            : null;
-                        forwarded.textContent = forwardedStamp
-                            ? `Forwarded from ${forwardedAuthor} · ${forwardedStamp}`
-                            : `Forwarded from ${forwardedAuthor}`;
-                        body.appendChild(forwarded);
+                        const forwardReference = createMessageReferenceElement(metadata.forwarded_from, {
+                            variant: 'forward',
+                        });
+                        if (forwardReference) {
+                            body.appendChild(forwardReference);
+                        }
                     }
                     if (message.content) {
                         const text = document.createElement('div');
@@ -1996,6 +2192,9 @@
                     fragment.appendChild(createMessageElement(message, previousMessage));
                 });
                 setChatLogContent(fragment);
+                if (focusMessageIfNeeded()) {
+                    return;
+                }
                 if (!scrollPort) {
                     return;
                 }
@@ -2058,8 +2257,10 @@
                     state.pendingFiles = [];
                     renderAttachmentChips();
                     setComposerValue('', { forceRender: true });
+                    clearActiveReply();
                 } else {
                     autoResizeInput();
+                    renderReplyPreview();
                 }
             };
 
@@ -2075,6 +2276,8 @@
                 setComposerValue('');
                 state.pendingFiles = [];
                 renderAttachmentChips();
+                clearActiveReply();
+                renderReplyPreview();
             };
 
             const updateNoteFromResponse = (note) => {
@@ -2285,10 +2488,16 @@
                 clearError();
                 try {
                     let response;
+                    const replyTarget = state.activeReply && state.activeReply.id
+                        ? { id: state.activeReply.id, note_id: state.activeReply.noteId }
+                        : null;
                     if (state.pendingFiles.length) {
                         const formData = new FormData();
                         formData.append('note_id', state.activeNoteId);
                         formData.append('content', rawContent);
+                        if (replyTarget) {
+                            formData.append('reply_to', JSON.stringify(replyTarget));
+                        }
                         state.pendingFiles.forEach((item) => {
                             formData.append('attachments', item.file, item.file.name);
                         });
@@ -2297,10 +2506,14 @@
                             body: formData,
                         });
                     } else {
+                        const payload = { note_id: state.activeNoteId, content: rawContent };
+                        if (replyTarget) {
+                            payload.reply_to = replyTarget;
+                        }
                         response = await fetch(`${API_BASE}/chat`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ note_id: state.activeNoteId, content: rawContent }),
+                            body: JSON.stringify(payload),
                         });
                     }
                     if (!response.ok) {
@@ -2448,6 +2661,7 @@
             renderNotes();
             renderMessages();
             renderAttachmentChips();
+            renderReplyPreview();
             ensureMentionComposer();
             loadNotes();
         })();
