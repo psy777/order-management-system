@@ -18,8 +18,8 @@
             <h2 class="text-lg font-semibold text-slate-800">Device Details</h2>
             <dl class="mt-4 space-y-3 text-sm text-slate-600">
                 <div class="flex justify-between">
-                    <dt class="text-slate-500">MAC Address</dt>
-                    <dd class="text-slate-800 font-medium">{{ mac_address or device.mac_address or 'Unavailable' }}</dd>
+                    <dt class="text-slate-500">Device Key</dt>
+                    <dd class="text-slate-800 font-medium">{{ device_key or device.device_token or 'Generating…' }}</dd>
                 </div>
                 <div class="flex justify-between">
                     <dt class="text-slate-500">IP Address</dt>

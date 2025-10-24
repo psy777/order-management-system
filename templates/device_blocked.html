@@ -22,8 +22,8 @@
             </div>
             <dl class="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-6 text-sm text-slate-300">
                 <div>
-                    <dt class="uppercase text-xs tracking-wide text-slate-500">MAC Address</dt>
-                    <dd class="mt-1 font-medium text-slate-100">{{ mac_address or device.mac_address or 'Unavailable' }}</dd>
+                    <dt class="uppercase text-xs tracking-wide text-slate-500">Device Key</dt>
+                    <dd class="mt-1 font-medium text-slate-100">{{ device_key or device.device_token or 'Unavailable' }}</dd>
                 </div>
                 <div>
                     <dt class="uppercase text-xs tracking-wide text-slate-500">IP Address</dt>
@@ -42,7 +42,7 @@
             </dl>
             <p class="mt-10 text-sm text-slate-400">If you need assistance, share the device details above with your FireCoast administrator so they can review or reinstate access.</p>
             <div class="mt-8 flex flex-wrap gap-3">
-                <a href="mailto:?subject=FireCoast%20Access%20Request&body=Please%20re-enable%20access%20for%20MAC%20{{ mac_address or device.mac_address or 'unknown' }}" class="inline-flex items-center rounded-md bg-slate-100 px-4 py-2 text-sm font-medium text-slate-900 hover:bg-white/90 focus:outline-none focus:ring-2 focus:ring-white/40">Email Administrator</a>
+                <a href="mailto:?subject=FireCoast%20Access%20Request&body=Please%20re-enable%20access%20for%20device%20key%20{{ device_key or device.device_token or 'unknown' }}" class="inline-flex items-center rounded-md bg-slate-100 px-4 py-2 text-sm font-medium text-slate-900 hover:bg-white/90 focus:outline-none focus:ring-2 focus:ring-white/40">Email Administrator</a>
                 <a href="/device/register" class="inline-flex items-center rounded-md border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800/60 focus:outline-none focus:ring-2 focus:ring-slate-600">Submit a new request</a>
             </div>
         </div>

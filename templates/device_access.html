@@ -56,7 +56,7 @@
                         <tr>
                             <th scope="col" class="px-4 py-3">When</th>
                             <th scope="col" class="px-4 py-3">Device</th>
-                            <th scope="col" class="px-4 py-3">MAC</th>
+                            <th scope="col" class="px-4 py-3">Device Key</th>
                             <th scope="col" class="px-4 py-3">IP</th>
                             <th scope="col" class="px-4 py-3">Status</th>
                             <th scope="col" class="px-4 py-3">Endpoint</th>
@@ -94,6 +94,32 @@
             return stamp.toLocaleString();
         };
 
+        const formatTokenPreview = (token) => {
+            if (!token || typeof token !== 'string') {
+                return '';
+            }
+            const trimmed = token.trim();
+            if (!trimmed) {
+                return '';
+            }
+            if (trimmed.length <= 12) {
+                return trimmed;
+            }
+            return `${trimmed.slice(0, 6)}…${trimmed.slice(-4)}`;
+        };
+
+        const getDeviceKeyLabel = (device) => {
+            if (!device) {
+                return '—';
+            }
+            const token = device.device_token || device.deviceToken || device.device_key || '';
+            const preview = formatTokenPreview(token);
+            if (preview) {
+                return preview;
+            }
+            return device.mac_address || device.macAddress || '—';
+        };
+
         const buildStatusBadge = (status) => {
             const normalized = String(status || '').toLowerCase();
             const config = statusLabels[normalized] || { label: normalized || 'Unknown', classes: 'bg-slate-200 text-slate-700' };
@@ -112,7 +138,7 @@
             nameCell.className = 'whitespace-nowrap px-4 py-4 align-top';
             nameCell.innerHTML = `
                 <div class="font-semibold text-slate-800">${device.display_name || 'Unnamed Device'}</div>
-                <div class="text-xs text-slate-500">MAC: ${device.mac_address || '—'}</div>
+                <div class="text-xs text-slate-500">Key: ${getDeviceKeyLabel(device)}</div>
             `;
 
             const ownerCell = document.createElement('td');
@@ -199,7 +225,7 @@
                 row.innerHTML = `
                     <td class="whitespace-nowrap px-4 py-3 text-slate-700">${formatDateTime(log.created_at)}</td>
                     <td class="px-4 py-3 text-slate-600">${log.device_id || '—'}</td>
-                    <td class="px-4 py-3 text-slate-600">${log.mac_address || '—'}</td>
+                    <td class="px-4 py-3 text-slate-600">${getDeviceKeyLabel(log)}</td>
                     <td class="px-4 py-3 text-slate-600">${log.ip_address || '—'}</td>
                     <td class="px-4 py-3 text-slate-600">${(log.status || '').toUpperCase()}</td>
                     <td class="px-4 py-3 text-slate-500">${log.endpoint || '/'}</td>
