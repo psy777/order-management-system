@@ -78,6 +78,12 @@ _db_bootstrapped = False
 _event_stream_lock = Lock()
 _event_stream_listeners: Set[SimpleQueue] = set()
 
+_typing_state_lock = Lock()
+_typing_states: Dict[str, Dict[str, Dict[str, Any]]] = defaultdict(dict)
+
+_TYPING_TTL_SECONDS = 8.0
+MAX_CHAT_PING_RECIPIENTS = 8
+
 
 def _event_default_serializer(value: Any) -> str:
     if isinstance(value, datetime):
@@ -123,6 +129,155 @@ def _broadcast_event(event_type: str, payload: Optional[Dict[str, Any]] = None) 
             listener.put(event_payload)
         except Exception:
             continue
+
+
+def _normalize_ping_device_ids(raw_ids: Any) -> List[str]:
+    if raw_ids is None:
+        return []
+    if isinstance(raw_ids, (list, tuple, set)):
+        values = list(raw_ids)
+    elif isinstance(raw_ids, str):
+        values = raw_ids.split(',')
+    else:
+        values = [raw_ids]
+    normalized: List[str] = []
+    seen: Set[str] = set()
+    for value in values:
+        text = str(value or '').strip()
+        if not text:
+            continue
+        lowered = text.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        normalized.append(text)
+        if len(normalized) >= MAX_CHAT_PING_RECIPIENTS:
+            break
+    return normalized
+
+
+def _resolve_chat_ping_targets(
+    conn: sqlite3.Connection,
+    raw_ids: Any,
+    actor_device: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    normalized = _normalize_ping_device_ids(raw_ids)
+    if not normalized:
+        return []
+    actor_id = str(actor_device.get('id') or '') if actor_device else ''
+    filtered = [value for value in normalized if value != actor_id]
+    if not filtered:
+        return []
+    host_requested = any(candidate == 'host' for candidate in filtered)
+    filtered = [candidate for candidate in filtered if candidate != 'host']
+    targets: List[Dict[str, Any]] = []
+    if filtered:
+        placeholders = ','.join('?' for _ in filtered)
+        cursor = conn.execute(
+            f"""
+            SELECT id, mac_address, owner_name, device_name, status, permissions, last_ip, last_seen
+            FROM network_devices
+            WHERE id IN ({placeholders})
+            """,
+            filtered,
+        )
+        row_map = {str(row['id']): dict(row) for row in cursor.fetchall()}
+        for candidate in filtered:
+            row = row_map.get(candidate)
+            if not row:
+                continue
+            status = row.get('status') or DEVICE_STATUS_PENDING
+            if status != DEVICE_STATUS_TRUSTED:
+                continue
+            context = _build_device_context(row)
+            targets.append(
+                {
+                    'device_id': context.get('id'),
+                    'display_name': context.get('display_name'),
+                    'owner_name': context.get('owner_name'),
+                    'device_name': context.get('device_name'),
+                    'is_host': False,
+                }
+            )
+    if host_requested:
+        ip_address = actor_device.get('last_ip') if actor_device else _get_request_ip_address()
+        host_context = _build_host_device_context(ip_address or '127.0.0.1')
+        targets.append(
+            {
+                'device_id': host_context.get('id'),
+                'display_name': host_context.get('display_name'),
+                'owner_name': host_context.get('owner_name'),
+                'device_name': host_context.get('device_name'),
+                'is_host': True,
+            }
+        )
+    return targets
+
+
+def _prune_typing_states(note_id: Optional[str], now: datetime) -> None:
+    cutoff = now - timedelta(seconds=_TYPING_TTL_SECONDS)
+    if note_id:
+        bucket = _typing_states.get(note_id)
+        if not bucket:
+            return
+        stale = [key for key, entry in bucket.items() if entry.get('updated_at') and entry['updated_at'] < cutoff]
+        for key in stale:
+            bucket.pop(key, None)
+        if not bucket:
+            _typing_states.pop(note_id, None)
+        return
+    for candidate_note, bucket in list(_typing_states.items()):
+        stale = [key for key, entry in bucket.items() if entry.get('updated_at') and entry['updated_at'] < cutoff]
+        for key in stale:
+            bucket.pop(key, None)
+        if not bucket:
+            _typing_states.pop(candidate_note, None)
+
+
+def _update_typing_state(
+    note_id: str,
+    device_context: Optional[Dict[str, Any]],
+    is_typing: bool,
+) -> List[Dict[str, Any]]:
+    normalized_note = (note_id or '').strip()
+    if not normalized_note or not device_context:
+        return []
+    device_id = str(device_context.get('id') or '').strip()
+    if not device_id:
+        return []
+    display_name = (
+        device_context.get('display_name')
+        or device_context.get('owner_name')
+        or device_context.get('device_name')
+        or 'Someone'
+    )
+    now = datetime.now(timezone.utc)
+    with _typing_state_lock:
+        bucket = _typing_states.setdefault(normalized_note, {})
+        _prune_typing_states(normalized_note, now)
+        if is_typing:
+            bucket[device_id] = {
+                'device_id': device_id,
+                'display_name': display_name,
+                'updated_at': now,
+            }
+        else:
+            bucket.pop(device_id, None)
+        if not bucket:
+            _typing_states.pop(normalized_note, None)
+            active_typers: List[Dict[str, Any]] = []
+        else:
+            active_typers = [
+                {
+                    'device_id': entry['device_id'],
+                    'display_name': entry['display_name'],
+                }
+                for entry in sorted(
+                    bucket.values(), key=lambda item: str(item.get('display_name') or '').lower()
+                )
+            ]
+    _broadcast_event('firenotes:typing', {'note_id': normalized_note, 'typers': active_typers})
+    return active_typers
 
 
 def _schedule_post_upgrade_restart(delay: float = RESTART_DELAY_SECONDS) -> None:
@@ -6784,6 +6939,59 @@ def api_firenotes_notes():
         conn.close()
 
 
+@app.route('/api/firenotes/participants', methods=['GET'])
+def api_firenotes_participants():
+    device = getattr(g, 'current_device', None)
+    status = (device or {}).get('status')
+    if not device or status not in {DEVICE_STATUS_TRUSTED, DEVICE_STATUS_HOST}:
+        if not (device and device.get('is_host')):
+            return jsonify({'participants': []})
+    conn = get_db_connection()
+    try:
+        cursor = conn.execute(
+            """
+            SELECT id, mac_address, owner_name, device_name, status, permissions, last_ip, last_seen
+            FROM network_devices
+            WHERE status = ?
+            ORDER BY LOWER(COALESCE(owner_name, '')) ASC,
+                     LOWER(COALESCE(device_name, '')) ASC,
+                     datetime(created_at) DESC
+            """,
+            (DEVICE_STATUS_TRUSTED,),
+        )
+        rows = [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+    participants: List[Dict[str, Any]] = []
+    current_id = str(device.get('id') or '') if device else ''
+    for row in rows:
+        context = _build_device_context(row)
+        participants.append(
+            {
+                'id': context.get('id'),
+                'display_name': context.get('display_name'),
+                'owner_name': context.get('owner_name'),
+                'device_name': context.get('device_name'),
+                'is_host': bool(context.get('is_host')),
+                'is_self': context.get('id') == current_id,
+            }
+        )
+    host_context = _build_host_device_context(
+        (device or {}).get('last_ip') or _get_request_ip_address()
+    )
+    host_entry = {
+        'id': host_context.get('id'),
+        'display_name': host_context.get('display_name'),
+        'owner_name': host_context.get('owner_name'),
+        'device_name': host_context.get('device_name'),
+        'is_host': True,
+        'is_self': host_context.get('id') == current_id,
+    }
+    if not any(entry.get('id') == host_entry['id'] for entry in participants):
+        participants.insert(0, host_entry)
+    return jsonify({'participants': participants})
+
+
 @app.route('/api/firenotes/chat', methods=['GET', 'POST'])
 @app.route('/api/firecoast/chat', methods=['GET', 'POST'])
 def api_firenotes_chat():
@@ -6811,6 +7019,7 @@ def api_firenotes_chat():
         note_id = ''
         content = ''
         reply_to_payload: Optional[Dict[str, Any]] = None
+        ping_request_payload: Any = None
         if request.content_type and 'multipart/form-data' in request.content_type:
             note_id = (request.form.get('note_id') or request.form.get('noteId') or '').strip()
             content = (request.form.get('content') or '').strip()
@@ -6824,6 +7033,7 @@ def api_firenotes_chat():
                     reply_to_payload = json.loads(raw_reply_to)
                 except json.JSONDecodeError:
                     reply_to_payload = None
+            ping_request_payload = request.form.getlist('ping_device_ids') or request.form.getlist('pingDeviceIds')
         else:
             payload = request.get_json(force=True, silent=True) or {}
             note_id = (payload.get('note_id') or payload.get('noteId') or '').strip()
@@ -6834,6 +7044,7 @@ def api_firenotes_chat():
             candidate_reply = payload.get('reply_to') or payload.get('replyTo')
             if isinstance(candidate_reply, dict):
                 reply_to_payload = candidate_reply
+            ping_request_payload = payload.get('ping_device_ids') or payload.get('pingDeviceIds')
         if not note_id:
             return jsonify({'message': 'note_id is required.'}), 400
         note = _get_note(conn, note_id)
@@ -6862,6 +7073,9 @@ def api_firenotes_chat():
             metadata_payload.setdefault('owner_name', device_context.get('owner_name'))
             metadata_payload.setdefault('actor_role', 'user')
             author = display_author
+        ping_targets = _resolve_chat_ping_targets(conn, ping_request_payload, device_context)
+        if ping_targets:
+            metadata_payload['pings'] = ping_targets
         metadata = metadata_payload or None
         stored = _store_chat_message(
             conn,
@@ -6923,6 +7137,32 @@ def api_firenotes_chat():
         return jsonify({'message': 'Unable to process chat request.'}), 500
     finally:
         conn.close()
+
+
+@app.route('/api/firenotes/chat/typing', methods=['POST'])
+@app.route('/api/firecoast/chat/typing', methods=['POST'])
+def api_firenotes_chat_typing():
+    device_context = getattr(g, 'current_device', None)
+    if not device_context:
+        return jsonify({'typers': []})
+    payload = request.get_json(force=True, silent=True) or {}
+    note_id = (payload.get('note_id') or payload.get('noteId') or '').strip()
+    if not note_id:
+        return jsonify({'message': 'note_id is required.'}), 400
+    raw_state = None
+    for key in ('is_typing', 'isTyping', 'typing'):
+        if key in payload:
+            raw_state = payload.get(key)
+            break
+    if isinstance(raw_state, str):
+        normalized_state = raw_state.strip().lower()
+        is_typing = normalized_state in {'1', 'true', 'yes', 'y', 'typing', 'start'}
+    elif raw_state is None:
+        is_typing = True
+    else:
+        is_typing = bool(raw_state)
+    typers = _update_typing_state(note_id, device_context, is_typing)
+    return jsonify({'note_id': note_id, 'typers': typers, 'is_typing': is_typing})
 
 
 @app.route('/api/firenotes/chat/reactions', methods=['POST'])
