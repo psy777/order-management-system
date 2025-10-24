@@ -1946,7 +1946,7 @@
                     meta.textContent = metaParts.join(' · ');
                     button.appendChild(meta);
                 }
-                const previewText = summarizeTextPreview(reference.preview || reference.content || '', 120);
+                const previewText = summarizeTextPreview(reference.preview || reference.content || '', 90);
                 if (previewText) {
                     const preview = document.createElement('div');
                     preview.className = 'fc-message__reference-preview';
