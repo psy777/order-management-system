@@ -613,6 +613,26 @@ def _get_request_ip_address() -> str:
     return remote.strip()
 
 
+def _prime_neighbor_table_for_ip(ip_address: str) -> None:
+    ping_variants: List[List[str]] = [
+        ['ping', '-c', '1', '-W', '1', ip_address],
+        ['ping', '-c', '1', ip_address],
+        ['ping', '-n', '1', ip_address],
+    ]
+    for command in ping_variants:
+        try:
+            subprocess.run(  # noqa: S603, S607 - local network inspection
+                command,
+                capture_output=True,
+                text=True,
+                timeout=1.5,
+            )
+        except (FileNotFoundError, subprocess.SubprocessError):
+            continue
+        else:
+            break
+
+
 def _extract_mac_from_neighbor_output(output: str, ip_address: str) -> Optional[str]:
     if not output or not ip_address:
         return None
@@ -653,20 +673,39 @@ def _resolve_mac_address_for_ip(ip_address: Optional[str]) -> Optional[str]:
         ['ip', 'neigh', 'show', ip_address],
         ['arp', '-n', ip_address],
     ]
-    for command in commands:
-        try:
-            completed = subprocess.run(  # noqa: S603, S607 - local network inspection
-                command,
-                capture_output=True,
-                text=True,
-                timeout=1.5,
-            )
-        except (FileNotFoundError, subprocess.SubprocessError):
-            continue
-        output = ' '.join(filter(None, [completed.stdout, completed.stderr]))
-        mac_address = _extract_mac_from_neighbor_output(output, ip_address)
-        if mac_address:
-            return mac_address
+
+    def run_commands(command_list: List[List[str]]) -> Optional[str]:
+        for command in command_list:
+            try:
+                completed = subprocess.run(  # noqa: S603, S607 - local network inspection
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=1.5,
+                )
+            except (FileNotFoundError, subprocess.SubprocessError):
+                continue
+            output = ' '.join(filter(None, [completed.stdout, completed.stderr]))
+            mac_address = _extract_mac_from_neighbor_output(output, ip_address)
+            if mac_address:
+                return mac_address
+        return None
+
+    mac_address = run_commands(commands)
+    if mac_address:
+        return mac_address
+
+    _prime_neighbor_table_for_ip(ip_address)
+
+    fallback_commands = commands + [
+        ['ip', 'neigh', 'show'],
+        ['ip', 'neigh'],
+        ['arp', '-an'],
+    ]
+
+    mac_address = run_commands(fallback_commands)
+    if mac_address:
+        return mac_address
     return None
 
 

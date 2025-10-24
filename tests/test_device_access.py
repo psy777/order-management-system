@@ -181,3 +181,65 @@ def test_mac_resolution_ignores_non_matching_lines(device_control_environment, m
 
     mac = firecoast_app._resolve_mac_address_for_ip('192.168.0.77')
     assert mac is None
+
+
+def test_mac_resolution_falls_back_to_full_neighbor_scan(device_control_environment, monkeypatch):
+    firecoast_app = device_control_environment
+
+    neighbor_output = ""
+    fallback_output = "192.168.0.77 dev wlan0 lladdr cc:cc:cc:cc:cc:cc STALE"
+
+    def fake_run(command, capture_output, text, timeout):
+        if len(command) == 4 and command[:3] == ['ip', 'neigh', 'show']:
+            return SimpleNamespace(stdout=neighbor_output, stderr='')
+        if command[:2] == ['arp', '-n']:
+            return SimpleNamespace(stdout='', stderr='')
+        if command == ['ping', '-c', '1', '-W', '1', '192.168.0.77']:
+            raise FileNotFoundError
+        if command == ['ping', '-c', '1', '192.168.0.77']:
+            raise FileNotFoundError
+        if command == ['ping', '-n', '1', '192.168.0.77']:
+            raise FileNotFoundError
+        if command == ['ip', 'neigh', 'show']:
+            return SimpleNamespace(stdout=fallback_output, stderr='')
+        if command == ['ip', 'neigh']:
+            return SimpleNamespace(stdout='', stderr='')
+        if command == ['arp', '-an']:
+            return SimpleNamespace(stdout='', stderr='')
+        raise AssertionError(f"Unexpected command {command}")
+
+    monkeypatch.setattr(firecoast_app.subprocess, 'run', fake_run)
+
+    mac = firecoast_app._resolve_mac_address_for_ip('192.168.0.77')
+    assert mac == 'cc:cc:cc:cc:cc:cc'
+
+
+def test_mac_resolution_retries_after_ping_prime(device_control_environment, monkeypatch):
+    firecoast_app = device_control_environment
+
+    attempts = {'ip_runs': 0}
+
+    def fake_run(command, capture_output, text, timeout):
+        if len(command) == 4 and command[:3] == ['ip', 'neigh', 'show']:
+            attempts['ip_runs'] += 1
+            if attempts['ip_runs'] >= 2:
+                output = "192.168.0.88 dev eth0 lladdr dd:dd:dd:dd:dd:dd REACHABLE"
+            else:
+                output = ''
+            return SimpleNamespace(stdout=output, stderr='')
+        if command[:2] == ['arp', '-n']:
+            return SimpleNamespace(stdout='', stderr='')
+        if command == ['ip', 'neigh', 'show']:
+            return SimpleNamespace(stdout='', stderr='')
+        if command == ['ip', 'neigh']:
+            return SimpleNamespace(stdout='', stderr='')
+        if command == ['arp', '-an']:
+            return SimpleNamespace(stdout='', stderr='')
+        if command[0] == 'ping':
+            return SimpleNamespace(stdout='', stderr='')
+        raise AssertionError(f"Unexpected command {command}")
+
+    monkeypatch.setattr(firecoast_app.subprocess, 'run', fake_run)
+
+    mac = firecoast_app._resolve_mac_address_for_ip('192.168.0.88')
+    assert mac == 'dd:dd:dd:dd:dd:dd'
