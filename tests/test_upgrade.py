@@ -227,10 +227,49 @@ def test_schedule_restart_launches_new_process(monkeypatch):
 
     assert timer_calls['delay'] == 3.5
     assert popen_calls['cmd'][0] == '/usr/bin/python'
-    assert popen_calls['cmd'][1:] == ['--flag']
+    assert Path(popen_calls['cmd'][1]).resolve() == (Path.cwd() / 'app.py').resolve()
+    assert popen_calls['cmd'][2:] == ['--flag']
     assert popen_calls['cwd'] == Path.cwd()
     assert isinstance(popen_calls['env'], dict)
     assert exit_calls['code'] == 0
+
+
+def test_schedule_restart_skips_duplicate_script_arg_for_frozen_build(monkeypatch):
+    firenotes_app.app.config['TESTING'] = False
+
+    class ImmediateTimer:
+        def __init__(self, delay: float, callback):
+            self._callback = callback
+
+        def start(self) -> None:
+            self._callback()
+
+    monkeypatch.setattr(firenotes_app, 'Timer', ImmediateTimer)
+
+    recorded_cmd: dict[str, list[str]] = {}
+
+    def fake_popen(cmd, *, cwd=None, env=None):
+        recorded_cmd['cmd'] = cmd
+
+    monkeypatch.setattr(firenotes_app.subprocess, 'Popen', fake_popen)
+    monkeypatch.setattr(firenotes_app.os, '_exit', lambda code: None)
+    monkeypatch.setattr(
+        firenotes_app.sys,
+        'executable',
+        '/Applications/FireCoast.app/Contents/MacOS/FireCoast',
+    )
+    monkeypatch.setattr(
+        firenotes_app.sys,
+        'argv',
+        ['/Applications/FireCoast.app/Contents/MacOS/FireCoast', '--flag'],
+    )
+
+    firenotes_app._schedule_post_upgrade_restart(delay=0.5)
+
+    assert recorded_cmd['cmd'] == [
+        '/Applications/FireCoast.app/Contents/MacOS/FireCoast',
+        '--flag',
+    ]
 
 
 def test_upgrade_endpoint_invokes_service(monkeypatch, tmp_path):

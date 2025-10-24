@@ -77,8 +77,41 @@ def _schedule_post_upgrade_restart(delay: float = RESTART_DELAY_SECONDS) -> None
         app.logger.info('Skipping restart scheduling while running tests')
         return
 
-    python_executable = sys.executable or sys.argv[0]
-    argv_tail = sys.argv[1:]
+    python_executable = sys.executable or ""
+    argv = list(sys.argv)
+    if not argv:
+        argv = [str(Path(__file__).resolve())]
+
+    script_arg = argv[0] if argv else ""
+    if not script_arg:
+        script_arg = str(Path(__file__).resolve())
+        argv[0] = script_arg
+    else:
+        candidate = Path(script_arg)
+        if not candidate.is_absolute():
+            resolved = (Path.cwd() / candidate).resolve()
+            if resolved.exists():
+                script_arg = str(resolved)
+                argv[0] = script_arg
+
+    if not python_executable:
+        python_executable = script_arg
+        launch_args = argv[1:]
+    else:
+        launch_args = argv
+        try:
+            exec_path = Path(python_executable)
+            script_path = Path(script_arg)
+            same_target = False
+            if exec_path.exists() and script_path.exists():
+                same_target = exec_path.resolve() == script_path.resolve()
+            else:
+                same_target = os.path.normcase(python_executable) == os.path.normcase(script_arg)
+            if same_target:
+                launch_args = argv[1:]
+        except Exception:  # pragma: no cover - best effort comparison
+            if python_executable == script_arg:
+                launch_args = argv[1:]
     current_env = os.environ.copy()
     working_dir = Path.cwd()
 
@@ -90,7 +123,7 @@ def _schedule_post_upgrade_restart(delay: float = RESTART_DELAY_SECONDS) -> None
 
         try:
             subprocess.Popen(
-                [python_executable, *argv_tail],
+                [python_executable, *launch_args],
                 cwd=working_dir,
                 env=current_env,
             )
