@@ -97,6 +97,58 @@ def test_new_device_is_redirected_and_logged(device_control_environment, monkeyp
         conn.close()
 
 
+def test_pending_device_without_details_can_submit_request(device_control_environment, monkeypatch):
+    firecoast_app = device_control_environment
+
+    device_token = f'token-form-flow-{uuid.uuid4()}'
+
+    monkeypatch.setattr(firecoast_app, '_get_request_ip_address', lambda: '192.168.0.77')
+    monkeypatch.setattr(firecoast_app, '_generate_device_token', lambda: device_token)
+
+    original_testing = firecoast_app.app.config.get('TESTING')
+    firecoast_app.app.config['TESTING'] = False
+    try:
+        with firecoast_app.app.test_client() as client:
+            response = client.get('/orders')
+            assert response.status_code == 302
+            assert response.headers['Location']
+            assert response.headers['Location'].endswith('/device/register')
+
+            response = client.get('/device/register')
+            assert response.status_code == 200
+            html = response.get_data(as_text=True)
+            assert 'name="owner_name"' in html
+            assert 'name="device_name"' in html
+
+            post_response = client.post(
+                '/device/register',
+                data={'owner_name': 'Jordan', 'device_name': 'Warehouse Tablet'},
+                follow_redirects=False,
+            )
+            assert post_response.status_code == 302
+            assert post_response.headers['Location'].endswith('/device/pending')
+
+            # Once the details are recorded, subsequent visits should go to the pending page.
+            response = client.get('/device/register')
+            assert response.status_code == 302
+            assert response.headers['Location'].endswith('/device/pending')
+    finally:
+        firecoast_app.app.config['TESTING'] = original_testing
+
+    conn = get_db_connection()
+    try:
+        row = conn.execute(
+            "SELECT owner_name, device_name, status FROM network_devices WHERE access_token = ?",
+            (device_token,),
+        ).fetchone()
+        assert row is not None
+        assert row['owner_name'] == 'Jordan'
+        assert row['device_name'] == 'Warehouse Tablet'
+        assert row['status'] == firecoast_app.DEVICE_STATUS_PENDING
+    finally:
+        conn.close()
+
+
 def test_trusted_device_gains_access_without_login(device_control_environment, monkeypatch):
     firecoast_app = device_control_environment
 

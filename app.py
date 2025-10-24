@@ -450,7 +450,11 @@ def _enforce_device_access_gate():
 
     device_context = _build_device_context(device_row)
     status = device_context.get('status') or DEVICE_STATUS_PENDING
-    if created_new_device:
+    owner_details_provided = bool(device_context.get('owner_name'))
+    device_details_provided = bool(device_context.get('device_name'))
+    if created_new_device or (
+        status == DEVICE_STATUS_PENDING and not (owner_details_provided and device_details_provided)
+    ):
         session[PENDING_DEVICE_TOKEN_SESSION_KEY] = device_context.get('device_token')
         session['pending_ip'] = ip_address
         return redirect(url_for('device_register'))
@@ -880,14 +884,25 @@ def device_register():
     session['pending_ip'] = ip_address
 
     existing_device = _lookup_session_device(device_token)
+    device_context = _build_device_context(existing_device) if existing_device else None
+    existing_owner_name = (existing_device.get('owner_name') or '').strip() if existing_device else ''
+    existing_device_name = (existing_device.get('device_name') or '').strip() if existing_device else ''
+
     if existing_device:
         status = existing_device.get('status') or DEVICE_STATUS_PENDING
+        owner_details_provided = bool(existing_owner_name)
+        device_details_provided = bool(existing_device_name)
         if status == DEVICE_STATUS_TRUSTED:
-            g.current_device = _build_device_context(existing_device)
+            g.current_device = device_context
             return redirect(url_for('dashboard_page'))
         if status == DEVICE_STATUS_BLOCKED:
             return redirect(url_for('device_blocked'))
-        if status == DEVICE_STATUS_PENDING and request.method == 'GET':
+        if (
+            status == DEVICE_STATUS_PENDING
+            and request.method == 'GET'
+            and owner_details_provided
+            and device_details_provided
+        ):
             return redirect(url_for('device_pending'))
 
     error_message: Optional[str] = None
@@ -957,11 +972,20 @@ def device_register():
             finally:
                 conn.close()
 
+    submitted_owner_name = (request.form.get('owner_name') or request.form.get('ownerName') or '').strip()
+    submitted_device_name = (request.form.get('device_name') or request.form.get('deviceName') or '').strip()
+
+    form_owner_name = submitted_owner_name or existing_owner_name
+    form_device_name = submitted_device_name or existing_device_name
+
     return render_template(
         'device_register.html',
         device_key=device_token,
         ip_address=ip_address,
         error=error_message,
+        device=device_context,
+        form_owner_name=form_owner_name,
+        form_device_name=form_device_name,
     )
 
 

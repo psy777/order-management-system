@@ -33,11 +33,11 @@
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
                     <label class="block text-left">
                         <span class="text-sm font-medium text-slate-700">Your Name</span>
-                        <input type="text" name="owner_name" value="{{ request.form.owner_name or '' }}" class="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-200" placeholder="e.g. Jordan Lee" required>
+                        <input type="text" name="owner_name" value="{{ form_owner_name or '' }}" class="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-200" placeholder="e.g. Jordan Lee" required>
                     </label>
                     <label class="block text-left">
                         <span class="text-sm font-medium text-slate-700">Device Name</span>
-                        <input type="text" name="device_name" value="{{ request.form.device_name or '' }}" class="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-200" placeholder="e.g. Warehouse Tablet" required>
+                        <input type="text" name="device_name" value="{{ form_device_name or '' }}" class="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-200" placeholder="e.g. Warehouse Tablet" required>
                     </label>
                 </div>
                 <div class="bg-slate-50 border border-slate-200 rounded-lg p-4 text-sm text-slate-600">
