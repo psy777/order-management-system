@@ -1937,35 +1937,53 @@
                 const button = document.createElement('button');
                 button.type = 'button';
                 button.className = `fc-message__reference fc-message__reference--${variant}`;
-                const header = document.createElement('div');
-                header.className = 'fc-message__reference-label';
-                const defaultHeader = variant === 'forward' ? `Forwarded from ${authorLabel}` : `Replying to ${authorLabel}`;
-                header.textContent = options.header || defaultHeader;
-                button.appendChild(header);
-                const metaParts = [];
-                if (noteId && noteId !== state.activeNoteId && reference.note_title) {
-                    metaParts.push(reference.note_title);
-                }
-                if (reference.created_at) {
-                    const stamp = formatTimestamp(reference.created_at, true);
-                    if (stamp) {
-                        metaParts.push(stamp);
+                const icon = document.createElement('span');
+                icon.className = 'fc-message__reference-icon';
+                icon.textContent = options.icon || (variant === 'forward' ? '↗︎' : '↩︎');
+                button.appendChild(icon);
+                const textGroup = document.createElement('span');
+                textGroup.className = 'fc-message__reference-text';
+                button.appendChild(textGroup);
+                const labelText = (() => {
+                    if (variant === 'reply') {
+                        return authorLabel ? `Replying to ${authorLabel}` : 'Replying to message';
                     }
+                    return authorLabel || '';
+                })();
+                if (labelText) {
+                    const label = document.createElement('span');
+                    label.className = 'fc-message__reference-label';
+                    label.textContent = labelText;
+                    textGroup.appendChild(label);
                 }
-                if (metaParts.length) {
-                    const meta = document.createElement('div');
-                    meta.className = 'fc-message__reference-meta';
-                    meta.textContent = metaParts.join(' · ');
-                    button.appendChild(meta);
+                const previewText = summarizeTextPreview(reference.preview || reference.content || '', 70);
+                if (labelText && previewText) {
+                    const separator = document.createElement('span');
+                    separator.className = 'fc-message__reference-separator';
+                    separator.setAttribute('aria-hidden', 'true');
+                    separator.textContent = '·';
+                    textGroup.appendChild(separator);
                 }
-                const previewText = summarizeTextPreview(reference.preview || reference.content || '', 90);
                 if (previewText) {
-                    const preview = document.createElement('div');
+                    const preview = document.createElement('span');
                     preview.className = 'fc-message__reference-preview';
                     preview.textContent = previewText;
-                    button.appendChild(preview);
+                    textGroup.appendChild(preview);
                 }
-                const ariaLabel = options.ariaLabel || `View message from ${authorLabel}`;
+                const tooltipParts = [];
+                if (labelText) {
+                    tooltipParts.push(labelText);
+                }
+                if (previewText) {
+                    tooltipParts.push(previewText);
+                }
+                if (tooltipParts.length) {
+                    button.title = tooltipParts.join(' · ');
+                }
+                const ariaLabel = options.ariaLabel
+                    || (variant === 'forward'
+                        ? `View original message${authorLabel ? ` from ${authorLabel}` : ''}`
+                        : `View reply from ${authorLabel || 'the original message'}`);
                 button.setAttribute('aria-label', ariaLabel);
                 button.addEventListener('click', async (event) => {
                     event.preventDefault();
