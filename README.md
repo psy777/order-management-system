@@ -16,6 +16,21 @@ data. The script first verifies that your working tree is clean, creates a ZIP
 backup of the `data/` directory, pulls the newest code, and finally reinstalls
 Python dependencies.
 
+## Windows quick launch
+
+For a one-click start on Windows, use the `launch_firecoast.bat` script in the
+project root. The batch file creates (or reuses) a local virtual environment,
+installs dependencies from `requirements.txt`, and then runs `app.py`. You can
+create a desktop or taskbar shortcut that points directly to the batch file to
+start the application without opening a terminal first.
+
+1. Right-click `launch_firecoast.bat` and choose **Create shortcut**.
+2. Move the shortcut to your desktop or pin it to the taskbar/start menu.
+3. Double-click the shortcut whenever you want to launch FireCoast.
+
+The first launch may take a moment while Python dependencies install. Later
+launches reuse the existing virtual environment and start immediately.
+
 To upgrade an installation:
 
 1. Ensure your working tree is clean (`git status` should report no pending
