@@ -8,6 +8,7 @@ import socket
 import sqlite3
 import sys
 import smtplib
+import subprocess
 import re
 from collections import defaultdict
 from email.mime.multipart import MIMEMultipart
@@ -46,6 +47,7 @@ from database import (
 from data_paths import DATA_ROOT, ensure_data_root
 from services.analytics import get_analytics_engine
 from services.backup import BackupError, create_backup_archive, restore_backup_from_stream
+from services.upgrade import UpgradeError, perform_upgrade
 from services.records import (
     RecordValidationError,
     bootstrap_record_service,
@@ -59,11 +61,78 @@ from services.records import (
 load_dotenv()
 
 # --- App Initialization ---
+RESTART_DELAY_SECONDS = 1.0
+
 app = Flask(__name__, template_folder='templates')
 app.config['JSON_SORT_KEYS'] = False
 app.secret_key = os.urandom(24)
 
 _db_bootstrapped = False
+
+
+def _schedule_post_upgrade_restart(delay: float = RESTART_DELAY_SECONDS) -> None:
+    """Launch a fresh process after a short delay and exit the current one."""
+
+    if app.config.get('TESTING'):
+        app.logger.info('Skipping restart scheduling while running tests')
+        return
+
+    python_executable = sys.executable or ""
+    argv = list(sys.argv)
+    if not argv:
+        argv = [str(Path(__file__).resolve())]
+
+    script_arg = argv[0] if argv else ""
+    if not script_arg:
+        script_arg = str(Path(__file__).resolve())
+        argv[0] = script_arg
+    else:
+        candidate = Path(script_arg)
+        if not candidate.is_absolute():
+            resolved = (Path.cwd() / candidate).resolve()
+            if resolved.exists():
+                script_arg = str(resolved)
+                argv[0] = script_arg
+
+    if not python_executable:
+        python_executable = script_arg
+        launch_args = argv[1:]
+    else:
+        launch_args = argv
+        try:
+            exec_path = Path(python_executable)
+            script_path = Path(script_arg)
+            same_target = False
+            if exec_path.exists() and script_path.exists():
+                same_target = exec_path.resolve() == script_path.resolve()
+            else:
+                same_target = os.path.normcase(python_executable) == os.path.normcase(script_arg)
+            if same_target:
+                launch_args = argv[1:]
+        except Exception:  # pragma: no cover - best effort comparison
+            if python_executable == script_arg:
+                launch_args = argv[1:]
+    current_env = os.environ.copy()
+    working_dir = Path.cwd()
+
+    def _perform_restart() -> None:
+        try:
+            app.logger.info('Restarting process to finalize upgrade')
+        except Exception:  # pragma: no cover - logging best effort
+            pass
+
+        try:
+            subprocess.Popen(
+                [python_executable, *launch_args],
+                cwd=working_dir,
+                env=current_env,
+            )
+        except Exception:  # pragma: no cover - process spawn best effort
+            app.logger.exception('Failed to launch replacement process')
+        finally:
+            os._exit(0)
+
+    Timer(delay, _perform_restart).start()
 
 
 @app.before_request
@@ -5759,6 +5828,62 @@ def update_invoice_settings():
 
     write_json_file(SETTINGS_FILE, existing_settings)
     return jsonify({"message": "Invoice appearance updated.", "settings": existing_settings}), 200
+
+
+@app.route('/api/system/upgrade', methods=['POST'])
+def trigger_system_upgrade():
+    """Upgrade the application to the latest master commit and return details."""
+
+    if not app.config.get('TESTING'):
+        app.logger.info('Upgrade requested via settings UI')
+
+    payload = request.get_json(silent=True) or {}
+    remote = (payload.get('remote') or 'origin').strip() or 'origin'
+    branch = (payload.get('branch') or 'master').strip() or 'master'
+    skip_dependencies = bool(payload.get('skipDependencies'))
+    repository_url = (payload.get('repositoryUrl') or '').strip() or None
+
+    try:
+        result = perform_upgrade(
+            remote=remote,
+            branch=branch,
+            install_dependencies=not skip_dependencies,
+            repository_url=repository_url,
+        )
+    except UpgradeError as exc:
+        app.logger.warning('Upgrade failed: %s', exc)
+        return (
+            jsonify({'status': 'error', 'message': str(exc)}),
+            400,
+        )
+    except Exception:  # pragma: no cover - defensive
+        app.logger.exception('Unexpected error during upgrade')
+        return (
+            jsonify(
+                {
+                    'status': 'error',
+                    'message': 'An unexpected error occurred while upgrading.',
+                }
+            ),
+            500,
+        )
+
+    app.logger.info('Upgrade succeeded; scheduling application restart')
+    _schedule_post_upgrade_restart()
+
+    return (
+        jsonify(
+            {
+                'status': 'ok',
+                'backupPath': str(result.backup_path),
+                'previousRevision': result.previous_revision,
+                'currentRevision': result.current_revision,
+                'dependenciesInstalled': not skip_dependencies,
+                'restartScheduled': True,
+            }
+        ),
+        200,
+    )
 
 
 @app.route('/api/passwords', methods=['GET', 'POST'])

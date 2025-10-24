@@ -234,6 +234,31 @@ hello@firenotes.com</p>
                 </div>
             </div>
         </section>
+
+        <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mb-8">
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <h2 class="text-xl font-semibold text-slate-800">System Update</h2>
+                    <p class="text-sm text-slate-500">Pull the latest FireCoast release, back up your data, and refresh the app.</p>
+                </div>
+                <span id="upgradeStatus" class="text-sm text-slate-400"></span>
+            </div>
+            <div class="mt-6 space-y-4">
+                <p class="text-sm text-slate-500">
+                    Make sure there are no uncommitted changes in your installation before upgrading. We'll create a backup of your
+                    data directory and keep it under <code>upgrade_backups/</code> if you need to roll back.
+                </p>
+                <button
+                    type="button"
+                    id="runUpgrade"
+                    class="inline-flex items-center gap-2 px-4 py-2 bg-slate-900 text-white text-sm font-semibold rounded-md shadow-sm hover:bg-slate-700 transition-colors"
+                    data-default-label="Upgrade to Latest"
+                >
+                    Upgrade to Latest
+                </button>
+                <p id="upgradeDetails" class="text-xs text-slate-500 hidden"></p>
+            </div>
+        </section>
     </main>
 
     <script>
@@ -264,6 +289,9 @@ hello@firenotes.com</p>
             const navList = document.getElementById('navShortcutList');
             const navSaveButton = document.getElementById('saveNavShortcuts');
             let navOptions = [];
+            const upgradeStatus = document.getElementById('upgradeStatus');
+            const upgradeButton = document.getElementById('runUpgrade');
+            const upgradeDetails = document.getElementById('upgradeDetails');
 
             const setStatus = (node, message, tone = 'info') => {
                 if (!node) return;
@@ -361,10 +389,27 @@ hello@firenotes.com</p>
                 }
             };
 
-            const waitForAppRestart = () => {
+            const waitForAppRestart = (delayMs = 1000) => {
                 setTimeout(() => {
                     window.location.reload();
-                }, 1000);
+                }, Math.max(0, delayMs));
+            };
+
+            const setUpgradeButtonBusy = (isBusy) => {
+                if (!upgradeButton) {
+                    return;
+                }
+                if (isBusy) {
+                    upgradeButton.dataset.originalLabel = upgradeButton.textContent;
+                    upgradeButton.textContent = 'Upgrading…';
+                    upgradeButton.disabled = true;
+                    upgradeButton.classList.add('opacity-70', 'cursor-not-allowed');
+                } else {
+                    const originalLabel = upgradeButton.dataset.originalLabel || upgradeButton.dataset.defaultLabel || 'Upgrade to Latest';
+                    upgradeButton.textContent = originalLabel;
+                    upgradeButton.disabled = false;
+                    upgradeButton.classList.remove('opacity-70', 'cursor-not-allowed');
+                }
             };
 
             const sanitizeColor = (value) => {
@@ -735,6 +780,63 @@ hello@firenotes.com</p>
                 importFileInput.value = '';
                 importFileInput.click();
             });
+
+            if (upgradeButton) {
+                upgradeButton.addEventListener('click', async () => {
+                    let upgradeSucceeded = false;
+                    setUpgradeButtonBusy(true);
+                    if (upgradeDetails) {
+                        upgradeDetails.classList.add('hidden');
+                        upgradeDetails.textContent = '';
+                    }
+                    setStatus(upgradeStatus, 'Starting upgrade…');
+                    try {
+                        const response = await fetch('/api/system/upgrade', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({}),
+                        });
+                        const payload = await response.json().catch(() => ({}));
+                        if (!response.ok || payload.status !== 'ok') {
+                            const message =
+                                typeof payload.message === 'string' && payload.message.trim().length
+                                    ? payload.message
+                                    : 'Upgrade failed. Please resolve any issues and try again.';
+                            throw new Error(message);
+                        }
+
+                        const details = [];
+                        if (payload.previousRevision && payload.currentRevision) {
+                            details.push(`Revision ${payload.previousRevision} → ${payload.currentRevision}`);
+                        }
+                        if (payload.backupPath) {
+                            details.push(`Backup at ${payload.backupPath}`);
+                        }
+                        if (upgradeDetails && details.length) {
+                            upgradeDetails.textContent = details.join(' • ');
+                            upgradeDetails.classList.remove('hidden');
+                        }
+
+                        upgradeSucceeded = true;
+                        const upgradeMessage = payload.restartScheduled
+                            ? 'Upgrade complete. Restarting…'
+                            : 'Upgrade complete. Reloading…';
+                        setStatus(upgradeStatus, upgradeMessage, 'success');
+                        waitForAppRestart(payload.restartScheduled ? 2000 : 1000);
+                    } catch (error) {
+                        console.error(error);
+                        const message =
+                            error instanceof Error && error.message
+                                ? error.message
+                                : 'Upgrade failed. Please check the logs and try again.';
+                        setStatus(upgradeStatus, message, 'error');
+                    } finally {
+                        if (!upgradeSucceeded) {
+                            setUpgradeButtonBusy(false);
+                        }
+                    }
+                });
+            }
 
             importFileInput.addEventListener('change', async () => {
                 const file = importFileInput.files[0];

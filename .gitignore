@@ -28,6 +28,8 @@ Thumbs.db
 # Uploads folder (if you store temporary uploads here)
 /uploads
 /data
+upgrade_backups/
+.firecoast_revision
 
 # Distribution directory
 /dist
