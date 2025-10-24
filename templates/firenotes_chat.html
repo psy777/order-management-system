@@ -16,6 +16,9 @@
 <body class="bg-slate-50 min-h-screen font-sans firenotes-chat">
     <a class="fc-screen-reader-only" href="#fc-chat-log">Skip to chat</a>
     {% include 'partials/navbar.html' %}
+    <script>
+        window.fireCoastCurrentDevice = {{ (current_device or {}) | tojson | safe }};
+    </script>
 
     <main>
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 fc-chat-wrapper">
@@ -59,6 +62,9 @@
                 <footer class="fc-chat-panel__footer">
                     <p id="fc-error" class="fc-chat-error" role="status" aria-live="assertive" hidden></p>
                     <div class="fc-composer" data-disabled="true">
+                        {% if current_device %}
+                            <div class="fc-composer__identity">Chatting as <span class="font-semibold">{{ current_device.display_name }}</span></div>
+                        {% endif %}
                         <div id="fc-reply-preview" class="fc-composer__reply" hidden></div>
                         <div id="fc-attachment-chips" class="fc-composer__attachments" aria-live="polite"></div>
                         <label class="fc-screen-reader-only" for="fc-input">Write a message</label>
@@ -117,11 +123,17 @@
             const STICKY_SCROLL_THRESHOLD = 48;
             const MESSAGE_GROUP_WINDOW_MS = 5 * 60 * 1000;
 
-            const normalizeAuthorForGrouping = (author) => {
-                if (author === null || author === undefined) {
+            const getMessageDisplayAuthor = (message) => {
+                if (!message) {
                     return '';
                 }
-                return String(author).trim().toLowerCase();
+                const metadata = message.metadata || {};
+                const candidate = metadata.display_author || metadata.device_name || message.author || '';
+                return String(candidate).trim();
+            };
+
+            const normalizeAuthorForGrouping = (message) => {
+                return getMessageDisplayAuthor(message).toLowerCase();
             };
 
             const getMessageTimestampValue = (message) => {
@@ -136,7 +148,7 @@
                 if (!current || !previous) {
                     return false;
                 }
-                if (normalizeAuthorForGrouping(current.author) !== normalizeAuthorForGrouping(previous.author)) {
+                if (normalizeAuthorForGrouping(current) !== normalizeAuthorForGrouping(previous)) {
                     return false;
                 }
                 const currentTimestamp = getMessageTimestampValue(current);
@@ -1364,7 +1376,14 @@
             };
 
             const isUserMessage = (message) => {
-                return String(message && message.author && message.author.toLowerCase()) === 'user';
+                if (!message) {
+                    return false;
+                }
+                const metadata = message.metadata || {};
+                if (metadata.actor_role) {
+                    return String(metadata.actor_role).toLowerCase() === 'user';
+                }
+                return getMessageDisplayAuthor(message).toLowerCase() === 'user';
             };
 
             const isMessageBeingEdited = (messageId) => {
@@ -1457,7 +1476,7 @@
                     return;
                 }
                 closeActivePopover();
-                const authorLabel = formatMessageAuthorLabel(message.author);
+                const authorLabel = formatMessageAuthorLabel(getMessageDisplayAuthor(message));
                 let noteTitle = '';
                 if (message.note_id && message.note_id !== state.activeNoteId) {
                     const related = state.notes.find((entry) => entry.id === message.note_id);
@@ -1846,10 +1865,7 @@
                 if (lowered === 'assistant') {
                     return '@firenotes';
                 }
-                if (normalized.startsWith('@')) {
-                    return normalized;
-                }
-                return `@${normalized}`;
+                return normalized;
             };
 
             const requestMessageFocus = (noteId, messageId) => {
@@ -1936,7 +1952,9 @@
                 if (!contentText && !reference.note_title) {
                     return null;
                 }
-                const authorLabel = formatMessageAuthorLabel(reference.author || reference.author_label || '');
+                const authorLabel = formatMessageAuthorLabel(
+                    reference.author_display || reference.display_author || reference.author || reference.author_label || ''
+                );
                 const timestampLabel = reference.created_at ? formatTimestamp(reference.created_at, true) : '';
                 const noteLabel = reference.note_title ? reference.note_title : '';
                 const button = document.createElement('button');
@@ -1997,7 +2015,9 @@
                     return null;
                 }
                 const noteId = reference.note_id || reference.noteId || '';
-                const authorLabel = formatMessageAuthorLabel(reference.author || reference.author_label || '');
+                const authorLabel = formatMessageAuthorLabel(
+                    reference.author_display || reference.display_author || reference.author || reference.author_label || ''
+                );
                 const button = document.createElement('button');
                 button.type = 'button';
                 button.className = 'fc-message__reference';
@@ -2051,8 +2071,7 @@
             };
 
             const createMessageElement = (message, previousMessage = null) => {
-                const author = (message.author || '').toLowerCase();
-                const isUser = author === 'user';
+                const isUser = isUserMessage(message);
                 const shouldGroup = shouldGroupWithPreviousMessage(message, previousMessage);
                 const wrapper = document.createElement('article');
                 const wrapperClasses = ['fc-message', isUser ? 'fc-message--user' : 'fc-message--assistant'];
@@ -2089,7 +2108,7 @@
 
                 const authorLabel = document.createElement('span');
                 authorLabel.className = 'fc-message__author';
-                authorLabel.textContent = formatMessageAuthorLabel(message.author);
+                authorLabel.textContent = formatMessageAuthorLabel(getMessageDisplayAuthor(message));
                 header.appendChild(authorLabel);
 
                 const timestamp = document.createElement('time');

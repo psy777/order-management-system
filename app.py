@@ -23,6 +23,7 @@ import json
 import csv
 import pytz
 from typing import Any, Dict, List, Optional, Set, Tuple
+import ipaddress
 
 from dotenv import load_dotenv
 from flask import (
@@ -35,6 +36,8 @@ from flask import (
     flash,
     url_for,
     send_file,
+    session,
+    g,
 )
 from database import (
     get_db_connection,
@@ -160,6 +163,80 @@ DATA_DIR = DATA_ROOT
 SETTINGS_FILE = DATA_DIR / 'settings.json'
 PASSWORDS_FILE = DATA_DIR / 'passwords.json'
 
+
+@app.before_request
+def _enforce_device_access_gate():
+    if app.config.get('TESTING'):
+        return None
+
+    if request.method == 'OPTIONS':
+        return None
+
+    endpoint = request.endpoint or ''
+    if endpoint in PUBLIC_ENDPOINTS:
+        return None
+    for prefix in PUBLIC_PATH_PREFIXES:
+        if request.path.startswith(prefix):
+            return None
+
+    ip_address = _get_request_ip_address()
+    if ip_address in LOOPBACK_ADDRESSES:
+        g.current_device = _build_host_device_context(ip_address)
+        return None
+
+    mac_address = _resolve_mac_address_for_ip(ip_address)
+    if mac_address:
+        session['pending_mac'] = mac_address
+    elif session.get('pending_mac'):
+        mac_address = session.get('pending_mac')
+
+    session['pending_ip'] = ip_address
+
+    conn = get_db_connection()
+    device_row: Optional[Dict[str, Any]] = None
+    log_status = 'new'
+    try:
+        device_row = _fetch_device_by_mac(conn, mac_address)
+        if device_row:
+            current_status = device_row.get('status') or DEVICE_STATUS_PENDING
+            log_status = current_status
+            _update_device_last_seen(conn, device_row.get('id'), ip_address)
+        _log_device_access(conn, device_row, mac_address, ip_address, request.path, log_status)
+        conn.commit()
+    except sqlite3.Error:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    if not device_row:
+        return redirect(url_for('device_register'))
+
+    device_context = _build_device_context(device_row)
+    status = device_context.get('status') or DEVICE_STATUS_PENDING
+    if status == DEVICE_STATUS_BLOCKED:
+        g.current_device = device_context
+        session['pending_mac'] = device_context.get('mac_address')
+        return (
+            render_template(
+                'device_blocked.html',
+                device=device_context,
+                mac_address=device_context.get('mac_address'),
+                ip_address=ip_address,
+            ),
+            403,
+        )
+    if status == DEVICE_STATUS_PENDING:
+        g.current_device = device_context
+        session['pending_mac'] = device_context.get('mac_address')
+        return redirect(url_for('device_pending'))
+    if status != DEVICE_STATUS_TRUSTED:
+        return redirect(url_for('device_register'))
+
+    g.current_device = device_context
+    return None
+
+
 NAV_SHORTCUT_CATALOG = [
     (
         'orders',
@@ -222,6 +299,40 @@ NAV_SHORTCUT_CATALOG = [
 NAV_SHORTCUT_REGISTRY = {key: dict(value, id=key) for key, value in NAV_SHORTCUT_CATALOG}
 DEFAULT_NAV_SHORTCUT_IDS = ['orders', 'contacts', 'analytics', 'tasks', 'reminders', 'calendar', 'passwords']
 
+DEVICE_STATUS_PENDING = 'pending'
+DEVICE_STATUS_TRUSTED = 'trusted'
+DEVICE_STATUS_BLOCKED = 'blocked'
+DEVICE_STATUS_HOST = 'host'
+
+DEVICE_STATUS_CHOICES = {
+    DEVICE_STATUS_PENDING,
+    DEVICE_STATUS_TRUSTED,
+    DEVICE_STATUS_BLOCKED,
+    DEVICE_STATUS_HOST,
+}
+
+LOOPBACK_ADDRESSES = {'127.0.0.1', '::1'}
+PUBLIC_ENDPOINTS = {
+    'static',
+    'device_register',
+    'device_pending',
+    'device_blocked',
+    'favicon',
+    'serve_assets',
+    'serve_uploads',
+}
+PUBLIC_PATH_PREFIXES = (
+    '/assets/',
+    '/favicon.ico',
+    '/device/register',
+    '/device/pending',
+    '/device/blocked',
+)
+
+MAC_ADDRESS_PATTERN = re.compile(r'^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$')
+
+_HOST_MAC_CACHE: Optional[str] = None
+
 UPLOAD_FOLDER = DATA_DIR
 UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = str(UPLOAD_FOLDER)
@@ -260,6 +371,236 @@ def write_password_entries(entries):
     write_json_file(PASSWORDS_FILE, {"entries": entries})
 
 
+def _normalize_mac_address(candidate: Optional[str]) -> Optional[str]:
+    if not candidate:
+        return None
+    normalized = candidate.strip().lower().replace('-', ':')
+    return normalized if MAC_ADDRESS_PATTERN.match(normalized) else None
+
+
+def _get_host_mac_address() -> Optional[str]:
+    global _HOST_MAC_CACHE
+    if _HOST_MAC_CACHE:
+        return _HOST_MAC_CACHE
+    try:
+        node_value = uuid.getnode()
+    except Exception:  # pragma: no cover - best effort system lookup
+        node_value = None
+    if not node_value:
+        return None
+    mac_parts = [f"{(node_value >> offset) & 0xFF:02x}" for offset in range(40, -1, -8)]
+    candidate = ':'.join(mac_parts)
+    normalized = _normalize_mac_address(candidate)
+    if normalized:
+        _HOST_MAC_CACHE = normalized
+    return normalized
+
+
+def _get_request_ip_address() -> str:
+    forwarded_for = request.headers.get('X-Forwarded-For')
+    if forwarded_for:
+        first_ip = forwarded_for.split(',')[0].strip()
+        if first_ip:
+            return first_ip
+    remote = request.remote_addr or ''
+    return remote.strip()
+
+
+def _resolve_mac_address_for_ip(ip_address: Optional[str]) -> Optional[str]:
+    if not ip_address:
+        return None
+    try:
+        parsed_ip = ipaddress.ip_address(ip_address)
+    except ValueError:
+        return None
+    if parsed_ip.is_loopback:
+        return _get_host_mac_address()
+    if parsed_ip.is_unspecified:
+        return None
+    commands = [
+        ['ip', 'neigh', 'show', ip_address],
+        ['arp', '-n', ip_address],
+    ]
+    for command in commands:
+        try:
+            completed = subprocess.run(  # noqa: S603, S607 - local network inspection
+                command,
+                capture_output=True,
+                text=True,
+                timeout=1.5,
+            )
+        except (FileNotFoundError, subprocess.SubprocessError):
+            continue
+        output = ' '.join(filter(None, [completed.stdout, completed.stderr]))
+        match = re.search(r'([0-9a-f]{2}[:-]){5}[0-9a-f]{2}', output.lower())
+        if match:
+            return _normalize_mac_address(match.group(0))
+    return None
+
+
+def _get_device_permissions_list(raw_permissions: Any) -> List[str]:
+    if not raw_permissions:
+        return []
+    if isinstance(raw_permissions, list):
+        return [str(value).strip() for value in raw_permissions if str(value).strip()]
+    if isinstance(raw_permissions, str):
+        stripped = raw_permissions.strip()
+        if not stripped:
+            return []
+        try:
+            parsed = json.loads(stripped)
+            if isinstance(parsed, list):
+                return [str(value).strip() for value in parsed if str(value).strip()]
+        except json.JSONDecodeError:
+            pass
+        return [value.strip() for value in stripped.split(',') if value.strip()]
+    return []
+
+
+def _normalize_permissions_payload(raw_permissions: Any) -> str:
+    values = _get_device_permissions_list(raw_permissions)
+    return json.dumps(values)
+
+
+def _build_device_context(row: Dict[str, Any]) -> Dict[str, Any]:
+    permissions_list = _get_device_permissions_list(row.get('permissions'))
+    owner_name = (row.get('owner_name') or '').strip()
+    device_name = (row.get('device_name') or '').strip()
+    mac_address = row.get('mac_address')
+    display_name = owner_name or device_name or (mac_address[-5:] if mac_address else 'Device')
+    chat_author = owner_name or device_name or 'user'
+    return {
+        'id': row.get('id'),
+        'mac_address': mac_address,
+        'owner_name': owner_name,
+        'device_name': device_name,
+        'status': row.get('status') or DEVICE_STATUS_PENDING,
+        'permissions': permissions_list,
+        'permissions_raw': row.get('permissions'),
+        'display_name': display_name,
+        'chat_author': chat_author,
+        'last_ip': row.get('last_ip'),
+        'last_seen': row.get('last_seen'),
+        'is_host': False,
+    }
+
+
+def _build_host_device_context(ip_address: str) -> Dict[str, Any]:
+    mac_address = _get_host_mac_address()
+    display_name = 'FireCoast Admin'
+    return {
+        'id': 'host',
+        'mac_address': mac_address,
+        'owner_name': 'Administrator',
+        'device_name': socket.gethostname(),
+        'status': DEVICE_STATUS_HOST,
+        'permissions': ['admin'],
+        'permissions_raw': json.dumps(['admin']),
+        'display_name': display_name,
+        'chat_author': 'admin',
+        'last_ip': ip_address,
+        'last_seen': datetime.utcnow().isoformat() + 'Z',
+        'is_host': True,
+    }
+
+
+def _fetch_device_by_mac(conn: sqlite3.Connection, mac_address: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not mac_address:
+        return None
+    cursor = conn.execute(
+        """
+        SELECT id, mac_address, owner_name, device_name, status, permissions, last_ip, last_seen, created_at, updated_at
+        FROM network_devices
+        WHERE mac_address = ?
+        """,
+        (mac_address,),
+    )
+    row = cursor.fetchone()
+    return dict(row) if row else None
+
+
+def _fetch_device_by_id(conn: sqlite3.Connection, device_id: str) -> Optional[Dict[str, Any]]:
+    if not device_id:
+        return None
+    cursor = conn.execute(
+        """
+        SELECT id, mac_address, owner_name, device_name, status, permissions, last_ip, last_seen, created_at, updated_at
+        FROM network_devices
+        WHERE id = ?
+        """,
+        (device_id,),
+    )
+    row = cursor.fetchone()
+    return dict(row) if row else None
+
+
+def _update_device_last_seen(conn: sqlite3.Connection, device_id: Optional[str], ip_address: Optional[str]) -> None:
+    if not device_id:
+        return
+    conn.execute(
+        "UPDATE network_devices SET last_seen = CURRENT_TIMESTAMP, last_ip = ? WHERE id = ?",
+        (ip_address, device_id),
+    )
+
+
+def _log_device_access(
+    conn: sqlite3.Connection,
+    device_row: Optional[Dict[str, Any]],
+    mac_address: Optional[str],
+    ip_address: Optional[str],
+    endpoint: str,
+    status: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO device_access_logs (device_id, mac_address, ip_address, user_agent, endpoint, status)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            device_row.get('id') if device_row else None,
+            mac_address,
+            ip_address,
+            (request.headers.get('User-Agent') or '')[:512],
+            endpoint[:255] if endpoint else '',
+            status,
+        ),
+    )
+
+
+def _serialize_device_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    payload = _build_device_context(row)
+    payload['created_at'] = row.get('created_at')
+    payload['updated_at'] = row.get('updated_at')
+    return payload
+
+
+def _serialize_access_log_row(row: sqlite3.Row) -> Dict[str, Any]:
+    return {
+        'id': row['id'],
+        'device_id': row['device_id'],
+        'mac_address': row['mac_address'],
+        'ip_address': row['ip_address'],
+        'user_agent': row['user_agent'],
+        'endpoint': row['endpoint'],
+        'status': row['status'],
+        'created_at': row['created_at'],
+    }
+
+
+def _device_has_admin_access(device: Optional[Dict[str, Any]]) -> bool:
+    if not device:
+        return False
+    if device.get('is_host'):
+        return True
+    return 'admin' in set(device.get('permissions') or [])
+
+
+def _require_admin_device() -> Optional[Any]:
+    device = getattr(g, 'current_device', None)
+    if _device_has_admin_access(device):
+        return None
+    return jsonify({'message': 'Admin access required.'}), 403
+
 def _load_settings_dict() -> Dict[str, Any]:
     settings_blob = read_json_file(SETTINGS_FILE)
     return settings_blob if isinstance(settings_blob, dict) else {}
@@ -294,6 +635,295 @@ def get_navigation_shortcuts(settings: Optional[Dict[str, Any]] = None) -> List[
 def get_available_nav_shortcuts() -> List[Dict[str, Any]]:
     return [dict(NAV_SHORTCUT_REGISTRY[key]) for key, _ in NAV_SHORTCUT_CATALOG]
 
+
+def _lookup_session_device(mac_address: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not mac_address:
+        return None
+    conn = get_db_connection()
+    try:
+        return _fetch_device_by_mac(conn, mac_address)
+    finally:
+        conn.close()
+
+
+@app.route('/device/register', methods=['GET', 'POST'])
+def device_register():
+    ip_address = session.get('pending_ip') or _get_request_ip_address()
+    mac_address = session.get('pending_mac') or _resolve_mac_address_for_ip(ip_address)
+    if mac_address:
+        session['pending_mac'] = mac_address
+    session['pending_ip'] = ip_address
+
+    existing_device = _lookup_session_device(mac_address)
+    if existing_device:
+        status = existing_device.get('status') or DEVICE_STATUS_PENDING
+        if status == DEVICE_STATUS_TRUSTED:
+            g.current_device = _build_device_context(existing_device)
+            return redirect(url_for('dashboard_page'))
+        if status == DEVICE_STATUS_BLOCKED:
+            return redirect(url_for('device_blocked'))
+        if status == DEVICE_STATUS_PENDING and request.method == 'GET':
+            return redirect(url_for('device_pending'))
+
+    error_message: Optional[str] = None
+    if request.method == 'POST':
+        owner_name = (request.form.get('owner_name') or request.form.get('ownerName') or '').strip()
+        device_name = (request.form.get('device_name') or request.form.get('deviceName') or '').strip()
+        if not owner_name or not device_name:
+            error_message = 'Please provide both your name and a device label so the admin can recognize you.'
+        elif not mac_address:
+            error_message = 'Unable to determine your device address. Contact the administrator.'
+        else:
+            conn = get_db_connection()
+            try:
+                current_row = _fetch_device_by_mac(conn, mac_address)
+                if current_row and (current_row.get('status') or DEVICE_STATUS_PENDING) == DEVICE_STATUS_BLOCKED:
+                    conn.close()
+                    session['pending_mac'] = mac_address
+                    return redirect(url_for('device_blocked'))
+                if current_row:
+                    conn.execute(
+                        """
+                        UPDATE network_devices
+                        SET owner_name = ?, device_name = ?, status = ?, last_ip = ?, last_seen = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                        """,
+                        (
+                            owner_name or None,
+                            device_name or None,
+                            DEVICE_STATUS_PENDING,
+                            ip_address,
+                            current_row.get('id'),
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO network_devices (
+                            id,
+                            mac_address,
+                            owner_name,
+                            device_name,
+                            status,
+                            permissions,
+                            last_ip,
+                            last_seen
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                        """,
+                        (
+                            str(uuid.uuid4()),
+                            mac_address,
+                            owner_name or None,
+                            device_name or None,
+                            DEVICE_STATUS_PENDING,
+                            json.dumps([]),
+                            ip_address,
+                        ),
+                    )
+                conn.commit()
+                session['pending_mac'] = mac_address
+                session['pending_ip'] = ip_address
+                flash('Access request submitted for review.', 'info')
+                return redirect(url_for('device_pending'))
+            except sqlite3.Error:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+
+    return render_template(
+        'device_register.html',
+        mac_address=mac_address,
+        ip_address=ip_address,
+        error=error_message,
+    )
+
+
+@app.route('/device/pending')
+def device_pending():
+    mac_address = session.get('pending_mac')
+    ip_address = session.get('pending_ip') or _get_request_ip_address()
+    device_row = _lookup_session_device(mac_address)
+    if device_row:
+        status = device_row.get('status') or DEVICE_STATUS_PENDING
+        if status == DEVICE_STATUS_TRUSTED:
+            g.current_device = _build_device_context(device_row)
+            return redirect(url_for('dashboard_page'))
+        if status == DEVICE_STATUS_BLOCKED:
+            return redirect(url_for('device_blocked'))
+    return render_template(
+        'device_pending.html',
+        mac_address=mac_address,
+        ip_address=ip_address,
+        device=_build_device_context(device_row) if device_row else None,
+    )
+
+
+@app.route('/device/blocked')
+def device_blocked():
+    mac_address = session.get('pending_mac')
+    ip_address = session.get('pending_ip') or _get_request_ip_address()
+    device_row = _lookup_session_device(mac_address)
+    context = _build_device_context(device_row) if device_row else None
+    status_code = 403 if context else 400
+    return (
+        render_template(
+            'device_blocked.html',
+            mac_address=mac_address,
+            ip_address=ip_address,
+            device=context,
+        ),
+        status_code,
+    )
+
+
+@app.route('/settings/devices')
+def manage_network_devices_page():
+    if not _device_has_admin_access(getattr(g, 'current_device', None)):
+        flash('Administrator access is required to manage devices.', 'warning')
+        return redirect(url_for('dashboard_page'))
+    return render_with_navigation('device_access.html', active_nav='settings')
+
+
+@app.route('/api/network/devices', methods=['GET'])
+def api_list_network_devices():
+    guard = _require_admin_device()
+    if guard:
+        return guard
+    conn = get_db_connection()
+    try:
+        cursor = conn.execute(
+            """
+            SELECT id, mac_address, owner_name, device_name, status, permissions, last_ip, last_seen, created_at, updated_at
+            FROM network_devices
+            ORDER BY datetime(created_at) DESC
+            """
+        )
+        rows = [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+    return jsonify({'devices': [_serialize_device_row(row) for row in rows]})
+
+
+@app.route('/api/network/device-logs', methods=['GET'])
+def api_list_device_logs():
+    guard = _require_admin_device()
+    if guard:
+        return guard
+    device_id = (request.args.get('device_id') or request.args.get('deviceId') or '').strip()
+    mac_address = (request.args.get('mac') or '').strip().lower()
+    limit_param = request.args.get('limit') or request.args.get('pageSize')
+    try:
+        limit_value = int(limit_param) if limit_param else 50
+    except ValueError:
+        limit_value = 50
+    limit_value = max(1, min(200, limit_value))
+    params: List[Any] = []
+    conditions: List[str] = []
+    if device_id:
+        conditions.append('device_id = ?')
+        params.append(device_id)
+    if mac_address:
+        conditions.append('LOWER(mac_address) = ?')
+        params.append(mac_address)
+    where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ''
+    query = f"""
+        SELECT id, device_id, mac_address, ip_address, user_agent, endpoint, status, created_at
+        FROM device_access_logs
+        {where_clause}
+        ORDER BY datetime(created_at) DESC, id DESC
+        LIMIT ?
+    """
+    params.append(limit_value)
+    conn = get_db_connection()
+    try:
+        cursor = conn.execute(query, params)
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+    return jsonify({'logs': [_serialize_access_log_row(row) for row in rows]})
+
+
+def _update_device_record(device_id: str, payload: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[Tuple[Any, int]]]:
+    normalized_id = (device_id or '').strip()
+    if not normalized_id:
+        return None, (jsonify({'message': 'device_id is required.'}), 400)
+    updates: List[str] = []
+    params: List[Any] = []
+    if 'owner_name' in payload:
+        updates.append('owner_name = ?')
+        params.append((payload.get('owner_name') or '').strip() or None)
+    if 'device_name' in payload:
+        updates.append('device_name = ?')
+        params.append((payload.get('device_name') or '').strip() or None)
+    if 'permissions' in payload:
+        permissions_value = _normalize_permissions_payload(payload.get('permissions'))
+        updates.append('permissions = ?')
+        params.append(permissions_value)
+    if 'status' in payload:
+        requested_status = (payload.get('status') or '').strip().lower()
+        if requested_status and requested_status not in DEVICE_STATUS_CHOICES:
+            return jsonify({'message': 'Invalid status value.'}), 400
+        if requested_status and requested_status != DEVICE_STATUS_HOST:
+            updates.append('status = ?')
+            params.append(requested_status)
+    if not updates:
+        return None, (jsonify({'message': 'No updates provided.'}), 400)
+    updates.append('updated_at = CURRENT_TIMESTAMP')
+    query = f"UPDATE network_devices SET {', '.join(updates)} WHERE id = ?"
+    params.append(normalized_id)
+    conn = get_db_connection()
+    try:
+        existing = _fetch_device_by_id(conn, normalized_id)
+        if not existing:
+            return None, (jsonify({'message': 'Device not found.'}), 404)
+        conn.execute(query, params)
+        conn.commit()
+        updated = _fetch_device_by_id(conn, normalized_id)
+    except sqlite3.Error:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return updated, None
+
+
+@app.route('/api/network/devices/<device_id>', methods=['PATCH'])
+def api_update_network_device(device_id: str):
+    guard = _require_admin_device()
+    if guard:
+        return guard
+    payload = request.get_json(force=True, silent=True) or {}
+    updated, error = _update_device_record(device_id, payload)
+    if error:
+        return error
+    return jsonify({'device': _serialize_device_row(updated) if updated else None})
+
+
+@app.route('/api/network/devices/<device_id>/approve', methods=['POST'])
+def api_approve_network_device(device_id: str):
+    guard = _require_admin_device()
+    if guard:
+        return guard
+    payload = request.get_json(force=True, silent=True) or {}
+    payload['status'] = DEVICE_STATUS_TRUSTED
+    updated, error = _update_device_record(device_id, payload)
+    if error:
+        return error
+    return jsonify({'device': _serialize_device_row(updated) if updated else None})
+
+
+@app.route('/api/network/devices/<device_id>/block', methods=['POST'])
+def api_block_network_device(device_id: str):
+    guard = _require_admin_device()
+    if guard:
+        return guard
+    payload = request.get_json(force=True, silent=True) or {}
+    payload['status'] = DEVICE_STATUS_BLOCKED
+    updated, error = _update_device_record(device_id, payload)
+    if error:
+        return error
+    return jsonify({'device': _serialize_device_row(updated) if updated else None})
 
 def _fetch_attachments_for_logs(cursor, log_ids: List[int]) -> Dict[int, List[Dict[str, Any]]]:
     if not log_ids:
@@ -567,6 +1197,12 @@ def _build_message_reference(
         'preview': _summarize_chat_preview(data.get('content')),
         'content': data.get('content') or '',
     }
+    metadata = _parse_json_column(data.get('metadata_json')) or {}
+    if metadata.get('display_author'):
+        reference['display_author'] = metadata.get('display_author')
+        reference['author_display'] = metadata.get('display_author')
+    if metadata.get('actor_role'):
+        reference['actor_role'] = metadata.get('actor_role')
     if not reference['preview']:
         attachments = _parse_json_column(data.get('attachments_json'))
         if isinstance(attachments, list) and attachments:
@@ -5799,6 +6435,7 @@ def render_with_navigation(template_name: str, active_nav: Optional[str] = None,
     settings = _load_settings_dict()
     context.setdefault('nav_links', get_navigation_shortcuts(settings=settings))
     context.setdefault('active_nav', active_nav)
+    context.setdefault('current_device', getattr(g, 'current_device', None))
     return render_template(template_name, **context)
 
 @app.route('/api/settings', methods=['POST'])
@@ -6088,14 +6725,20 @@ def api_firenotes_chat():
             return jsonify({'messages': messages, 'note': note})
 
         attachments: List[Dict[str, Any]] = []
-        author = 'user'
+        device_context = getattr(g, 'current_device', None)
+        default_author = (
+            (device_context.get('display_name') if device_context else '') or 'user'
+        )
+        author = default_author
         note_id = ''
         content = ''
         reply_to_payload: Optional[Dict[str, Any]] = None
         if request.content_type and 'multipart/form-data' in request.content_type:
             note_id = (request.form.get('note_id') or request.form.get('noteId') or '').strip()
             content = (request.form.get('content') or '').strip()
-            author = (request.form.get('author') or 'user').strip().lower() or 'user'
+            raw_author = (request.form.get('author') or '').strip()
+            if raw_author:
+                author = raw_author
             attachments = _save_note_attachments(request.files.getlist('attachments'))
             raw_reply_to = (request.form.get('reply_to') or request.form.get('replyTo') or '').strip()
             if raw_reply_to:
@@ -6107,7 +6750,9 @@ def api_firenotes_chat():
             payload = request.get_json(force=True, silent=True) or {}
             note_id = (payload.get('note_id') or payload.get('noteId') or '').strip()
             content = (payload.get('content') or '').strip()
-            author = (payload.get('author') or 'user').strip().lower() or 'user'
+            raw_author = (payload.get('author') or '').strip()
+            if raw_author:
+                author = raw_author
             candidate_reply = payload.get('reply_to') or payload.get('replyTo')
             if isinstance(candidate_reply, dict):
                 reply_to_payload = candidate_reply
@@ -6127,7 +6772,19 @@ def api_firenotes_chat():
                 or ''
             )
             reply_reference = _build_message_reference(conn, str(reply_id))
-        metadata = {'reply_to': reply_reference} if reply_reference else None
+        metadata_payload: Dict[str, Any] = {}
+        if reply_reference:
+            metadata_payload['reply_to'] = reply_reference
+        if device_context:
+            display_author = (device_context.get('display_name') or author or 'user').strip() or 'user'
+            metadata_payload.setdefault('display_author', display_author)
+            metadata_payload.setdefault('device_id', device_context.get('id'))
+            metadata_payload.setdefault('device_mac', device_context.get('mac_address'))
+            metadata_payload.setdefault('device_name', device_context.get('device_name'))
+            metadata_payload.setdefault('owner_name', device_context.get('owner_name'))
+            metadata_payload.setdefault('actor_role', 'user')
+            author = display_author
+        metadata = metadata_payload or None
         stored = _store_chat_message(
             conn,
             note_id,
@@ -6138,7 +6795,10 @@ def api_firenotes_chat():
         )
         responses: List[Dict[str, Any]] = []
         clear_result: Optional[Dict[str, Any]] = None
-        if author == 'user':
+        actor_role = (metadata_payload or {}).get('actor_role') if metadata_payload else None
+        normalized_author = (author or '').strip().lower()
+        is_user_actor = (actor_role == 'user') or (normalized_author == 'user')
+        if is_user_actor:
             try:
                 lowered = content.lower()
                 if lowered.startswith('.clear'):
@@ -6418,6 +7078,16 @@ def shutdown(): Timer(0.1,lambda:os._exit(0)).start(); return "Shutdown initiate
 def open_browser():
     webbrowser.open_new("http://127.0.0.1:5002/")
 
+
+def _get_local_network_address() -> str:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(('8.8.8.8', 80))
+            return probe.getsockname()[0]
+    except OSError:
+        return '127.0.0.1'
+
+
 def is_port_in_use(port):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         return s.connect_ex(('127.0.0.1', port)) == 0
@@ -6431,6 +7101,8 @@ def main():
     else:
         print(f"Port {PORT} is free. Starting new server.")
         Timer(1, open_browser).start()
+        network_ip = _get_local_network_address()
+        print(f"FireCoast available on the local network at http://{network_ip}:{PORT}")
         app.run(host='0.0.0.0', port=PORT, debug=False)
 
 if __name__ == '__main__':

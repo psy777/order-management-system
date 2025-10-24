@@ -641,6 +641,54 @@ def init_db():
 
     cursor.execute(
         """
+        CREATE TABLE IF NOT EXISTS network_devices (
+            id TEXT PRIMARY KEY NOT NULL,
+            mac_address TEXT NOT NULL UNIQUE,
+            owner_name TEXT,
+            device_name TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            permissions TEXT,
+            last_ip TEXT,
+            last_seen TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS update_network_devices_updated_at
+        AFTER UPDATE ON network_devices
+        FOR EACH ROW
+        BEGIN
+            UPDATE network_devices SET updated_at = CURRENT_TIMESTAMP WHERE id = OLD.id;
+        END;
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS device_access_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            device_id TEXT,
+            mac_address TEXT,
+            ip_address TEXT,
+            user_agent TEXT,
+            endpoint TEXT,
+            status TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(device_id) REFERENCES network_devices(id)
+        );
+        """
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_device_access_logs_device ON device_access_logs(device_id)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_device_access_logs_created_at ON device_access_logs(created_at)"
+    )
+
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS firecoast_notes (
             id TEXT PRIMARY KEY NOT NULL,
             title TEXT NOT NULL,
