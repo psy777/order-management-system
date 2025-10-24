@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Device Access Control | FireCoast</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="/assets/css/styles.css">
+</head>
+<body class="bg-slate-50 min-h-screen font-sans">
+    {% include 'partials/navbar.html' %}
+    <main class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-10">
+        <header class="space-y-3">
+            <p class="text-sm uppercase tracking-[0.3em] text-slate-500">Administration</p>
+            <h1 class="text-3xl font-bold text-slate-800">Device Access Control</h1>
+            <p class="max-w-2xl text-slate-600">Approve new devices, manage trusted hardware, and review every attempt to reach FireCoast from your local network.</p>
+        </header>
+
+        <section class="bg-white border border-slate-200 rounded-xl shadow-sm">
+            <div class="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+                <div>
+                    <h2 class="text-lg font-semibold text-slate-800">Trusted Devices</h2>
+                    <p class="text-sm text-slate-500">Approve or block hardware and assign permissions for FireCoast features.</p>
+                </div>
+                <button id="refreshDevices" class="inline-flex items-center rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-300">Refresh</button>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200" aria-label="Registered devices">
+                    <thead class="bg-slate-100 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        <tr>
+                            <th scope="col" class="px-4 py-3">Device</th>
+                            <th scope="col" class="px-4 py-3">Owner</th>
+                            <th scope="col" class="px-4 py-3">Status</th>
+                            <th scope="col" class="px-4 py-3">Permissions</th>
+                            <th scope="col" class="px-4 py-3">Last Seen</th>
+                            <th scope="col" class="px-4 py-3 text-right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="deviceTableBody" class="divide-y divide-slate-100 bg-white text-sm"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="bg-white border border-slate-200 rounded-xl shadow-sm">
+            <div class="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+                <div>
+                    <h2 class="text-lg font-semibold text-slate-800">Recent Access Attempts</h2>
+                    <p class="text-sm text-slate-500">Monitor connections from your network, including devices still waiting for approval.</p>
+                </div>
+                <button id="refreshLogs" class="inline-flex items-center rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-300">Refresh</button>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200" aria-label="Device access log">
+                    <thead class="bg-slate-100 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        <tr>
+                            <th scope="col" class="px-4 py-3">When</th>
+                            <th scope="col" class="px-4 py-3">Device</th>
+                            <th scope="col" class="px-4 py-3">MAC</th>
+                            <th scope="col" class="px-4 py-3">IP</th>
+                            <th scope="col" class="px-4 py-3">Status</th>
+                            <th scope="col" class="px-4 py-3">Endpoint</th>
+                        </tr>
+                    </thead>
+                    <tbody id="deviceLogBody" class="divide-y divide-slate-100 bg-white text-sm"></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        const deviceState = {
+            devices: [],
+            logs: [],
+            loadingDevices: false,
+            loadingLogs: false,
+        };
+
+        const statusLabels = {
+            pending: { label: 'Pending', classes: 'bg-amber-100 text-amber-800' },
+            trusted: { label: 'Trusted', classes: 'bg-emerald-100 text-emerald-700' },
+            blocked: { label: 'Blocked', classes: 'bg-rose-100 text-rose-700' },
+            host: { label: 'Host', classes: 'bg-slate-200 text-slate-700' },
+        };
+
+        const formatDateTime = (value) => {
+            if (!value) {
+                return '—';
+            }
+            const stamp = new Date(value);
+            if (Number.isNaN(stamp.getTime())) {
+                return value;
+            }
+            return stamp.toLocaleString();
+        };
+
+        const buildStatusBadge = (status) => {
+            const normalized = String(status || '').toLowerCase();
+            const config = statusLabels[normalized] || { label: normalized || 'Unknown', classes: 'bg-slate-200 text-slate-700' };
+            const span = document.createElement('span');
+            span.className = `inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${config.classes}`;
+            span.textContent = config.label;
+            return span;
+        };
+
+        const renderDeviceRow = (device) => {
+            const row = document.createElement('tr');
+            row.dataset.deviceId = device.id;
+            row.className = 'hover:bg-slate-50';
+
+            const nameCell = document.createElement('td');
+            nameCell.className = 'whitespace-nowrap px-4 py-4 align-top';
+            nameCell.innerHTML = `
+                <div class="font-semibold text-slate-800">${device.display_name || 'Unnamed Device'}</div>
+                <div class="text-xs text-slate-500">MAC: ${device.mac_address || '—'}</div>
+            `;
+
+            const ownerCell = document.createElement('td');
+            ownerCell.className = 'px-4 py-4 align-top';
+            ownerCell.innerHTML = `
+                <input type="text" name="owner_name" value="${device.owner_name || ''}" class="w-full rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-200" placeholder="Owner name">
+                <input type="text" name="device_name" value="${device.device_name || ''}" class="mt-2 w-full rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-200" placeholder="Device label">
+            `;
+
+            const statusCell = document.createElement('td');
+            statusCell.className = 'px-4 py-4 align-top';
+            statusCell.appendChild(buildStatusBadge(device.status));
+
+            const permissionsCell = document.createElement('td');
+            permissionsCell.className = 'px-4 py-4 align-top';
+            const permissionsInput = document.createElement('input');
+            permissionsInput.type = 'text';
+            permissionsInput.name = 'permissions';
+            permissionsInput.placeholder = 'comma separated';
+            permissionsInput.value = (device.permissions || []).join(', ');
+            permissionsInput.className = 'w-full rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-200';
+            permissionsCell.appendChild(permissionsInput);
+
+            const lastSeenCell = document.createElement('td');
+            lastSeenCell.className = 'px-4 py-4 align-top text-slate-600';
+            const lastSeen = formatDateTime(device.last_seen);
+            lastSeenCell.innerHTML = `
+                <div>${lastSeen}</div>
+                <div class="text-xs text-slate-500">${device.last_ip || ''}</div>
+            `;
+
+            const actionsCell = document.createElement('td');
+            actionsCell.className = 'px-4 py-4 align-top text-right text-sm';
+            actionsCell.innerHTML = `
+                <div class="flex flex-wrap justify-end gap-2">
+                    <button type="button" data-action="approve" class="inline-flex items-center rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow hover:bg-emerald-700">Approve</button>
+                    <button type="button" data-action="pending" class="inline-flex items-center rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100">Set Pending</button>
+                    <button type="button" data-action="block" class="inline-flex items-center rounded-md bg-rose-500 px-3 py-1.5 text-xs font-semibold text-white shadow hover:bg-rose-600">Block</button>
+                    <button type="button" data-action="save" class="inline-flex items-center rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100">Save</button>
+                </div>
+            `;
+
+            row.appendChild(nameCell);
+            row.appendChild(ownerCell);
+            row.appendChild(statusCell);
+            row.appendChild(permissionsCell);
+            row.appendChild(lastSeenCell);
+            row.appendChild(actionsCell);
+            return row;
+        };
+
+        const renderDevices = () => {
+            const tbody = document.getElementById('deviceTableBody');
+            if (!tbody) {
+                return;
+            }
+            tbody.innerHTML = '';
+            if (!deviceState.devices.length) {
+                const emptyRow = document.createElement('tr');
+                emptyRow.innerHTML = '<td colspan="6" class="px-4 py-6 text-center text-sm text-slate-500">No devices registered yet.</td>';
+                tbody.appendChild(emptyRow);
+                return;
+            }
+            deviceState.devices.forEach((device) => {
+                tbody.appendChild(renderDeviceRow(device));
+            });
+        };
+
+        const renderLogs = () => {
+            const tbody = document.getElementById('deviceLogBody');
+            if (!tbody) {
+                return;
+            }
+            tbody.innerHTML = '';
+            if (!deviceState.logs.length) {
+                const emptyRow = document.createElement('tr');
+                emptyRow.innerHTML = '<td colspan="6" class="px-4 py-6 text-center text-sm text-slate-500">No recent access attempts.</td>';
+                tbody.appendChild(emptyRow);
+                return;
+            }
+            deviceState.logs.forEach((log) => {
+                const row = document.createElement('tr');
+                row.className = 'hover:bg-slate-50';
+                row.innerHTML = `
+                    <td class="whitespace-nowrap px-4 py-3 text-slate-700">${formatDateTime(log.created_at)}</td>
+                    <td class="px-4 py-3 text-slate-600">${log.device_id || '—'}</td>
+                    <td class="px-4 py-3 text-slate-600">${log.mac_address || '—'}</td>
+                    <td class="px-4 py-3 text-slate-600">${log.ip_address || '—'}</td>
+                    <td class="px-4 py-3 text-slate-600">${(log.status || '').toUpperCase()}</td>
+                    <td class="px-4 py-3 text-slate-500">${log.endpoint || '/'}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        };
+
+        const fetchDevices = async () => {
+            if (deviceState.loadingDevices) {
+                return;
+            }
+            deviceState.loadingDevices = true;
+            try {
+                const response = await fetch('/api/network/devices');
+                if (!response.ok) {
+                    throw new Error('Failed to load devices');
+                }
+                const payload = await response.json();
+                deviceState.devices = Array.isArray(payload.devices) ? payload.devices : [];
+                renderDevices();
+            } catch (error) {
+                console.error('Device fetch failed:', error);
+                alert('Unable to load devices.');
+            } finally {
+                deviceState.loadingDevices = false;
+            }
+        };
+
+        const fetchLogs = async () => {
+            if (deviceState.loadingLogs) {
+                return;
+            }
+            deviceState.loadingLogs = true;
+            try {
+                const response = await fetch('/api/network/device-logs?limit=50');
+                if (!response.ok) {
+                    throw new Error('Failed to load logs');
+                }
+                const payload = await response.json();
+                deviceState.logs = Array.isArray(payload.logs) ? payload.logs : [];
+                renderLogs();
+            } catch (error) {
+                console.error('Log fetch failed:', error);
+            } finally {
+                deviceState.loadingLogs = false;
+            }
+        };
+
+        const updateDevice = async (deviceId, payload) => {
+            if (!deviceId) {
+                return;
+            }
+            try {
+                const response = await fetch(`/api/network/devices/${encodeURIComponent(deviceId)}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                if (!response.ok) {
+                    const message = await response.json().catch(() => ({}));
+                    const errorText = message && message.message ? message.message : 'Failed to update device';
+                    throw new Error(errorText);
+                }
+                await fetchDevices();
+            } catch (error) {
+                console.error('Device update failed:', error);
+                alert(error.message || 'Unable to update device.');
+            }
+        };
+
+        document.addEventListener('DOMContentLoaded', () => {
+            fetchDevices();
+            fetchLogs();
+            document.getElementById('refreshDevices')?.addEventListener('click', () => {
+                fetchDevices();
+            });
+            document.getElementById('refreshLogs')?.addEventListener('click', () => {
+                fetchLogs();
+            });
+            setInterval(() => {
+                fetchLogs();
+            }, 15000);
+
+            const deviceTable = document.getElementById('deviceTableBody');
+            if (deviceTable) {
+                deviceTable.addEventListener('click', (event) => {
+                    const action = event.target.dataset.action;
+                    if (!action) {
+                        return;
+                    }
+                    const row = event.target.closest('tr');
+                    const deviceId = row ? row.dataset.deviceId : null;
+                    if (!deviceId) {
+                        return;
+                    }
+                    if (action === 'approve') {
+                        updateDevice(deviceId, { status: 'trusted' });
+                        return;
+                    }
+                    if (action === 'block') {
+                        updateDevice(deviceId, { status: 'blocked' });
+                        return;
+                    }
+                    if (action === 'pending') {
+                        updateDevice(deviceId, { status: 'pending' });
+                        return;
+                    }
+                    if (action === 'save') {
+                        const ownerInput = row.querySelector('input[name="owner_name"]');
+                        const deviceInput = row.querySelector('input[name="device_name"]');
+                        const permissionsInput = row.querySelector('input[name="permissions"]');
+                        const payload = {
+                            owner_name: ownerInput ? ownerInput.value : '',
+                            device_name: deviceInput ? deviceInput.value : '',
+                            permissions: permissionsInput ? permissionsInput.value : '',
+                        };
+                        updateDevice(deviceId, payload);
+                    }
+                });
+            }
+        });
+    </script>
+</body>
+</html>

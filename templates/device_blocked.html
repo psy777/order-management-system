@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Access Blocked | FireCoast</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="/assets/css/styles.css">
+</head>
+<body class="bg-slate-950 min-h-screen text-white">
+    <main class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-20">
+        <div class="rounded-2xl border border-slate-800 bg-slate-900/70 p-10 shadow-xl">
+            <div class="flex items-center gap-4">
+                <div class="flex h-12 w-12 items-center justify-center rounded-full bg-rose-500/10 text-rose-300">
+                    ✕
+                </div>
+                <div>
+                    <h1 class="text-3xl font-semibold">This device is blocked</h1>
+                    <p class="mt-2 text-slate-300">The FireCoast administrator has disabled access for this device. Reach out to your system administrator if you believe this is unexpected.</p>
+                </div>
+            </div>
+            <dl class="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-6 text-sm text-slate-300">
+                <div>
+                    <dt class="uppercase text-xs tracking-wide text-slate-500">MAC Address</dt>
+                    <dd class="mt-1 font-medium text-slate-100">{{ mac_address or device.mac_address or 'Unavailable' }}</dd>
+                </div>
+                <div>
+                    <dt class="uppercase text-xs tracking-wide text-slate-500">IP Address</dt>
+                    <dd class="mt-1 font-medium text-slate-100">{{ ip_address or device.last_ip or 'Unknown' }}</dd>
+                </div>
+                {% if device and (device.owner_name or device.device_name) %}
+                    <div>
+                        <dt class="uppercase text-xs tracking-wide text-slate-500">Registered Owner</dt>
+                        <dd class="mt-1 font-medium text-slate-100">{{ device.owner_name or '—' }}</dd>
+                    </div>
+                    <div>
+                        <dt class="uppercase text-xs tracking-wide text-slate-500">Device Label</dt>
+                        <dd class="mt-1 font-medium text-slate-100">{{ device.device_name or '—' }}</dd>
+                    </div>
+                {% endif %}
+            </dl>
+            <p class="mt-10 text-sm text-slate-400">If you need assistance, share the device details above with your FireCoast administrator so they can review or reinstate access.</p>
+            <div class="mt-8 flex flex-wrap gap-3">
+                <a href="mailto:?subject=FireCoast%20Access%20Request&body=Please%20re-enable%20access%20for%20MAC%20{{ mac_address or device.mac_address or 'unknown' }}" class="inline-flex items-center rounded-md bg-slate-100 px-4 py-2 text-sm font-medium text-slate-900 hover:bg-white/90 focus:outline-none focus:ring-2 focus:ring-white/40">Email Administrator</a>
+                <a href="/device/register" class="inline-flex items-center rounded-md border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800/60 focus:outline-none focus:ring-2 focus:ring-slate-600">Submit a new request</a>
+            </div>
+        </div>
+    </main>
+</body>
+</html>

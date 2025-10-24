@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from dateutil.parser import isoparse
 
 import pytest
+from flask import g
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -19,6 +20,13 @@ from services.records import get_record_service
 
 @pytest.fixture(autouse=True)
 def configure_chat_environment(tmp_path, monkeypatch):
+    """Route the app to a temp data directory for the duration of each test.
+
+    The production server continues to use the canonical ``data/`` directory,
+    so user-visible saves remain shared.  We only patch these globals inside the
+    test process so that schema setup and chat activity do not touch or depend
+    on the operator's real SQLite file when the test suite runs.
+    """
     data_dir = tmp_path / 'data'
     data_dir.mkdir()
 
@@ -37,11 +45,14 @@ def configure_chat_environment(tmp_path, monkeypatch):
     firenotes_app.app.config['TESTING'] = True
 
     import data_paths
+    import database
 
     monkeypatch.setattr(data_paths, 'DATA_ROOT', data_dir)
     monkeypatch.setattr(data_paths, 'LEGACY_DATA_ROOT', data_dir)
     monkeypatch.setattr(firenotes_app, 'ensure_data_root', lambda: data_dir)
     monkeypatch.setattr(data_paths, 'ensure_data_root', lambda: data_dir)
+    monkeypatch.setattr(database, 'DATA_DIR', data_dir)
+    monkeypatch.setattr(database, 'DATABASE_FILE', data_dir / 'orders_manager.db')
 
     firenotes_app.init_db()
 
@@ -116,6 +127,122 @@ def test_note_creation_self_heals_record_handles(configure_chat_environment, mon
     finally:
         conn.close()
 
+
+def test_chat_message_includes_ping_metadata(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Ping note')
+
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO network_devices (id, mac_address, owner_name, device_name, status, permissions)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ('device-1', 'aa:bb:cc:dd:ee:ff', 'Jamie', 'Jamie Laptop', firenotes_app.DEVICE_STATUS_TRUSTED, '[]'),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    with firenotes_app.app.test_request_context(
+        '/api/firenotes/chat',
+        method='POST',
+        json={'note_id': note['id'], 'content': 'Hello there', 'ping_device_ids': ['device-1']},
+    ):
+        g.current_device = {
+            'id': 'host',
+            'status': firenotes_app.DEVICE_STATUS_HOST,
+            'is_host': True,
+            'display_name': 'Admin',
+        }
+        response = firenotes_app.api_firenotes_chat()
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert 'messages' in payload and payload['messages']
+    message = payload['messages'][0]
+    metadata = message.get('metadata') or {}
+    pings = metadata.get('pings') or []
+    assert pings and pings[0]['device_id'] == 'device-1'
+
+
+def test_typing_endpoint_tracks_active_typers(configure_chat_environment):
+    firenotes_app._typing_states.clear()
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Typing note')
+
+    with firenotes_app.app.test_request_context(
+        '/api/firenotes/chat/typing',
+        method='POST',
+        json={'note_id': note['id'], 'is_typing': True},
+    ):
+        g.current_device = {
+            'id': 'device-typing',
+            'status': firenotes_app.DEVICE_STATUS_TRUSTED,
+            'display_name': 'Typist',
+        }
+        response = firenotes_app.api_firenotes_chat_typing()
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload['typers']
+    assert payload['typers'][0]['device_id'] == 'device-typing'
+
+    with firenotes_app.app.test_request_context(
+        '/api/firenotes/chat/typing',
+        method='POST',
+        json={'note_id': note['id'], 'is_typing': False},
+    ):
+        g.current_device = {
+            'id': 'device-typing',
+            'status': firenotes_app.DEVICE_STATUS_TRUSTED,
+            'display_name': 'Typist',
+        }
+        response = firenotes_app.api_firenotes_chat_typing()
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload['typers'] == []
+
+
+def test_participants_endpoint_returns_trusted_devices(configure_chat_environment):
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO network_devices (id, mac_address, owner_name, device_name, status, permissions)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ('trusted-1', '00:11:22:33:44:55', 'Taylor', 'Taylor Tablet', firenotes_app.DEVICE_STATUS_TRUSTED, '[]'),
+        )
+        conn.execute(
+            """
+            INSERT INTO network_devices (id, mac_address, owner_name, device_name, status, permissions)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ('blocked-1', '00:aa:bb:cc:dd:ee', 'Sam', 'Sam Phone', firenotes_app.DEVICE_STATUS_BLOCKED, '[]'),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    with firenotes_app.app.test_request_context('/api/firenotes/participants'):
+        g.current_device = {
+            'id': 'host',
+            'status': firenotes_app.DEVICE_STATUS_HOST,
+            'is_host': True,
+            'display_name': 'Admin',
+        }
+        response = firenotes_app.api_firenotes_participants()
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    participants = payload.get('participants') or []
+    ids = {entry['id'] for entry in participants}
+    assert 'trusted-1' in ids
+    assert 'blocked-1' not in ids
+    assert 'host' in ids
 
 def test_chat_creates_reminder_entry(configure_chat_environment):
     client = firenotes_app.app.test_client()
@@ -371,6 +498,65 @@ def test_task_completion_toggled_with_checkmark_reaction(configure_chat_environm
     finally:
         conn.close()
 
+
+def test_note_crud_broadcasts_collaboration_events(configure_chat_environment, monkeypatch):
+    captured = []
+
+    def capture(event_type, payload=None):
+        captured.append({'type': event_type, 'payload': payload})
+
+    monkeypatch.setattr(firenotes_app, '_broadcast_event', capture)
+
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Realtime note')
+
+    note_events = [event for event in captured if event['type'] == 'firenotes:note-upserted']
+    assert note_events, 'Note creation should broadcast an upsert event'
+    assert any(event['payload']['note']['id'] == note['id'] for event in note_events)
+
+    captured.clear()
+    response = client.patch('/api/firenotes/notes', json={'id': note['id'], 'title': 'Renamed note'})
+    assert response.status_code == 200
+    note_events = [event for event in captured if event['type'] == 'firenotes:note-upserted']
+    assert note_events, 'Note update should broadcast an upsert event'
+    assert any(event['payload']['note']['title'] == 'Renamed note' for event in note_events)
+
+    captured.clear()
+    response = client.delete('/api/firenotes/notes', json={'id': note['id']})
+    assert response.status_code == 200
+    delete_events = [event for event in captured if event['type'] == 'firenotes:note-deleted']
+    assert delete_events, 'Note delete should broadcast a delete event'
+    assert any(event['payload']['note_id'] == note['id'] for event in delete_events)
+
+
+def test_chat_broadcasts_collaboration_events(configure_chat_environment, monkeypatch):
+    captured = []
+
+    def capture(event_type, payload=None):
+        captured.append({'type': event_type, 'payload': payload})
+
+    monkeypatch.setattr(firenotes_app, '_broadcast_event', capture)
+
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Collaboration note')
+    captured.clear()
+
+    response = client.post('/api/firenotes/chat', json={'note_id': note['id'], 'content': 'Hello world'})
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload['messages']
+    primary_message = payload['messages'][0]
+
+    message_events = [event for event in captured if event['type'] == 'firenotes:message-upserted']
+    assert message_events, 'Sending a chat message should broadcast a message-upserted event'
+    assert any(event['payload']['message']['id'] == primary_message['id'] for event in message_events)
+
+    captured.clear()
+    response = client.delete(f"/api/firenotes/chat/messages/{primary_message['id']}")
+    assert response.status_code == 200
+    delete_events = [event for event in captured if event['type'] == 'firenotes:message-deleted']
+    assert delete_events, 'Deleting a chat message should broadcast a message-deleted event'
+    assert any(event['payload']['message_id'] == primary_message['id'] for event in delete_events)
 
 def test_reminders_endpoint_returns_tasks_and_reminders(configure_chat_environment):
     client = firenotes_app.app.test_client()

@@ -466,6 +466,12 @@
     background: rgba(99, 102, 241, 0.08);
 }
 
+.fc-message--pinged .fc-message__bubble {
+    border: 1px solid rgba(99, 102, 241, 0.45);
+    background: rgba(99, 102, 241, 0.1);
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.12);
+}
+
 .fc-message--task .fc-message__author {
     color: #4338ca;
 }
@@ -724,6 +730,15 @@
     gap: 0.45rem;
 }
 
+.fc-message__meta--ping {
+    background: rgba(99, 102, 241, 0.08);
+    border-color: rgba(99, 102, 241, 0.25);
+}
+
+.fc-message__meta--ping .fc-message__meta-heading {
+    color: #3730a3;
+}
+
 .fc-message__meta-heading {
     font-weight: 600;
     color: #334155;
@@ -963,6 +978,12 @@
     padding: 0.3rem 0;
 }
 
+.fc-popover__helper {
+    font-size: 0.78rem;
+    color: #e2e8f0;
+    line-height: 1.4;
+}
+
 .fc-popover__menu {
     display: flex;
     flex-direction: column;
@@ -1096,6 +1117,20 @@
     position: relative;
 }
 
+.fc-composer__identity {
+    grid-column: 1 / -1;
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #64748b;
+}
+
+.fc-composer__identity span {
+    letter-spacing: normal;
+    text-transform: none;
+    color: #1e293b;
+}
+
 .fc-composer[data-disabled='true'] {
     opacity: 0.5;
 }
@@ -1105,6 +1140,14 @@
     display: flex;
     flex-wrap: wrap;
     gap: 0.4rem;
+}
+
+.fc-composer__pings {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-top: 0.35rem;
 }
 
 .fc-composer__reply {
@@ -1162,7 +1205,8 @@
     text-decoration: underline;
 }
 
-.fc-composer__attachments[hidden] {
+.fc-composer__attachments[hidden],
+.fc-composer__pings[hidden] {
     display: none;
 }
 
@@ -1187,6 +1231,15 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.03em;
+}
+
+.fc-chip--ping {
+    background: rgba(99, 102, 241, 0.18);
+    color: #3730a3;
+}
+
+.fc-chip--ping .fc-chip__remove {
+    color: #3730a3;
 }
 
 .fc-composer__input {
@@ -1231,6 +1284,18 @@
 }
 
 .fc-composer__mention-root[hidden] {
+    display: none;
+}
+
+.fc-typing-indicator {
+    grid-column: 1 / -1;
+    margin-top: 0.5rem;
+    font-size: 0.85rem;
+    color: #475569;
+    min-height: 1.2em;
+}
+
+.fc-typing-indicator[hidden] {
     display: none;
 }
 

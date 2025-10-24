@@ -19,6 +19,9 @@
                 </div>
             </div>
             <div class="flex items-center space-x-3 text-sm font-medium">
+                {% if current_device %}
+                    <span class="hidden md:inline text-xs uppercase tracking-wide text-slate-400">{{ current_device.display_name }}</span>
+                {% endif %}
                 {% set settings_active = active_nav == 'settings' %}
                 <a href="/settings" class="transition {{ 'text-orange-300' if settings_active else 'hover:text-orange-300' }}">Settings</a>
                 <a href="#" id="nav-log-out" class="hover:text-orange-300 transition">Log Out</a>
@@ -69,4 +72,5 @@
         }
     });
 </script>
+<script src="/assets/js/collaboration_events.js"></script>
 <script src="/assets/js/reminder_notifier.js"></script>

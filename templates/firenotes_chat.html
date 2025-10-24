@@ -16,6 +16,9 @@
 <body class="bg-slate-50 min-h-screen font-sans firenotes-chat">
     <a class="fc-screen-reader-only" href="#fc-chat-log">Skip to chat</a>
     {% include 'partials/navbar.html' %}
+    <script>
+        window.fireCoastCurrentDevice = {{ (current_device or {}) | tojson | safe }};
+    </script>
 
     <main>
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 fc-chat-wrapper">
@@ -59,20 +62,28 @@
                 <footer class="fc-chat-panel__footer">
                     <p id="fc-error" class="fc-chat-error" role="status" aria-live="assertive" hidden></p>
                     <div class="fc-composer" data-disabled="true">
+                        {% if current_device %}
+                            <div class="fc-composer__identity">Chatting as <span class="font-semibold">{{ current_device.display_name }}</span></div>
+                        {% endif %}
                         <div id="fc-reply-preview" class="fc-composer__reply" hidden></div>
                         <div id="fc-attachment-chips" class="fc-composer__attachments" aria-live="polite"></div>
+                        <div id="fc-ping-chips" class="fc-composer__pings" aria-live="polite" hidden></div>
                         <label class="fc-screen-reader-only" for="fc-input">Write a message</label>
                         <div class="fc-composer__input-wrapper">
                             <textarea id="fc-input" class="fc-composer__input" placeholder="Write a message" rows="1" disabled></textarea>
                             <div id="fc-mention-root" class="fc-composer__mention-root" hidden></div>
                         </div>
                         <div class="fc-composer__actions">
+                            <button type="button" id="fc-ping-button" class="fc-icon-button" aria-label="Notify someone" disabled>
+                                <span aria-hidden="true">🔔</span>
+                            </button>
                             <input type="file" id="fc-attachment-input" class="fc-composer__file-input" multiple hidden>
                             <button type="button" id="fc-attach-button" class="fc-icon-button" aria-label="Add files" disabled>
                                 <span aria-hidden="true">＋</span>
                             </button>
                         </div>
                     </div>
+                    <div id="fc-typing-indicator" class="fc-typing-indicator" hidden aria-live="polite"></div>
                 </footer>
             </section>
         </div>
@@ -103,10 +114,13 @@
             const attachmentInputEl = document.getElementById('fc-attachment-input');
             const attachmentButtonEl = document.getElementById('fc-attach-button');
             const attachmentChipsEl = document.getElementById('fc-attachment-chips');
+            const pingChipsEl = document.getElementById('fc-ping-chips');
             const replyPreviewEl = document.getElementById('fc-reply-preview');
             const composerEl = document.querySelector('.fc-composer');
             const mentionRootEl = document.getElementById('fc-mention-root');
             const errorEl = document.getElementById('fc-error');
+            const pingButtonEl = document.getElementById('fc-ping-button');
+            const typingIndicatorEl = document.getElementById('fc-typing-indicator');
 
             const API_BASE = '/api/firenotes';
             const REACTION_ENDPOINT = `${API_BASE}/chat/reactions`;
@@ -116,12 +130,27 @@
             const QUICK_REACTIONS_LIMIT = 3;
             const STICKY_SCROLL_THRESHOLD = 48;
             const MESSAGE_GROUP_WINDOW_MS = 5 * 60 * 1000;
+            const MAX_PING_RECIPIENTS = 8;
 
-            const normalizeAuthorForGrouping = (author) => {
-                if (author === null || author === undefined) {
+            const getCurrentDeviceId = () => {
+                const context = window.fireCoastCurrentDevice || {};
+                if (context && typeof context.id !== 'undefined' && context.id !== null) {
+                    return String(context.id);
+                }
+                return '';
+            };
+
+            const getMessageDisplayAuthor = (message) => {
+                if (!message) {
                     return '';
                 }
-                return String(author).trim().toLowerCase();
+                const metadata = message.metadata || {};
+                const candidate = metadata.display_author || metadata.device_name || message.author || '';
+                return String(candidate).trim();
+            };
+
+            const normalizeAuthorForGrouping = (message) => {
+                return getMessageDisplayAuthor(message).toLowerCase();
             };
 
             const getMessageTimestampValue = (message) => {
@@ -136,7 +165,7 @@
                 if (!current || !previous) {
                     return false;
                 }
-                if (normalizeAuthorForGrouping(current.author) !== normalizeAuthorForGrouping(previous.author)) {
+                if (normalizeAuthorForGrouping(current) !== normalizeAuthorForGrouping(previous)) {
                     return false;
                 }
                 const currentTimestamp = getMessageTimestampValue(current);
@@ -146,6 +175,373 @@
                 }
                 const timestampDelta = Math.abs(currentTimestamp - previousTimestamp);
                 return timestampDelta <= MESSAGE_GROUP_WINDOW_MS;
+            };
+
+            const sortMessages = () => {
+                state.messages.sort((a, b) => {
+                    const aTime = getMessageTimestampValue(a) || 0;
+                    const bTime = getMessageTimestampValue(b) || 0;
+                    if (aTime === bTime) {
+                        const aId = a && a.id ? String(a.id) : '';
+                        const bId = b && b.id ? String(b.id) : '';
+                        return aId.localeCompare(bId);
+                    }
+                    return aTime - bTime;
+                });
+            };
+
+            const normalizeParticipant = (entry) => {
+                if (!entry) {
+                    return null;
+                }
+                const id = entry.id || entry.device_id || entry.deviceId;
+                if (!id && id !== 0) {
+                    return null;
+                }
+                const displayName = (
+                    entry.display_name ||
+                    entry.displayName ||
+                    entry.owner_name ||
+                    entry.device_name ||
+                    ''
+                ).toString().trim() || 'Device';
+                const normalizedId = String(id);
+                const isHost = Boolean(entry.is_host || entry.isHost);
+                let isSelf;
+                if (typeof entry.is_self === 'boolean') {
+                    isSelf = entry.is_self;
+                } else if (typeof entry.isSelf === 'boolean') {
+                    isSelf = entry.isSelf;
+                } else {
+                    isSelf = normalizedId === getCurrentDeviceId();
+                }
+                return {
+                    id: normalizedId,
+                    displayName,
+                    isHost,
+                    isSelf,
+                };
+            };
+
+            const renderPingChips = () => {
+                if (!pingChipsEl) {
+                    return;
+                }
+                pingChipsEl.innerHTML = '';
+                const recipients = Array.isArray(state.pingRecipients) ? state.pingRecipients : [];
+                if (!recipients.length) {
+                    pingChipsEl.hidden = true;
+                    return;
+                }
+                pingChipsEl.hidden = false;
+                const fragment = document.createDocumentFragment();
+                recipients.forEach((recipient) => {
+                    if (!recipient || !recipient.id) {
+                        return;
+                    }
+                    const chip = document.createElement('div');
+                    chip.className = 'fc-chip fc-chip--ping';
+                    chip.dataset.pingId = recipient.id;
+                    const label = document.createElement('span');
+                    label.textContent = recipient.displayName || recipient.id;
+                    chip.appendChild(label);
+                    const removeButton = document.createElement('button');
+                    removeButton.type = 'button';
+                    removeButton.className = 'fc-chip__remove';
+                    removeButton.textContent = 'Remove';
+                    removeButton.setAttribute('aria-label', `Stop notifying ${recipient.displayName || recipient.id}`);
+                    removeButton.addEventListener('click', () => {
+                        removePingRecipient(recipient.id);
+                    });
+                    chip.appendChild(removeButton);
+                    fragment.appendChild(chip);
+                });
+                pingChipsEl.appendChild(fragment);
+            };
+
+            const addPingRecipient = (participant, options = {}) => {
+                const normalized = normalizeParticipant(participant);
+                if (!normalized || normalized.isSelf) {
+                    return false;
+                }
+                const exists = state.pingRecipients.some((entry) => entry.id === normalized.id);
+                if (exists) {
+                    if (options.auto) {
+                        state.replyAutoPingId = normalized.id;
+                    }
+                    return true;
+                }
+                if (state.pingRecipients.length >= MAX_PING_RECIPIENTS) {
+                    return false;
+                }
+                state.pingRecipients = [...state.pingRecipients, normalized];
+                if (options.auto) {
+                    state.replyAutoPingId = normalized.id;
+                }
+                renderPingChips();
+                return true;
+            };
+
+            const removePingRecipient = (id) => {
+                if (!id && id !== 0) {
+                    return;
+                }
+                const normalized = String(id);
+                const next = state.pingRecipients.filter((entry) => entry && entry.id !== normalized);
+                if (next.length === state.pingRecipients.length) {
+                    return;
+                }
+                state.pingRecipients = next;
+                if (state.replyAutoPingId === normalized) {
+                    state.replyAutoPingId = null;
+                }
+                renderPingChips();
+            };
+
+            const togglePingRecipient = (participant) => {
+                const normalized = normalizeParticipant(participant);
+                if (!normalized || normalized.isSelf) {
+                    return false;
+                }
+                const isSelected = state.pingRecipients.some((entry) => entry.id === normalized.id);
+                if (isSelected) {
+                    removePingRecipient(normalized.id);
+                    return true;
+                }
+                return addPingRecipient(normalized);
+            };
+
+            const resetPingRecipients = () => {
+                state.pingRecipients = [];
+                state.replyAutoPingId = null;
+                renderPingChips();
+            };
+
+            const clearReplyAutoPing = () => {
+                if (!state.replyAutoPingId) {
+                    return;
+                }
+                const autoId = state.replyAutoPingId;
+                state.replyAutoPingId = null;
+                removePingRecipient(autoId);
+            };
+
+            const applyReplyAutoPing = (message) => {
+                clearReplyAutoPing();
+                if (!message || !message.metadata) {
+                    return;
+                }
+                const metadata = message.metadata || {};
+                const targetDeviceId = metadata.device_id || metadata.deviceId || '';
+                if (!targetDeviceId) {
+                    return;
+                }
+                const currentId = getCurrentDeviceId();
+                if (targetDeviceId === currentId) {
+                    return;
+                }
+                const displayName = (
+                    metadata.display_author ||
+                    metadata.owner_name ||
+                    metadata.device_name ||
+                    getMessageDisplayAuthor(message) ||
+                    ''
+                )
+                    .toString()
+                    .trim();
+                addPingRecipient(
+                    {
+                        id: String(targetDeviceId),
+                        display_name: displayName || getMessageDisplayAuthor(message) || 'Device',
+                        is_host: metadata.device_id === 'host',
+                    },
+                    { auto: true }
+                );
+            };
+
+            const loadParticipants = async (options = {}) => {
+                const force = Boolean(options.force);
+                if (state.isLoadingParticipants) {
+                    return state.participants;
+                }
+                if (!force && state.participants.length) {
+                    return state.participants;
+                }
+                state.isLoadingParticipants = true;
+                try {
+                    const response = await fetch('/api/firenotes/participants');
+                    if (!response.ok) {
+                        throw new Error('Failed to load participants');
+                    }
+                    const payload = await response.json();
+                    const entries = Array.isArray(payload.participants) ? payload.participants : [];
+                    state.participants = entries
+                        .map((entry) => normalizeParticipant(entry))
+                        .filter(Boolean);
+                } catch (error) {
+                    console.debug('Unable to load participants', error);
+                } finally {
+                    state.isLoadingParticipants = false;
+                }
+                return state.participants;
+            };
+
+            const sendTypingUpdate = async (noteId, isTyping) => {
+                if (!noteId) {
+                    return;
+                }
+                typingState.lastSentState = isTyping;
+                typingState.lastSentAt = Date.now();
+                typingState.noteId = String(noteId);
+                try {
+                    await fetch('/api/firenotes/chat/typing', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ note_id: String(noteId), is_typing: Boolean(isTyping) }),
+                    });
+                } catch (error) {
+                    console.debug('Failed to post typing status', error);
+                }
+            };
+
+            const scheduleTypingStop = () => {
+                if (typingState.timeoutId) {
+                    window.clearTimeout(typingState.timeoutId);
+                }
+                typingState.timeoutId = window.setTimeout(() => {
+                    stopTyping();
+                }, 5500);
+            };
+
+            const notifyTypingActivity = () => {
+                if (!state.activeNoteId || state.composerDisabled) {
+                    return;
+                }
+                const noteId = String(state.activeNoteId);
+                const now = Date.now();
+                if (!typingState.isActive || typingState.noteId !== noteId) {
+                    typingState.isActive = true;
+                    sendTypingUpdate(noteId, true);
+                } else if (
+                    typingState.lastSentState !== true ||
+                    now - typingState.lastSentAt > 3200
+                ) {
+                    sendTypingUpdate(noteId, true);
+                }
+                scheduleTypingStop();
+            };
+
+            const stopTyping = (options = {}) => {
+                const force = Boolean(options.force);
+                const noteId = typingState.noteId || (state.activeNoteId ? String(state.activeNoteId) : '');
+                if (typingState.timeoutId) {
+                    window.clearTimeout(typingState.timeoutId);
+                    typingState.timeoutId = null;
+                }
+                if (!noteId) {
+                    typingState.isActive = false;
+                    return;
+                }
+                if (!typingState.isActive && !force) {
+                    return;
+                }
+                typingState.isActive = false;
+                const shouldSend =
+                    force || typingState.lastSentState !== false || Date.now() - typingState.lastSentAt > 1200;
+                if (shouldSend) {
+                    sendTypingUpdate(noteId, false);
+                }
+            };
+
+            const renderTypingIndicators = () => {
+                if (!typingIndicatorEl) {
+                    return;
+                }
+                const typers = Array.isArray(state.typingTypers) ? state.typingTypers : [];
+                if (!typers.length) {
+                    typingIndicatorEl.hidden = true;
+                    typingIndicatorEl.textContent = '';
+                    return;
+                }
+                const names = typers
+                    .map((entry) => {
+                        if (!entry) {
+                            return null;
+                        }
+                        const label = entry.display_name || entry.displayName || entry.owner_name || entry.device_name;
+                        return (label || '').toString().trim();
+                    })
+                    .filter(Boolean);
+                if (!names.length) {
+                    typingIndicatorEl.hidden = true;
+                    typingIndicatorEl.textContent = '';
+                    return;
+                }
+                let message;
+                if (names.length === 1) {
+                    message = `${names[0]} is typing…`;
+                } else if (names.length === 2) {
+                    message = `${names[0]} and ${names[1]} are typing…`;
+                } else {
+                    message = `${names.slice(0, 2).join(', ')} and ${names.length - 2} others are typing…`;
+                }
+                typingIndicatorEl.hidden = false;
+                typingIndicatorEl.textContent = message;
+            };
+
+            const normalizeMessagePing = (entry) => {
+                if (!entry) {
+                    return null;
+                }
+                const id = entry.device_id || entry.deviceId || entry.id;
+                if (!id && id !== 0) {
+                    return null;
+                }
+                const displayName = (
+                    entry.display_name ||
+                    entry.displayName ||
+                    entry.owner_name ||
+                    entry.device_name ||
+                    ''
+                )
+                    .toString()
+                    .trim();
+                return {
+                    id: String(id),
+                    displayName: displayName || 'Device',
+                    isHost: Boolean(entry.is_host || entry.isHost),
+                };
+            };
+
+            const getMessagePingRecipients = (message) => {
+                const metadata = (message && message.metadata) || {};
+                const raw = metadata.pings;
+                if (!Array.isArray(raw)) {
+                    return [];
+                }
+                return raw.map((entry) => normalizeMessagePing(entry)).filter(Boolean);
+            };
+
+            const createPingMetadataElement = (metadata) => {
+                if (!metadata) {
+                    return null;
+                }
+                const raw = Array.isArray(metadata.pings) ? metadata.pings : [];
+                const normalized = raw.map((entry) => normalizeMessagePing(entry)).filter(Boolean);
+                if (!normalized.length) {
+                    return null;
+                }
+                const container = document.createElement('div');
+                container.className = 'fc-message__meta fc-message__meta--ping';
+                const heading = document.createElement('div');
+                heading.className = 'fc-message__meta-heading';
+                heading.textContent = normalized.length === 1 ? 'Notified' : 'Notified';
+                container.appendChild(heading);
+                const body = document.createElement('div');
+                body.className = 'fc-message__meta-body';
+                body.textContent = normalized.map((entry) => entry.displayName).join(', ');
+                container.appendChild(body);
+                return container;
             };
 
             const scrollPort = chatScrollEl || chatLogEl;
@@ -217,10 +613,22 @@
                 pendingMessageAction: null,
                 activeReply: null,
                 pendingMessageFocus: null,
+                pingRecipients: [],
+                participants: [],
+                isLoadingParticipants: false,
+                replyAutoPingId: null,
+                typingTypers: [],
             };
             const pendingReactions = new Set();
             let activePopover = null;
             let pendingScrollToBottom = false;
+            const typingState = {
+                isActive: false,
+                timeoutId: null,
+                lastSentState: null,
+                lastSentAt: 0,
+                noteId: '',
+            };
 
 
             const handlePopoverDocumentClick = (event) => {
@@ -553,6 +961,9 @@
                     }
                 } else if (inputEl) {
                     inputEl.value = next;
+                }
+                if (hasChanged && !state.composerDisabled) {
+                    notifyTypingActivity();
                 }
                 if (!options.skipResize) {
                     scheduleFrame(() => {
@@ -958,6 +1369,7 @@
                     return;
                 }
                 state.activeReply = null;
+                clearReplyAutoPing();
                 renderReplyPreview();
             };
 
@@ -1258,15 +1670,30 @@
 
             const upsertMessage = (message) => {
                 if (!message || !message.id) {
-                    return;
+                    return false;
                 }
                 const index = state.messages.findIndex((entry) => entry.id === message.id);
                 if (index >= 0) {
                     const existing = state.messages[index];
                     state.messages[index] = { ...existing, ...message };
-                } else {
-                    state.messages.push(message);
+                    return false;
                 }
+                state.messages.push(message);
+                sortMessages();
+                return true;
+            };
+
+            const removeMessageById = (messageId) => {
+                if (!messageId) {
+                    return false;
+                }
+                const normalized = String(messageId);
+                const next = state.messages.filter((entry) => String(entry.id) !== normalized);
+                if (next.length === state.messages.length) {
+                    return false;
+                }
+                state.messages = next;
+                return true;
             };
 
             const handleReactionToggle = async (messageId, emoji) => {
@@ -1364,7 +1791,14 @@
             };
 
             const isUserMessage = (message) => {
-                return String(message && message.author && message.author.toLowerCase()) === 'user';
+                if (!message) {
+                    return false;
+                }
+                const metadata = message.metadata || {};
+                if (metadata.actor_role) {
+                    return String(metadata.actor_role).toLowerCase() === 'user';
+                }
+                return getMessageDisplayAuthor(message).toLowerCase() === 'user';
             };
 
             const isMessageBeingEdited = (messageId) => {
@@ -1457,7 +1891,8 @@
                     return;
                 }
                 closeActivePopover();
-                const authorLabel = formatMessageAuthorLabel(message.author);
+                clearReplyAutoPing();
+                const authorLabel = formatMessageAuthorLabel(getMessageDisplayAuthor(message));
                 let noteTitle = '';
                 if (message.note_id && message.note_id !== state.activeNoteId) {
                     const related = state.notes.find((entry) => entry.id === message.note_id);
@@ -1472,6 +1907,7 @@
                     authorLabel,
                     preview: getMessagePreview(message, 120),
                 };
+                applyReplyAutoPing(message);
                 renderReplyPreview();
                 scheduleFrame(() => {
                     const textarea = getActiveTextarea();
@@ -1585,6 +2021,91 @@
                     console.error('Failed to copy message link', error);
                     showError('Unable to copy message link.');
                 }
+            };
+
+            const openPingPicker = (anchor) => {
+                if (!anchor) {
+                    return;
+                }
+                loadParticipants();
+                openPopover(anchor, () => {
+                    const panel = document.createElement('div');
+                    panel.className = 'fc-popover__panel';
+                    const title = document.createElement('div');
+                    title.className = 'fc-popover__title';
+                    title.textContent = 'Notify someone';
+                    panel.appendChild(title);
+                    if (state.isLoadingParticipants && !state.participants.length) {
+                        const loading = document.createElement('div');
+                        loading.className = 'fc-popover__empty';
+                        loading.textContent = 'Loading devices…';
+                        panel.appendChild(loading);
+                        return panel;
+                    }
+                    const participants = state.participants || [];
+                    if (!participants.length) {
+                        const empty = document.createElement('div');
+                        empty.className = 'fc-popover__empty';
+                        empty.textContent = 'No trusted devices available';
+                        panel.appendChild(empty);
+                        return panel;
+                    }
+                    const list = document.createElement('div');
+                    list.className = 'fc-popover__list';
+                    participants.forEach((participant) => {
+                        if (!participant || participant.isSelf) {
+                            return;
+                        }
+                        const item = document.createElement('button');
+                        item.type = 'button';
+                        item.className = 'fc-popover__item';
+                        item.textContent = participant.displayName;
+                        const selected = state.pingRecipients.some((entry) => entry.id === participant.id);
+                        if (selected) {
+                            item.classList.add('is-selected');
+                        } else if (state.pingRecipients.length >= MAX_PING_RECIPIENTS) {
+                            item.disabled = true;
+                        }
+                        item.addEventListener('click', (event) => {
+                            event.preventDefault();
+                            const alreadySelected = state.pingRecipients.some((entry) => entry.id === participant.id);
+                            const changed = togglePingRecipient(participant);
+                            const nowSelected = state.pingRecipients.some((entry) => entry.id === participant.id);
+                            if (nowSelected) {
+                                item.classList.add('is-selected');
+                                item.disabled = false;
+                            } else {
+                                item.classList.remove('is-selected');
+                                if (!alreadySelected && !changed) {
+                                    item.disabled = true;
+                                } else if (state.pingRecipients.length >= MAX_PING_RECIPIENTS) {
+                                    item.disabled = true;
+                                } else {
+                                    item.disabled = false;
+                                }
+                            }
+                            const reachedLimit = state.pingRecipients.length >= MAX_PING_RECIPIENTS;
+                            list.querySelectorAll('.fc-popover__item').forEach((buttonEl) => {
+                                if (buttonEl.classList.contains('is-selected')) {
+                                    buttonEl.disabled = false;
+                                } else if (reachedLimit) {
+                                    buttonEl.disabled = true;
+                                } else {
+                                    buttonEl.disabled = false;
+                                }
+                            });
+                        });
+                        list.appendChild(item);
+                    });
+                    panel.appendChild(list);
+                    if (state.pingRecipients.length >= MAX_PING_RECIPIENTS) {
+                        const helper = document.createElement('div');
+                        helper.className = 'fc-popover__helper';
+                        helper.textContent = `Maximum of ${MAX_PING_RECIPIENTS} notifications per message.`;
+                        panel.appendChild(helper);
+                    }
+                    return panel;
+                });
             };
 
             const openReactionPicker = (anchor, message) => {
@@ -1846,10 +2367,7 @@
                 if (lowered === 'assistant') {
                     return '@firenotes';
                 }
-                if (normalized.startsWith('@')) {
-                    return normalized;
-                }
-                return `@${normalized}`;
+                return normalized;
             };
 
             const requestMessageFocus = (noteId, messageId) => {
@@ -1936,7 +2454,9 @@
                 if (!contentText && !reference.note_title) {
                     return null;
                 }
-                const authorLabel = formatMessageAuthorLabel(reference.author || reference.author_label || '');
+                const authorLabel = formatMessageAuthorLabel(
+                    reference.author_display || reference.display_author || reference.author || reference.author_label || ''
+                );
                 const timestampLabel = reference.created_at ? formatTimestamp(reference.created_at, true) : '';
                 const noteLabel = reference.note_title ? reference.note_title : '';
                 const button = document.createElement('button');
@@ -1997,7 +2517,9 @@
                     return null;
                 }
                 const noteId = reference.note_id || reference.noteId || '';
-                const authorLabel = formatMessageAuthorLabel(reference.author || reference.author_label || '');
+                const authorLabel = formatMessageAuthorLabel(
+                    reference.author_display || reference.display_author || reference.author || reference.author_label || ''
+                );
                 const button = document.createElement('button');
                 button.type = 'button';
                 button.className = 'fc-message__reference';
@@ -2051,8 +2573,7 @@
             };
 
             const createMessageElement = (message, previousMessage = null) => {
-                const author = (message.author || '').toLowerCase();
-                const isUser = author === 'user';
+                const isUser = isUserMessage(message);
                 const shouldGroup = shouldGroupWithPreviousMessage(message, previousMessage);
                 const wrapper = document.createElement('article');
                 const wrapperClasses = ['fc-message', isUser ? 'fc-message--user' : 'fc-message--assistant'];
@@ -2067,6 +2588,13 @@
                     wrapper.classList.add('is-processing');
                 }
                 const metadata = message.metadata || {};
+                const pingRecipients = getMessagePingRecipients(message);
+                if (pingRecipients.length) {
+                    const currentId = getCurrentDeviceId();
+                    if (currentId && !isUser && pingRecipients.some((entry) => entry.id === currentId)) {
+                        wrapper.classList.add('fc-message--pinged');
+                    }
+                }
                 if (metadata.action === 'task_created' && metadata.task) {
                     wrapper.classList.add('fc-message--task');
                     if (metadata.task.completed) {
@@ -2089,7 +2617,7 @@
 
                 const authorLabel = document.createElement('span');
                 authorLabel.className = 'fc-message__author';
-                authorLabel.textContent = formatMessageAuthorLabel(message.author);
+                authorLabel.textContent = formatMessageAuthorLabel(getMessageDisplayAuthor(message));
                 header.appendChild(authorLabel);
 
                 const timestamp = document.createElement('time');
@@ -2182,6 +2710,10 @@
                     const metadataDetails = createMetadataDetails(metadata);
                     if (metadataDetails) {
                         body.appendChild(metadataDetails);
+                    }
+                    const pingMeta = createPingMetadataElement(metadata);
+                    if (pingMeta) {
+                        body.appendChild(pingMeta);
                     }
                     const reactionsRow = renderReactionRow(message);
                     if (reactionsRow) {
@@ -2325,6 +2857,9 @@
                 if (attachmentButtonEl) {
                     attachmentButtonEl.disabled = !enabled;
                 }
+                if (pingButtonEl) {
+                    pingButtonEl.disabled = !enabled;
+                }
                 if (composerEl) {
                     composerEl.setAttribute('data-disabled', enabled ? 'false' : 'true');
                 }
@@ -2345,9 +2880,14 @@
                     renderAttachmentChips();
                     setComposerValue('', { forceRender: true });
                     clearActiveReply();
+                    resetPingRecipients();
+                    stopTyping({ force: true });
+                    state.typingTypers = [];
+                    renderTypingIndicators();
                 } else {
                     autoResizeInput();
                     renderReplyPreview();
+                    renderPingChips();
                 }
             };
 
@@ -2364,7 +2904,9 @@
                 state.pendingFiles = [];
                 renderAttachmentChips();
                 clearActiveReply();
+                resetPingRecipients();
                 renderReplyPreview();
+                stopTyping({ force: true });
             };
 
             const updateNoteFromResponse = (note) => {
@@ -2390,6 +2932,19 @@
                 if (handleChanged) {
                     refreshMentionHandles();
                 }
+            };
+
+            const removeNoteFromState = (noteId) => {
+                if (!noteId) {
+                    return null;
+                }
+                const normalized = String(noteId);
+                const remaining = state.notes.filter((entry) => String(entry.id) !== normalized);
+                if (remaining.length === state.notes.length) {
+                    return null;
+                }
+                state.notes = remaining;
+                return remaining.length ? remaining[0] : null;
             };
 
             const removePendingFile = (id) => {
@@ -2425,6 +2980,7 @@
                     }
                     const payload = await response.json();
                     state.messages = Array.isArray(payload.messages) ? payload.messages : [];
+                    sortMessages();
                     pendingReactions.clear();
                     if (payload.note) {
                         state.activeNote = payload.note;
@@ -2472,12 +3028,17 @@
                 if (!noteId) {
                     return;
                 }
+                stopTyping({ force: true });
+                typingState.noteId = String(noteId);
                 state.activeNoteId = noteId;
                 state.activeNote = state.notes.find((note) => note.id === noteId) || null;
                 state.messageSearch = '';
                 if (messageSearchEl) {
                     messageSearchEl.value = '';
                 }
+                state.typingTypers = [];
+                renderTypingIndicators();
+                resetPingRecipients();
                 renderNoteTitle(state.activeNote);
                 renderNotes();
                 updateComposerAvailability();
@@ -2585,6 +3146,13 @@
                         if (replyTarget) {
                             formData.append('reply_to', JSON.stringify(replyTarget));
                         }
+                        if (state.pingRecipients.length) {
+                            state.pingRecipients.forEach((recipient) => {
+                                if (recipient && recipient.id) {
+                                    formData.append('ping_device_ids', recipient.id);
+                                }
+                            });
+                        }
                         state.pendingFiles.forEach((item) => {
                             formData.append('attachments', item.file, item.file.name);
                         });
@@ -2596,6 +3164,11 @@
                         const payload = { note_id: state.activeNoteId, content: rawContent };
                         if (replyTarget) {
                             payload.reply_to = replyTarget;
+                        }
+                        if (state.pingRecipients.length) {
+                            payload.ping_device_ids = state.pingRecipients
+                                .filter((recipient) => recipient && recipient.id)
+                                .map((recipient) => recipient.id);
                         }
                         response = await fetch(`${API_BASE}/chat`, {
                             method: 'POST',
@@ -2722,12 +3295,16 @@
                 inputEl.addEventListener('input', () => {
                     state.composerValue = inputEl.value || '';
                     autoResizeInput();
+                    notifyTypingActivity();
                 });
                 inputEl.addEventListener('keydown', (event) => {
                     if (event.key === 'Enter' && !event.shiftKey) {
                         event.preventDefault();
                         sendMessage(inputEl.value || '');
                     }
+                });
+                inputEl.addEventListener('blur', () => {
+                    stopTyping();
                 });
             }
 
@@ -2739,17 +3316,144 @@
                 });
             }
 
+            if (pingButtonEl) {
+                pingButtonEl.addEventListener('click', () => {
+                    if (!pingButtonEl.disabled) {
+                        openPingPicker(pingButtonEl);
+                    }
+                });
+            }
+
             if (attachmentInputEl) {
                 attachmentInputEl.addEventListener('change', (event) => {
                     addPendingFiles(event.target.files);
                 });
             }
 
+            const handleCollaborationEvent = (event) => {
+                const detail = event && event.detail ? event.detail : null;
+                if (!detail || typeof detail !== 'object') {
+                    return;
+                }
+                const eventType = detail.type || '';
+                const payload = detail.payload || {};
+                if (!eventType) {
+                    return;
+                }
+                if (eventType === 'firecoast:connected') {
+                    return;
+                }
+                switch (eventType) {
+                    case 'firenotes:note-upserted': {
+                        const note = payload.note;
+                        if (!note || !note.id) {
+                            break;
+                        }
+                        updateNoteFromResponse(note);
+                        if (String(note.id) === String(state.activeNoteId || '')) {
+                            state.activeNote = { ...(state.activeNote || {}), ...note };
+                            renderNoteTitle(state.activeNote);
+                            renderMessages();
+                        }
+                        break;
+                    }
+                    case 'firenotes:note-deleted': {
+                        const noteId = payload.note_id || (payload.note && payload.note.id);
+                        if (!noteId) {
+                            break;
+                        }
+                        const normalized = String(noteId);
+                        const fallback = removeNoteFromState(normalized);
+                        renderNotes();
+                        refreshMentionHandles();
+                        if (normalized === String(state.activeNoteId || '')) {
+                            state.activeNoteId = '';
+                            state.activeNote = null;
+                            state.messages = [];
+                            pendingScrollToBottom = false;
+                            renderMessages();
+                            renderNoteTitle(null);
+                            updateComposerAvailability();
+                            if (fallback && fallback.id) {
+                                selectNote(fallback.id, { focusComposer: false, silent: true }).catch((error) => {
+                                    console.error('Failed to load fallback note after deletion', error);
+                                });
+                            } else {
+                                showError('This note was removed.');
+                            }
+                        }
+                        break;
+                    }
+                    case 'firenotes:message-upserted': {
+                        const message = payload.message;
+                        if (!message || !message.id) {
+                            break;
+                        }
+                        const rawNoteId = payload.note_id || message.note_id;
+                        if (payload.note) {
+                            updateNoteFromResponse(payload.note);
+                            if (payload.note.id && String(payload.note.id) === String(state.activeNoteId || '')) {
+                                state.activeNote = { ...(state.activeNote || {}), ...payload.note };
+                                renderNoteTitle(state.activeNote);
+                            }
+                        }
+                        if (!rawNoteId || String(rawNoteId) !== String(state.activeNoteId || '')) {
+                            break;
+                        }
+                        const shouldAutoScroll = scrollPort ? isNearBottom(scrollPort) : false;
+                        const inserted = upsertMessage(message);
+                        if (inserted && shouldAutoScroll) {
+                            pendingScrollToBottom = true;
+                        }
+                        renderMessages();
+                        break;
+                    }
+                    case 'firenotes:message-deleted': {
+                        const messageId = payload.message_id || (payload.message && payload.message.id);
+                        const rawNoteId = payload.note_id || (payload.note && payload.note.id);
+                        if (payload.note) {
+                            updateNoteFromResponse(payload.note);
+                        }
+                        if (!rawNoteId || String(rawNoteId) !== String(state.activeNoteId || '')) {
+                            break;
+                        }
+                        if (removeMessageById(messageId)) {
+                            renderMessages();
+                        }
+                        break;
+                    }
+                    case 'firenotes:typing': {
+                        const noteId = payload.note_id || payload.noteId;
+                        if (!noteId || String(noteId) !== String(state.activeNoteId || '')) {
+                            break;
+                        }
+                        const entries = Array.isArray(payload.typers) ? payload.typers : [];
+                        const currentId = getCurrentDeviceId();
+                        state.typingTypers = entries
+                            .map((entry) => normalizeParticipant(entry))
+                            .filter((entry) => entry && entry.id !== currentId);
+                        renderTypingIndicators();
+                        break;
+                    }
+                    default:
+                        break;
+                }
+            };
+
+            window.addEventListener('firecoast:collaboration-event', handleCollaborationEvent);
+            window.addEventListener('beforeunload', () => {
+                stopTyping({ force: true });
+                window.removeEventListener('firecoast:collaboration-event', handleCollaborationEvent);
+            });
+
             renderNotes();
             renderMessages();
             renderAttachmentChips();
+            renderPingChips();
             renderReplyPreview();
+            renderTypingIndicators();
             ensureMentionComposer();
+            loadParticipants();
             loadNotes();
         })();
     </script>
