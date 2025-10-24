@@ -2,6 +2,7 @@ import json
 import pathlib
 import sys
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
@@ -87,6 +88,9 @@ def test_new_device_is_redirected_and_logged(device_control_environment, monkeyp
 def test_trusted_device_gains_access_without_login(device_control_environment, monkeypatch):
     firecoast_app = device_control_environment
 
+    unique_suffix = uuid.uuid4().hex[:2]
+    trusted_mac = f"11:22:33:44:55:{unique_suffix}"
+
     conn = get_db_connection()
     try:
         device_id = str(uuid.uuid4())
@@ -105,7 +109,7 @@ def test_trusted_device_gains_access_without_login(device_control_environment, m
             """,
             (
                 device_id,
-                '11:22:33:44:55:66',
+                trusted_mac,
                 'Jordan',
                 'Warehouse Tablet',
                 firecoast_app.DEVICE_STATUS_TRUSTED,
@@ -118,7 +122,7 @@ def test_trusted_device_gains_access_without_login(device_control_environment, m
         conn.close()
 
     monkeypatch.setattr(firecoast_app, '_get_request_ip_address', lambda: '192.168.0.99')
-    monkeypatch.setattr(firecoast_app, '_resolve_mac_address_for_ip', lambda ip: '11:22:33:44:55:66')
+    monkeypatch.setattr(firecoast_app, '_resolve_mac_address_for_ip', lambda ip: trusted_mac)
 
     original_testing = firecoast_app.app.config.get('TESTING')
     firecoast_app.app.config['TESTING'] = False
@@ -126,7 +130,7 @@ def test_trusted_device_gains_access_without_login(device_control_environment, m
         with firecoast_app.app.test_request_context('/orders'):
             response = firecoast_app._enforce_device_access_gate()
             assert response is None
-            assert session.get('pending_mac') == '11:22:33:44:55:66'
+            assert session.get('pending_mac') == trusted_mac
             assert g.current_device['status'] == firecoast_app.DEVICE_STATUS_TRUSTED
             assert g.current_device['display_name'] == 'Jordan'
     finally:
@@ -140,3 +144,40 @@ def test_trusted_device_gains_access_without_login(device_control_environment, m
         assert row['status'] == firecoast_app.DEVICE_STATUS_TRUSTED
     finally:
         conn.close()
+
+
+def test_mac_resolution_uses_specific_neighbor_line(device_control_environment, monkeypatch):
+    firecoast_app = device_control_environment
+
+    neighbor_output = """
+    192.168.0.42 dev wlan0 lladdr aa:aa:aa:aa:aa:aa REACHABLE
+    192.168.0.77 dev wlan0 lladdr bb:bb:bb:bb:bb:bb STALE
+    """
+    arp_output = """
+    ? (192.168.0.42) at aa:aa:aa:aa:aa:aa on wlan0 ifscope [ethernet]
+    ? (192.168.0.77) at bb:bb:bb:bb:bb:bb on wlan0 ifscope [ethernet]
+    """
+
+    def fake_run(command, capture_output, text, timeout):
+        if command[0] == 'ip':
+            return SimpleNamespace(stdout=neighbor_output, stderr='')
+        return SimpleNamespace(stdout=arp_output, stderr='')
+
+    monkeypatch.setattr(firecoast_app.subprocess, 'run', fake_run)
+
+    mac = firecoast_app._resolve_mac_address_for_ip('192.168.0.77')
+    assert mac == 'bb:bb:bb:bb:bb:bb'
+
+
+def test_mac_resolution_ignores_non_matching_lines(device_control_environment, monkeypatch):
+    firecoast_app = device_control_environment
+
+    neighbor_output = "192.168.0.42 dev wlan0 lladdr aa:aa:aa:aa:aa:aa REACHABLE"
+
+    def fake_run(command, capture_output, text, timeout):
+        return SimpleNamespace(stdout=neighbor_output, stderr='')
+
+    monkeypatch.setattr(firecoast_app.subprocess, 'run', fake_run)
+
+    mac = firecoast_app._resolve_mac_address_for_ip('192.168.0.77')
+    assert mac is None

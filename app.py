@@ -613,6 +613,31 @@ def _get_request_ip_address() -> str:
     return remote.strip()
 
 
+def _extract_mac_from_neighbor_output(output: str, ip_address: str) -> Optional[str]:
+    if not output or not ip_address:
+        return None
+    normalized_ip = ip_address.strip().lower()
+    if not normalized_ip:
+        return None
+    ip_boundary_pattern = re.compile(
+        rf'(^|[^0-9a-f:.]){re.escape(normalized_ip)}([^0-9a-f:.]|$)',
+        re.IGNORECASE,
+    )
+    mac_pattern = re.compile(r'([0-9a-f]{2}[:-]){5}[0-9a-f]{2}', re.IGNORECASE)
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if not ip_boundary_pattern.search(line.lower()):
+            continue
+        match = mac_pattern.search(line)
+        if match:
+            normalized = _normalize_mac_address(match.group(0))
+            if normalized:
+                return normalized
+    return None
+
+
 def _resolve_mac_address_for_ip(ip_address: Optional[str]) -> Optional[str]:
     if not ip_address:
         return None
@@ -639,9 +664,9 @@ def _resolve_mac_address_for_ip(ip_address: Optional[str]) -> Optional[str]:
         except (FileNotFoundError, subprocess.SubprocessError):
             continue
         output = ' '.join(filter(None, [completed.stdout, completed.stderr]))
-        match = re.search(r'([0-9a-f]{2}[:-]){5}[0-9a-f]{2}', output.lower())
-        if match:
-            return _normalize_mac_address(match.group(0))
+        mac_address = _extract_mac_from_neighbor_output(output, ip_address)
+        if mac_address:
+            return mac_address
     return None
 
 
