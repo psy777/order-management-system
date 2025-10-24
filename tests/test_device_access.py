@@ -243,3 +243,17 @@ def test_mac_resolution_retries_after_ping_prime(device_control_environment, mon
 
     mac = firecoast_app._resolve_mac_address_for_ip('192.168.0.88')
     assert mac == 'dd:dd:dd:dd:dd:dd'
+
+
+def test_mac_resolution_handles_ipv4_mapped_addresses(device_control_environment, monkeypatch):
+    firecoast_app = device_control_environment
+
+    neighbor_output = '192.168.0.55 dev wlan0 lladdr ee:ee:ee:ee:ee:ee REACHABLE'
+
+    def fake_run(command, capture_output, text, timeout):
+        return SimpleNamespace(stdout=neighbor_output, stderr='')
+
+    monkeypatch.setattr(firecoast_app.subprocess, 'run', fake_run)
+
+    mac = firecoast_app._resolve_mac_address_for_ip('::ffff:192.168.0.55')
+    assert mac == 'ee:ee:ee:ee:ee:ee'

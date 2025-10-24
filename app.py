@@ -665,6 +665,10 @@ def _resolve_mac_address_for_ip(ip_address: Optional[str]) -> Optional[str]:
         parsed_ip = ipaddress.ip_address(ip_address)
     except ValueError:
         return None
+
+    if isinstance(parsed_ip, ipaddress.IPv6Address) and parsed_ip.ipv4_mapped:
+        parsed_ip = parsed_ip.ipv4_mapped
+        ip_address = str(parsed_ip)
     if parsed_ip.is_loopback:
         return _get_host_mac_address()
     if parsed_ip.is_unspecified:
