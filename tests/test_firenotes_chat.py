@@ -652,6 +652,7 @@ def test_message_forward_creates_new_entry(configure_chat_environment):
     forwarded_meta = forwarded['metadata']['forwarded_from']
     assert forwarded_meta['id'] == original['id']
     assert forwarded_meta['preview'] == 'Forward me'
+    assert forwarded_meta['content'] == original['content']
     assert forwarded_meta['note_title'] == source_note['title']
     assert forwarded['content'] == original['content']
 

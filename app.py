@@ -565,6 +565,7 @@ def _build_message_reference(
         'author': data.get('author'),
         'created_at': data.get('created_at'),
         'preview': _summarize_chat_preview(data.get('content')),
+        'content': data.get('content') or '',
     }
     if not reference['preview']:
         attachments = _parse_json_column(data.get('attachments_json'))
@@ -953,6 +954,7 @@ def _forward_chat_message(
                 'note_id': original.get('note_id'),
                 'author': original.get('author'),
                 'created_at': original.get('created_at'),
+                'content': original.get('content') or '',
             }
         }
     forwarded_body = original.get('content') or ''

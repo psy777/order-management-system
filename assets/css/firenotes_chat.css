@@ -568,68 +568,46 @@
 }
 
 .fc-message__forwarded {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.4rem 0.65rem 0.4rem 0.9rem;
+    display: block;
+    padding: 0.65rem 0.85rem;
     border-radius: 12px;
-    border: 1px solid rgba(16, 185, 129, 0.35);
-    background: rgba(209, 250, 229, 0.45);
-    color: #065f46;
-    font-size: 0.82rem;
+    border: 1px solid rgba(148, 163, 184, 0.45);
+    background: rgba(241, 245, 249, 0.7);
+    color: #0f172a;
+    font-size: 0.88rem;
     cursor: pointer;
     text-align: left;
     position: relative;
-    align-self: flex-start;
-    width: auto;
+    align-self: stretch;
+    width: 100%;
     min-width: 0;
-    max-width: min(28rem, 100%);
     transition: border-color 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
 }
 
 .fc-message__forwarded::before {
     content: '';
     position: absolute;
-    inset: 0.3rem auto 0.3rem 0.45rem;
+    inset: 0.5rem auto 0.5rem 0.5rem;
     width: 3px;
     border-radius: 999px;
-    background: rgba(16, 185, 129, 0.7);
+    background: rgba(59, 130, 246, 0.5);
 }
 
 .fc-message__forwarded:hover,
 .fc-message__forwarded:focus-visible {
-    border-color: rgba(5, 150, 105, 0.6);
-    box-shadow: 0 8px 16px -18px rgba(15, 23, 42, 0.65);
+    border-color: rgba(59, 130, 246, 0.55);
+    background: rgba(226, 232, 240, 0.85);
+    box-shadow: 0 10px 20px -18px rgba(15, 23, 42, 0.7);
     outline: none;
 }
 
-.fc-message__forwarded-icon {
-    color: #047857;
-    font-size: 0.78rem;
-    line-height: 1;
-    flex-shrink: 0;
-}
-
-.fc-message__forwarded-text {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    min-width: 0;
-    color: #047857;
-}
-
-.fc-message__forwarded-label {
-    font-weight: 600;
-    white-space: nowrap;
-}
-
-.fc-message__forwarded-preview {
-    color: #065f46;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    min-width: 0;
-    max-width: 18rem;
+.fc-message__forwarded-content {
+    display: block;
+    margin-left: 1rem;
+    color: #1f2937;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
 }
 
 .fc-message__reference-icon {
@@ -679,11 +657,7 @@
     pointer-events: none;
 }
 
-.fc-message__forwarded {
-    font-size: 0.82rem;
-    color: #64748b;
-    font-style: italic;
-}
+
 
 .fc-message__text {
     white-space: pre-wrap;

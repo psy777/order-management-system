@@ -1932,46 +1932,21 @@
                     return null;
                 }
                 const noteId = reference.note_id || reference.noteId || '';
-                const authorLabel = formatMessageAuthorLabel(reference.author || reference.author_label || '');
+                const contentText = (reference.content || reference.preview || '').trim();
+                if (!contentText) {
+                    return null;
+                }
                 const button = document.createElement('button');
                 button.type = 'button';
                 button.className = 'fc-message__forwarded';
-                const icon = document.createElement('span');
-                icon.className = 'fc-message__forwarded-icon';
-                icon.textContent = options.icon || '↗︎';
-                button.appendChild(icon);
-                const textGroup = document.createElement('span');
-                textGroup.className = 'fc-message__forwarded-text';
-                button.appendChild(textGroup);
-                if (authorLabel) {
-                    const label = document.createElement('span');
-                    label.className = 'fc-message__forwarded-label';
-                    label.textContent = authorLabel;
-                    textGroup.appendChild(label);
-                }
-                const previewText = summarizeTextPreview(reference.preview || reference.content || '', 110);
-                if (previewText) {
-                    const preview = document.createElement('span');
-                    preview.className = 'fc-message__forwarded-preview';
-                    preview.textContent = previewText;
-                    textGroup.appendChild(preview);
-                }
-                const tooltipParts = [];
-                if (authorLabel) {
-                    tooltipParts.push(authorLabel);
-                }
-                if (previewText) {
-                    tooltipParts.push(previewText);
-                }
-                if (reference.note_title) {
-                    tooltipParts.push(`Note: ${reference.note_title}`);
-                }
-                if (tooltipParts.length) {
-                    button.title = tooltipParts.join(' · ');
-                }
-                const ariaLabel = options.ariaLabel
-                    || `View original message${authorLabel ? ` from ${authorLabel}` : ''}`;
+                const text = document.createElement('span');
+                text.className = 'fc-message__forwarded-content';
+                text.textContent = contentText;
+                button.appendChild(text);
+                const ariaPreview = summarizeTextPreview(contentText, 160) || 'forwarded message';
+                const ariaLabel = options.ariaLabel || `View forwarded message: ${ariaPreview}`;
                 button.setAttribute('aria-label', ariaLabel);
+                button.title = contentText.length > 160 ? contentText : '';
                 button.addEventListener('click', async (event) => {
                     event.preventDefault();
                     event.stopPropagation();
