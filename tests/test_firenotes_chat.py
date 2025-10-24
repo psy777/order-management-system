@@ -649,11 +649,48 @@ def test_message_forward_creates_new_entry(configure_chat_environment):
     payload = forward_response.get_json()
     forwarded = payload['message']
     assert forwarded['note_id'] == target_note['id']
-    assert forwarded['metadata']['forwarded_from']['id'] == original['id']
-    assert forwarded['content'].startswith('Forwarded from')
+    forwarded_meta = forwarded['metadata']['forwarded_from']
+    assert forwarded_meta['id'] == original['id']
+    assert forwarded_meta['preview'] == 'Forward me'
+    assert forwarded_meta['content'] == original['content']
+    assert forwarded_meta['note_title'] == source_note['title']
+    assert forwarded['content'] == original['content']
 
     dest_history = client.get(f"/api/firenotes/chat?noteId={target_note['id']}&limit=5").get_json()['messages']
     assert any(entry['id'] == forwarded['id'] for entry in dest_history)
+
+
+def test_message_reply_metadata_links_original(configure_chat_environment):
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Reply note')
+
+    original_response = client.post(
+        '/api/firenotes/chat',
+        json={'note_id': note['id'], 'content': 'What time is the meeting?'}
+    )
+    assert original_response.status_code == 200
+    original = original_response.get_json()['messages'][0]
+
+    reply_response = client.post(
+        '/api/firenotes/chat',
+        json={
+            'note_id': note['id'],
+            'content': 'It starts at 3pm.',
+            'reply_to': {'id': original['id']},
+        },
+    )
+    assert reply_response.status_code == 200
+    reply_message = reply_response.get_json()['messages'][0]
+    reply_meta = reply_message['metadata']['reply_to']
+    assert reply_meta['id'] == original['id']
+    assert reply_meta['note_id'] == note['id']
+    assert 'meeting' in reply_meta['preview']
+
+    history = _list_note_messages(client, note['id'])
+    stored_reply = next(entry for entry in history if entry['id'] == reply_message['id'])
+    stored_meta = stored_reply['metadata']['reply_to']
+    assert stored_meta['id'] == original['id']
+    assert stored_meta['note_title'] == note['title']
 
 
 def test_message_delete_removes_entry(configure_chat_environment):
