@@ -160,6 +160,19 @@
                 return timestampDelta <= MESSAGE_GROUP_WINDOW_MS;
             };
 
+            const sortMessages = () => {
+                state.messages.sort((a, b) => {
+                    const aTime = getMessageTimestampValue(a) || 0;
+                    const bTime = getMessageTimestampValue(b) || 0;
+                    if (aTime === bTime) {
+                        const aId = a && a.id ? String(a.id) : '';
+                        const bId = b && b.id ? String(b.id) : '';
+                        return aId.localeCompare(bId);
+                    }
+                    return aTime - bTime;
+                });
+            };
+
             const scrollPort = chatScrollEl || chatLogEl;
             const setChatLogContent = (...nodes) => {
                 if (!chatLogEl) {
@@ -1270,15 +1283,30 @@
 
             const upsertMessage = (message) => {
                 if (!message || !message.id) {
-                    return;
+                    return false;
                 }
                 const index = state.messages.findIndex((entry) => entry.id === message.id);
                 if (index >= 0) {
                     const existing = state.messages[index];
                     state.messages[index] = { ...existing, ...message };
-                } else {
-                    state.messages.push(message);
+                    return false;
                 }
+                state.messages.push(message);
+                sortMessages();
+                return true;
+            };
+
+            const removeMessageById = (messageId) => {
+                if (!messageId) {
+                    return false;
+                }
+                const normalized = String(messageId);
+                const next = state.messages.filter((entry) => String(entry.id) !== normalized);
+                if (next.length === state.messages.length) {
+                    return false;
+                }
+                state.messages = next;
+                return true;
             };
 
             const handleReactionToggle = async (messageId, emoji) => {
@@ -2411,6 +2439,19 @@
                 }
             };
 
+            const removeNoteFromState = (noteId) => {
+                if (!noteId) {
+                    return null;
+                }
+                const normalized = String(noteId);
+                const remaining = state.notes.filter((entry) => String(entry.id) !== normalized);
+                if (remaining.length === state.notes.length) {
+                    return null;
+                }
+                state.notes = remaining;
+                return remaining.length ? remaining[0] : null;
+            };
+
             const removePendingFile = (id) => {
                 state.pendingFiles = state.pendingFiles.filter((item) => item.id !== id);
                 renderAttachmentChips();
@@ -2444,6 +2485,7 @@
                     }
                     const payload = await response.json();
                     state.messages = Array.isArray(payload.messages) ? payload.messages : [];
+                    sortMessages();
                     pendingReactions.clear();
                     if (payload.note) {
                         state.activeNote = payload.note;
@@ -2763,6 +2805,108 @@
                     addPendingFiles(event.target.files);
                 });
             }
+
+            const handleCollaborationEvent = (event) => {
+                const detail = event && event.detail ? event.detail : null;
+                if (!detail || typeof detail !== 'object') {
+                    return;
+                }
+                const eventType = detail.type || '';
+                const payload = detail.payload || {};
+                if (!eventType) {
+                    return;
+                }
+                if (eventType === 'firecoast:connected') {
+                    return;
+                }
+                switch (eventType) {
+                    case 'firenotes:note-upserted': {
+                        const note = payload.note;
+                        if (!note || !note.id) {
+                            break;
+                        }
+                        updateNoteFromResponse(note);
+                        if (String(note.id) === String(state.activeNoteId || '')) {
+                            state.activeNote = { ...(state.activeNote || {}), ...note };
+                            renderNoteTitle(state.activeNote);
+                            renderMessages();
+                        }
+                        break;
+                    }
+                    case 'firenotes:note-deleted': {
+                        const noteId = payload.note_id || (payload.note && payload.note.id);
+                        if (!noteId) {
+                            break;
+                        }
+                        const normalized = String(noteId);
+                        const fallback = removeNoteFromState(normalized);
+                        renderNotes();
+                        refreshMentionHandles();
+                        if (normalized === String(state.activeNoteId || '')) {
+                            state.activeNoteId = '';
+                            state.activeNote = null;
+                            state.messages = [];
+                            pendingScrollToBottom = false;
+                            renderMessages();
+                            renderNoteTitle(null);
+                            updateComposerAvailability();
+                            if (fallback && fallback.id) {
+                                selectNote(fallback.id, { focusComposer: false, silent: true }).catch((error) => {
+                                    console.error('Failed to load fallback note after deletion', error);
+                                });
+                            } else {
+                                showError('This note was removed.');
+                            }
+                        }
+                        break;
+                    }
+                    case 'firenotes:message-upserted': {
+                        const message = payload.message;
+                        if (!message || !message.id) {
+                            break;
+                        }
+                        const rawNoteId = payload.note_id || message.note_id;
+                        if (payload.note) {
+                            updateNoteFromResponse(payload.note);
+                            if (payload.note.id && String(payload.note.id) === String(state.activeNoteId || '')) {
+                                state.activeNote = { ...(state.activeNote || {}), ...payload.note };
+                                renderNoteTitle(state.activeNote);
+                            }
+                        }
+                        if (!rawNoteId || String(rawNoteId) !== String(state.activeNoteId || '')) {
+                            break;
+                        }
+                        const shouldAutoScroll = scrollPort ? isNearBottom(scrollPort) : false;
+                        const inserted = upsertMessage(message);
+                        if (inserted && shouldAutoScroll) {
+                            pendingScrollToBottom = true;
+                        }
+                        renderMessages();
+                        break;
+                    }
+                    case 'firenotes:message-deleted': {
+                        const messageId = payload.message_id || (payload.message && payload.message.id);
+                        const rawNoteId = payload.note_id || (payload.note && payload.note.id);
+                        if (payload.note) {
+                            updateNoteFromResponse(payload.note);
+                        }
+                        if (!rawNoteId || String(rawNoteId) !== String(state.activeNoteId || '')) {
+                            break;
+                        }
+                        if (removeMessageById(messageId)) {
+                            renderMessages();
+                        }
+                        break;
+                    }
+                    default:
+                        break;
+                }
+            };
+
+            window.addEventListener('firecoast:collaboration-event', handleCollaborationEvent);
+            window.addEventListener('beforeunload', () => {
+                window.removeEventListener('firecoast:collaboration-event', handleCollaborationEvent);
+            });
 
             renderNotes();
             renderMessages();

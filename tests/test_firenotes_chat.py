@@ -372,6 +372,65 @@ def test_task_completion_toggled_with_checkmark_reaction(configure_chat_environm
         conn.close()
 
 
+def test_note_crud_broadcasts_collaboration_events(configure_chat_environment, monkeypatch):
+    captured = []
+
+    def capture(event_type, payload=None):
+        captured.append({'type': event_type, 'payload': payload})
+
+    monkeypatch.setattr(firenotes_app, '_broadcast_event', capture)
+
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Realtime note')
+
+    note_events = [event for event in captured if event['type'] == 'firenotes:note-upserted']
+    assert note_events, 'Note creation should broadcast an upsert event'
+    assert any(event['payload']['note']['id'] == note['id'] for event in note_events)
+
+    captured.clear()
+    response = client.patch('/api/firenotes/notes', json={'id': note['id'], 'title': 'Renamed note'})
+    assert response.status_code == 200
+    note_events = [event for event in captured if event['type'] == 'firenotes:note-upserted']
+    assert note_events, 'Note update should broadcast an upsert event'
+    assert any(event['payload']['note']['title'] == 'Renamed note' for event in note_events)
+
+    captured.clear()
+    response = client.delete('/api/firenotes/notes', json={'id': note['id']})
+    assert response.status_code == 200
+    delete_events = [event for event in captured if event['type'] == 'firenotes:note-deleted']
+    assert delete_events, 'Note delete should broadcast a delete event'
+    assert any(event['payload']['note_id'] == note['id'] for event in delete_events)
+
+
+def test_chat_broadcasts_collaboration_events(configure_chat_environment, monkeypatch):
+    captured = []
+
+    def capture(event_type, payload=None):
+        captured.append({'type': event_type, 'payload': payload})
+
+    monkeypatch.setattr(firenotes_app, '_broadcast_event', capture)
+
+    client = firenotes_app.app.test_client()
+    note = _create_note(client, 'Collaboration note')
+    captured.clear()
+
+    response = client.post('/api/firenotes/chat', json={'note_id': note['id'], 'content': 'Hello world'})
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload['messages']
+    primary_message = payload['messages'][0]
+
+    message_events = [event for event in captured if event['type'] == 'firenotes:message-upserted']
+    assert message_events, 'Sending a chat message should broadcast a message-upserted event'
+    assert any(event['payload']['message']['id'] == primary_message['id'] for event in message_events)
+
+    captured.clear()
+    response = client.delete(f"/api/firenotes/chat/messages/{primary_message['id']}")
+    assert response.status_code == 200
+    delete_events = [event for event in captured if event['type'] == 'firenotes:message-deleted']
+    assert delete_events, 'Deleting a chat message should broadcast a message-deleted event'
+    assert any(event['payload']['message_id'] == primary_message['id'] for event in delete_events)
+
 def test_reminders_endpoint_returns_tasks_and_reminders(configure_chat_environment):
     client = firenotes_app.app.test_client()
 

@@ -4,6 +4,7 @@ from pathlib import Path
 import uuid
 import webbrowser
 from threading import Event, Lock, Thread, Timer
+from queue import SimpleQueue
 import socket
 import sqlite3
 import sys
@@ -38,6 +39,8 @@ from flask import (
     send_file,
     session,
     g,
+    Response,
+    stream_with_context,
 )
 from database import (
     get_db_connection,
@@ -71,6 +74,55 @@ app.config['JSON_SORT_KEYS'] = False
 app.secret_key = os.urandom(24)
 
 _db_bootstrapped = False
+
+_event_stream_lock = Lock()
+_event_stream_listeners: Set[SimpleQueue] = set()
+
+
+def _event_default_serializer(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+def _serialize_stream_event(event: Dict[str, Any]) -> str:
+    try:
+        return json.dumps(event, default=_event_default_serializer)
+    except TypeError:
+        payload = event.get('payload') or {}
+        sanitized = {
+            'type': event.get('type'),
+            'timestamp': event.get('timestamp'),
+            'payload': json.loads(json.dumps(payload, default=_event_default_serializer)),
+        }
+        return json.dumps(sanitized)
+
+
+def _register_event_listener() -> SimpleQueue:
+    listener = SimpleQueue()
+    with _event_stream_lock:
+        _event_stream_listeners.add(listener)
+    return listener
+
+
+def _unregister_event_listener(listener: SimpleQueue) -> None:
+    with _event_stream_lock:
+        _event_stream_listeners.discard(listener)
+
+
+def _broadcast_event(event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
+    event_payload = {
+        'type': event_type,
+        'payload': payload or {},
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+    }
+    with _event_stream_lock:
+        listeners = list(_event_stream_listeners)
+    for listener in listeners:
+        try:
+            listener.put(event_payload)
+        except Exception:
+            continue
 
 
 def _schedule_post_upgrade_restart(delay: float = RESTART_DELAY_SECONDS) -> None:
@@ -6646,6 +6698,29 @@ def password_entry_detail(entry_id):
     entries[index] = entry
     write_password_entries(entries)
     return jsonify(entry)
+@app.route('/api/events')
+def stream_collaboration_events():
+    def generate():
+        listener = _register_event_listener()
+        try:
+            initial_event = {
+                'type': 'firecoast:connected',
+                'timestamp': datetime.now(timezone.utc).isoformat(),
+                'payload': {},
+            }
+            yield f"data: {_serialize_stream_event(initial_event)}\n\n"
+            while True:
+                event = listener.get()
+                yield f"data: {_serialize_stream_event(event)}\n\n"
+        except GeneratorExit:
+            pass
+        finally:
+            _unregister_event_listener(listener)
+
+    response = Response(stream_with_context(generate()), mimetype='text/event-stream')
+    response.headers['Cache-Control'] = 'no-store'
+    response.headers['X-Accel-Buffering'] = 'no'
+    return response
 
 
 @app.route('/api/firenotes/notes', methods=['GET', 'POST', 'PATCH', 'DELETE'])
@@ -6662,6 +6737,7 @@ def api_firenotes_notes():
             title = payload.get('title') or payload.get('name')
             note = _create_note(conn, title or '')
             conn.commit()
+            _broadcast_event('firenotes:note-upserted', {'note': note})
             return jsonify({'note': note}), 201
         if request.method == 'DELETE':
             note_id = (
@@ -6680,6 +6756,7 @@ def api_firenotes_notes():
                 return jsonify({'message': 'Note not found.'}), 404
             _delete_note(conn, note_id)
             conn.commit()
+            _broadcast_event('firenotes:note-deleted', {'note_id': note_id, 'note': note})
             return jsonify({'message': 'Note deleted.'})
         note_id = (payload.get('id') or payload.get('note_id') or payload.get('noteId') or '').strip()
         if not note_id:
@@ -6697,6 +6774,7 @@ def api_firenotes_notes():
             _upsert_note_handle(conn, note_id, normalized_title)
             note = _get_note(conn, note_id)
         conn.commit()
+        _broadcast_event('firenotes:note-upserted', {'note': note})
         return jsonify({'note': note})
     except Exception as exc:
         conn.rollback()
@@ -6825,6 +6903,19 @@ def api_firenotes_chat():
         payload: Dict[str, Any] = {'messages': messages, 'note': refreshed_note}
         if clear_result:
             payload['clear'] = clear_result
+        broadcast_note_id = str((refreshed_note or {}).get('id') or note_id)
+        if refreshed_note:
+            _broadcast_event('firenotes:note-upserted', {'note': refreshed_note})
+        for message in messages:
+            event_payload = {'note_id': broadcast_note_id, 'message': message}
+            if refreshed_note:
+                event_payload['note'] = refreshed_note
+            _broadcast_event('firenotes:message-upserted', event_payload)
+        for deleted_id in deleted_ids:
+            event_payload: Dict[str, Any] = {'note_id': broadcast_note_id, 'message_id': deleted_id}
+            if refreshed_note:
+                event_payload['note'] = refreshed_note
+            _broadcast_event('firenotes:message-deleted', event_payload)
         return jsonify(payload)
     except Exception as exc:
         conn.rollback()
@@ -6846,6 +6937,10 @@ def api_firenotes_chat_reactions():
     try:
         updated, action = _toggle_chat_reaction(conn, message_id, emoji, DEFAULT_CHAT_REACTOR)
         conn.commit()
+        _broadcast_event(
+            'firenotes:message-upserted',
+            {'note_id': updated.get('note_id'), 'message': updated},
+        )
         return jsonify({'message': updated, 'action': action})
     except ValueError as exc:
         conn.rollback()
@@ -6873,16 +6968,37 @@ def api_firenotes_chat_message(message_id: str):
             response: Dict[str, Any] = {'message': deleted}
             if note:
                 response['note'] = note
+            broadcast_note_id = deleted.get('note_id') or (note.get('id') if note else None)
+            if broadcast_note_id:
+                broadcast_note_id = str(broadcast_note_id)
+            _broadcast_event(
+                'firenotes:message-deleted',
+                {
+                    'note_id': broadcast_note_id,
+                    'message_id': deleted.get('id') or normalized_id,
+                    'note': note,
+                },
+            )
+            if note:
+                _broadcast_event('firenotes:note-upserted', {'note': note})
             return jsonify(response)
         payload = request.get_json(force=True, silent=True) or {}
         content = payload.get('content')
         updated = _edit_chat_message(conn, normalized_id, content)
         note_id = updated.get('note_id')
+        if note_id:
+            note_id = str(note_id)
         note = _get_note(conn, note_id) if note_id else None
         conn.commit()
         response: Dict[str, Any] = {'message': updated}
         if note:
             response['note'] = note
+        _broadcast_event(
+            'firenotes:message-upserted',
+            {'note_id': note_id, 'message': updated, 'note': note},
+        )
+        if note:
+            _broadcast_event('firenotes:note-upserted', {'note': note})
         return jsonify(response)
     except ValueError as exc:
         conn.rollback()
@@ -6909,6 +7025,15 @@ def api_firenotes_chat_forward():
         response: Dict[str, Any] = {'message': forwarded}
         if note:
             response['note'] = note
+        broadcast_note_id = forwarded.get('note_id') or (note.get('id') if note else None)
+        if broadcast_note_id:
+            broadcast_note_id = str(broadcast_note_id)
+        _broadcast_event(
+            'firenotes:message-upserted',
+            {'note_id': broadcast_note_id, 'message': forwarded, 'note': note},
+        )
+        if note:
+            _broadcast_event('firenotes:note-upserted', {'note': note})
         return jsonify(response), 201
     except ValueError as exc:
         conn.rollback()
