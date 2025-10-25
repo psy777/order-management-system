@@ -64,12 +64,29 @@ from services.records import (
     reset_record_service,
     sync_record_mentions,
 )
+from services import firewall as firewall_service
 
 # Load environment variables from .env file
 load_dotenv()
 
+
+def _resolve_server_port() -> int:
+    """Determine the port the HTTP server should bind to."""
+    for candidate in (os.getenv('FIRECOAST_PORT'), os.getenv('PORT')):
+        if not candidate:
+            continue
+        try:
+            value = int(candidate)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    return 5002
+
+
 # --- App Initialization ---
 RESTART_DELAY_SECONDS = 1.0
+SERVER_PORT = _resolve_server_port()
 
 app = Flask(__name__, template_folder='templates')
 app.config['JSON_SORT_KEYS'] = False
@@ -401,6 +418,8 @@ def _enforce_device_access_gate():
     device_row: Optional[Dict[str, Any]] = None
     created_new_device = False
     log_status = 'new'
+    previous_ip: Optional[str] = None
+    firewall_sync_needed = False
     try:
         device_row = _fetch_device_by_token(conn, device_token)
         if not device_row:
@@ -434,9 +453,16 @@ def _enforce_device_access_gate():
             if device_row:
                 created_new_device = True
         if device_row:
+            previous_ip = (device_row.get('last_ip') or '').strip() or None
             current_status = device_row.get('status') or DEVICE_STATUS_PENDING
             log_status = 'new' if created_new_device else current_status
             _update_device_last_seen(conn, device_row.get('id'), ip_address)
+            if current_status == DEVICE_STATUS_TRUSTED:
+                normalized_ip = (ip_address or '').strip()
+                if normalized_ip and normalized_ip != (previous_ip or ''):
+                    firewall_sync_needed = True
+            if ip_address:
+                device_row['last_ip'] = ip_address
         _log_device_access(conn, device_row, device_token, ip_address, request.path, log_status)
         conn.commit()
     except sqlite3.Error:
@@ -444,6 +470,13 @@ def _enforce_device_access_gate():
         raise
     finally:
         conn.close()
+
+    if firewall_sync_needed:
+        try:
+            _synchronize_firewall_rules()
+        except Exception:  # pragma: no cover - best effort logging
+            if app.logger:
+                app.logger.warning('Failed to refresh firewall rules after IP change', exc_info=True)
 
     if not device_row:
         return redirect(url_for('device_register'))
@@ -803,6 +836,46 @@ def _serialize_device_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+def _synchronize_firewall_rules() -> None:
+    try:
+        manager = firewall_service.get_firewall_manager()
+    except firewall_service.FirewallUnsupportedError:
+        return
+    except firewall_service.FirewallError as exc:
+        if app.logger:
+            app.logger.warning('Unable to initialize firewall manager: %s', exc)
+        return
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.execute(
+            """
+            SELECT last_ip
+            FROM network_devices
+            WHERE status = ? AND last_ip IS NOT NULL
+            """,
+            (DEVICE_STATUS_TRUSTED,),
+        )
+        ips: List[str] = []
+        for row in cursor.fetchall():
+            raw_ip = row['last_ip']
+            if not raw_ip:
+                continue
+            normalized = str(raw_ip).strip()
+            if normalized:
+                ips.append(normalized)
+    finally:
+        conn.close()
+
+    try:
+        manager.reconcile_trusted_ips(ips, port=SERVER_PORT)
+    except firewall_service.FirewallUnsupportedError:
+        return
+    except firewall_service.FirewallError as exc:
+        if app.logger:
+            app.logger.warning('Failed to synchronize firewall rules: %s', exc)
+
+
 def _serialize_access_log_row(row: sqlite3.Row) -> Dict[str, Any]:
     return {
         'id': row['id'],
@@ -1151,6 +1224,8 @@ def api_update_network_device(device_id: str):
     updated, error = _update_device_record(device_id, payload)
     if error:
         return error
+    if updated:
+        _synchronize_firewall_rules()
     return jsonify({'device': _serialize_device_row(updated) if updated else None})
 
 
@@ -1164,6 +1239,8 @@ def api_approve_network_device(device_id: str):
     updated, error = _update_device_record(device_id, payload)
     if error:
         return error
+    if updated:
+        _synchronize_firewall_rules()
     return jsonify({'device': _serialize_device_row(updated) if updated else None})
 
 
@@ -1177,6 +1254,8 @@ def api_block_network_device(device_id: str):
     updated, error = _update_device_record(device_id, payload)
     if error:
         return error
+    if updated:
+        _synchronize_firewall_rules()
     return jsonify({'device': _serialize_device_row(updated) if updated else None})
 
 def _fetch_attachments_for_logs(cursor, log_ids: List[int]) -> Dict[int, List[Dict[str, Any]]]:
@@ -7488,7 +7567,7 @@ def home():
 def shutdown(): Timer(0.1,lambda:os._exit(0)).start(); return "Shutdown initiated.",200
 
 def open_browser():
-    webbrowser.open_new("http://127.0.0.1:5002/")
+    webbrowser.open_new(f"http://127.0.0.1:{SERVER_PORT}/")
 
 
 def _get_local_network_address() -> str:
@@ -7505,17 +7584,22 @@ def is_port_in_use(port):
         return s.connect_ex(('127.0.0.1', port)) == 0
 
 def main():
-    PORT = 5002
-    if is_port_in_use(PORT):
-        print(f"Port {PORT} is already in use. Opening browser to existing instance.")
+    port = SERVER_PORT
+    if is_port_in_use(port):
+        print(f"Port {port} is already in use. Opening browser to existing instance.")
         open_browser()
         sys.exit(0)
     else:
-        print(f"Port {PORT} is free. Starting new server.")
+        print(f"Port {port} is free. Starting new server.")
         Timer(1, open_browser).start()
         network_ip = _get_local_network_address()
-        print(f"FireCoast available on the local network at http://{network_ip}:{PORT}")
-        app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
+        print(f"FireCoast available on the local network at http://{network_ip}:{port}")
+        try:
+            _synchronize_firewall_rules()
+        except Exception as exc:  # pragma: no cover - defensive logging
+            if app.logger:
+                app.logger.warning('Failed to pre-sync firewall rules: %s', exc)
+        app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
 
 if __name__ == '__main__':
     init_db()

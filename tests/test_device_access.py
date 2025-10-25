@@ -54,6 +54,24 @@ def device_control_environment(tmp_path, monkeypatch):
     firecoast_app._db_bootstrapped = False
 
 
+class FirewallManagerStub:
+    def __init__(self):
+        self.reconciliations = []
+
+    def reconcile_trusted_ips(self, ips, port):
+        sorted_ips = tuple(sorted(ips))
+        self.reconciliations.append((sorted_ips, port))
+
+
+@pytest.fixture
+def firewall_manager_stub(device_control_environment, monkeypatch):
+    firecoast_app = device_control_environment
+    stub = FirewallManagerStub()
+    monkeypatch.setattr(firecoast_app.firewall_service, '_manager_instance', None)
+    monkeypatch.setattr(firecoast_app.firewall_service, 'get_firewall_manager', lambda: stub)
+    return stub
+
+
 def test_new_device_is_redirected_and_logged(device_control_environment, monkeypatch):
     firecoast_app = device_control_environment
 
@@ -211,6 +229,137 @@ def test_trusted_device_gains_access_without_login(device_control_environment, m
         assert row['device_token'] == trusted_token
     finally:
         conn.close()
+
+
+def test_approving_device_triggers_firewall_sync(device_control_environment, firewall_manager_stub):
+    firecoast_app = device_control_environment
+    stub = firewall_manager_stub
+    device_id = str(uuid.uuid4())
+    pending_token = f'pending-token-{uuid.uuid4()}'
+
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO network_devices (id, access_token, status, permissions, last_ip, last_seen, owner_name, device_name)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+            """,
+            (
+                device_id,
+                pending_token,
+                firecoast_app.DEVICE_STATUS_PENDING,
+                json.dumps([]),
+                '192.168.0.5',
+                None,
+                None,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    with firecoast_app.app.test_request_context(
+        f'/api/network/devices/{device_id}/approve',
+        method='POST',
+        json={},
+    ):
+        g.current_device = firecoast_app._build_host_device_context('127.0.0.1')
+        response = firecoast_app.api_approve_network_device(device_id)
+        assert response.status_code == 200
+
+    assert stub.reconciliations
+    recorded_ips, recorded_port = stub.reconciliations[-1]
+    assert recorded_port == firecoast_app.SERVER_PORT
+    assert '192.168.0.5' in recorded_ips
+
+
+def test_blocking_device_removes_firewall_access(device_control_environment, firewall_manager_stub):
+    firecoast_app = device_control_environment
+    stub = firewall_manager_stub
+    device_id = str(uuid.uuid4())
+    trusted_token = f'trusted-token-{uuid.uuid4()}'
+
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO network_devices (id, access_token, status, permissions, last_ip, last_seen, owner_name, device_name)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+            """,
+            (
+                device_id,
+                trusted_token,
+                firecoast_app.DEVICE_STATUS_TRUSTED,
+                json.dumps(['orders']),
+                '192.168.0.7',
+                'Jordan',
+                'Warehouse Tablet',
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    with firecoast_app.app.test_request_context(
+        f'/api/network/devices/{device_id}/block',
+        method='POST',
+        json={},
+    ):
+        g.current_device = firecoast_app._build_host_device_context('127.0.0.1')
+        response = firecoast_app.api_block_network_device(device_id)
+        assert response.status_code == 200
+
+    assert stub.reconciliations
+    recorded_ips, recorded_port = stub.reconciliations[-1]
+    assert recorded_port == firecoast_app.SERVER_PORT
+    assert '192.168.0.7' not in recorded_ips
+
+
+def test_trusted_device_ip_change_triggers_firewall_sync(device_control_environment, firewall_manager_stub, monkeypatch):
+    firecoast_app = device_control_environment
+    stub = firewall_manager_stub
+
+    device_id = str(uuid.uuid4())
+    trusted_token = f'trusted-token-ip-change-{uuid.uuid4()}'
+
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO network_devices (id, access_token, status, permissions, last_ip, last_seen, owner_name, device_name)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+            """,
+            (
+                device_id,
+                trusted_token,
+                firecoast_app.DEVICE_STATUS_TRUSTED,
+                json.dumps(['orders']),
+                '192.168.0.11',
+                'Jordan',
+                'Warehouse Tablet',
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(firecoast_app, '_get_request_ip_address', lambda: '192.168.0.200')
+
+    original_testing = firecoast_app.app.config.get('TESTING')
+    firecoast_app.app.config['TESTING'] = False
+    try:
+        with firecoast_app.app.test_request_context('/orders'):
+            session.clear()
+            session[firecoast_app.DEVICE_TOKEN_SESSION_KEY] = trusted_token
+            response = firecoast_app._enforce_device_access_gate()
+            assert response is None
+    finally:
+        firecoast_app.app.config['TESTING'] = original_testing
+
+    assert stub.reconciliations
+    recorded_ips, recorded_port = stub.reconciliations[-1]
+    assert recorded_port == firecoast_app.SERVER_PORT
+    assert '192.168.0.200' in recorded_ips
 
 
 def test_trusted_device_does_not_block_new_device_registration(device_control_environment, monkeypatch):
