@@ -95,3 +95,19 @@ def test_windows_open_port_enables_existing_rule(monkeypatch, tmp_path):
 
     assert result is True
     assert any("set" in cmd for cmd in commands)
+
+
+def test_run_command_detects_permission_error(monkeypatch, tmp_path):
+    manager = firewall.FirewallManager(data_directory=tmp_path)
+
+    def fake_run(command, check, capture_output, text):  # noqa: D401 - test helper
+        raise firewall.subprocess.CalledProcessError(
+            returncode=1,
+            cmd=command,
+            stderr='Access is denied.',
+        )
+
+    monkeypatch.setattr(firewall.subprocess, 'run', fake_run)
+
+    with pytest.raises(firewall.FirewallPermissionError):
+        manager._run_command(['netsh'])

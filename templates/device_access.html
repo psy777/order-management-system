@@ -17,6 +17,30 @@
             <p class="max-w-2xl text-slate-600">Approve new devices, manage trusted hardware, and review every attempt to reach FireCoast from your local network.</p>
         </header>
 
+        {% if firewall_status %}
+            {% if firewall_status.requires_admin %}
+                <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    FireCoast couldn’t update the host firewall because administrator permissions are required.
+                    Run FireCoast with elevated privileges or manually allow inbound TCP connections on port {{ firewall_status.port }} so new devices can reach the registration page.
+                    {% if firewall_status.last_error %}
+                        <span class="mt-2 block text-xs text-amber-700/80">Last attempt: {{ firewall_status.last_error }}</span>
+                    {% endif %}
+                </div>
+            {% elif not firewall_status.supported %}
+                <div class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                    This operating system doesn’t support automatic firewall configuration. Add a manual inbound rule for TCP port {{ firewall_status.port }} to allow registrations and trusted devices.
+                    {% if firewall_status.last_error %}
+                        <span class="mt-2 block text-xs text-rose-700/80">Details: {{ firewall_status.last_error }}</span>
+                    {% endif %}
+                </div>
+            {% elif firewall_status.last_error %}
+                <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    FireCoast couldn’t refresh the firewall rules automatically. Check the host firewall configuration for TCP port {{ firewall_status.port }}.
+                    <span class="mt-2 block text-xs text-amber-700/80">{{ firewall_status.last_error }}</span>
+                </div>
+            {% endif %}
+        {% endif %}
+
         <section class="bg-white border border-slate-200 rounded-xl shadow-sm">
             <div class="flex items-center justify-between border-b border-slate-200 px-6 py-4">
                 <div>

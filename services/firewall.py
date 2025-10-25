@@ -21,6 +21,10 @@ class FirewallUnsupportedError(FirewallError):
     """Raised when the current platform or tooling cannot be automated."""
 
 
+class FirewallPermissionError(FirewallError):
+    """Raised when the firewall helper lacks permission to modify rules."""
+
+
 _FIREWALL_LEDGER_FILENAME = "firecoast_firewall.json"
 _RULE_PREFIX = "FireCoastTrusted"
 _REGISTRATION_RULE_PREFIX = "FireCoastRegistration"
@@ -96,10 +100,11 @@ class FirewallManager:
 
         ledger = self._load_ledger()
         port_key = str(port)
-        if self._open_port(port):
-            registration = ledger.setdefault("registration", {})
-            registration[port_key] = True
-            self._save_ledger(ledger)
+        if not self._open_port(port):
+            raise FirewallError(f"Unable to open firewall port {port}.")
+        registration = ledger.setdefault("registration", {})
+        registration[port_key] = True
+        self._save_ledger(ledger)
 
     # -- internal helpers -------------------------------------------------
 
@@ -118,6 +123,8 @@ class FirewallManager:
             return True
         except FirewallUnsupportedError:
             raise
+        except FirewallPermissionError:
+            raise
         except FirewallError as exc:
             if (
                 rule_name
@@ -134,6 +141,8 @@ class FirewallManager:
             self._run_command(command)
             return True
         except FirewallUnsupportedError:
+            raise
+        except FirewallPermissionError:
             raise
         except FirewallError as exc:
             self._logger.warning("Failed to revoke %s for port %s: %s", ip, port, exc)
@@ -245,6 +254,8 @@ class FirewallManager:
             return True
         except FirewallUnsupportedError:
             raise
+        except FirewallPermissionError:
+            raise
         except FirewallError as exc:
             if (
                 self._system == "windows"
@@ -310,6 +321,8 @@ class FirewallManager:
             return True
         except FirewallUnsupportedError:
             raise
+        except FirewallPermissionError:
+            raise
         except FirewallError as exc:
             self._logger.warning("Failed to enable firewall rule %s: %s", rule_name, exc)
             return False
@@ -349,8 +362,20 @@ class FirewallManager:
                 f"Required command '{command[0]}' is not available"
             ) from exc
         except subprocess.CalledProcessError as exc:
-            stderr = exc.stderr.strip() if exc.stderr else str(exc)
-            raise FirewallError(stderr) from exc
+            stderr = exc.stderr or ""
+            stdout = exc.stdout or ""
+            message = (stderr or stdout or str(exc)).strip()
+            lowered = message.lower()
+            permission_signatures = (
+                "access is denied",
+                "requires elevation",
+                "permission denied",
+                "not allowed to",
+                "operation requires elevation",
+            )
+            if any(signature in lowered for signature in permission_signatures):
+                raise FirewallPermissionError(message or "Firewall command requires elevated permissions.") from exc
+            raise FirewallError(message or str(exc)) from exc
 
     def _load_ledger(self) -> dict:
         if not self._ledger_path.exists():

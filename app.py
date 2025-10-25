@@ -108,6 +108,45 @@ _firewall_sync_thread: Optional[Thread] = None
 _firewall_sync_thread_lock = Lock()
 
 
+def _default_firewall_status() -> Dict[str, Any]:
+    return {
+        'supported': True,
+        'requires_admin': False,
+        'last_error': None,
+        'last_success': None,
+        'port': SERVER_PORT,
+    }
+
+
+_firewall_status_lock = Lock()
+_firewall_status: Dict[str, Any] = _default_firewall_status()
+
+
+def _update_firewall_status(**kwargs: Any) -> None:
+    with _firewall_status_lock:
+        _firewall_status.update(kwargs)
+        _firewall_status['port'] = SERVER_PORT
+
+
+def _get_firewall_status() -> Dict[str, Any]:
+    with _firewall_status_lock:
+        snapshot = dict(_firewall_status)
+    snapshot['port'] = SERVER_PORT
+    return snapshot
+
+
+def reset_firewall_status_for_testing() -> None:
+    if not app.config.get('TESTING'):
+        return
+    with _firewall_status_lock:
+        _firewall_status.clear()
+        _firewall_status.update(_default_firewall_status())
+
+
+def get_firewall_status() -> Dict[str, Any]:
+    return _get_firewall_status()
+
+
 def _event_default_serializer(value: Any) -> str:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -840,21 +879,82 @@ def _serialize_device_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+def _firewall_exception_message(exc: Exception, fallback: str) -> str:
+    message = str(exc or '').strip()
+    return message or fallback
+
+
+def _record_firewall_success() -> None:
+    _update_firewall_status(
+        supported=True,
+        requires_admin=False,
+        last_error=None,
+        last_success=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+def _record_firewall_permission_error(exc: Exception) -> None:
+    _update_firewall_status(
+        supported=True,
+        requires_admin=True,
+        last_error=_firewall_exception_message(
+            exc,
+            'Firewall changes require administrator privileges.',
+        ),
+        last_success=None,
+    )
+
+
+def _record_firewall_generic_error(exc: Exception) -> None:
+    _update_firewall_status(
+        supported=True,
+        requires_admin=False,
+        last_error=_firewall_exception_message(
+            exc,
+            'Unable to update host firewall rules.',
+        ),
+        last_success=None,
+    )
+
+
+def _record_firewall_unsupported(exc: Exception) -> None:
+    _update_firewall_status(
+        supported=False,
+        requires_admin=False,
+        last_error=_firewall_exception_message(
+            exc,
+            'Firewall automation is not available on this system.',
+        ),
+        last_success=None,
+    )
+
+
+def _record_firewall_exception(exc: Exception) -> None:
+    if isinstance(exc, firewall_service.FirewallUnsupportedError):
+        _record_firewall_unsupported(exc)
+    elif isinstance(exc, firewall_service.FirewallPermissionError):
+        _record_firewall_permission_error(exc)
+    elif isinstance(exc, firewall_service.FirewallError):
+        _record_firewall_generic_error(exc)
+
+
 def _synchronize_firewall_rules() -> None:
     try:
         manager = firewall_service.get_firewall_manager()
-    except firewall_service.FirewallUnsupportedError:
-        return
     except firewall_service.FirewallError as exc:
+        _record_firewall_exception(exc)
+        if isinstance(exc, firewall_service.FirewallUnsupportedError):
+            return
         if app.logger:
             app.logger.warning('Unable to initialize firewall manager: %s', exc)
         return
 
     try:
         manager.ensure_registration_access(SERVER_PORT)
-    except firewall_service.FirewallUnsupportedError:
-        return
     except firewall_service.FirewallError as exc:
+        _record_firewall_exception(exc)
+        if isinstance(exc, firewall_service.FirewallUnsupportedError):
+            return
         if app.logger:
             app.logger.warning('Failed to ensure registration firewall rule: %s', exc)
         return
@@ -882,11 +982,15 @@ def _synchronize_firewall_rules() -> None:
 
     try:
         manager.reconcile_trusted_ips(ips, port=SERVER_PORT)
-    except firewall_service.FirewallUnsupportedError:
-        return
     except firewall_service.FirewallError as exc:
+        _record_firewall_exception(exc)
+        if isinstance(exc, firewall_service.FirewallUnsupportedError):
+            return
         if app.logger:
             app.logger.warning('Failed to synchronize firewall rules: %s', exc)
+        return
+
+    _record_firewall_success()
 
 
 def _ensure_firewall_sync_loop() -> None:
@@ -6823,6 +6927,7 @@ def render_with_navigation(template_name: str, active_nav: Optional[str] = None,
     context.setdefault('nav_links', get_navigation_shortcuts(settings=settings))
     context.setdefault('active_nav', active_nav)
     context.setdefault('current_device', getattr(g, 'current_device', None))
+    context.setdefault('firewall_status', _get_firewall_status())
     return render_template(template_name, **context)
 
 @app.route('/api/settings', methods=['POST'])

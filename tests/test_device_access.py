@@ -48,6 +48,7 @@ def device_control_environment(tmp_path, monkeypatch):
     monkeypatch.setattr(firecoast_app, 'ensure_data_root', lambda: data_dir)
 
     firecoast_app.init_db()
+    firecoast_app.reset_firewall_status_for_testing()
 
     yield firecoast_app
 
@@ -88,6 +89,53 @@ def test_firewall_sync_opens_registration_port(device_control_environment, firew
     recorded_ips, recorded_port = stub.reconciliations[-1]
     assert recorded_port == firecoast_app.SERVER_PORT
     assert isinstance(recorded_ips, tuple)
+    status = firecoast_app.get_firewall_status()
+    assert status['supported'] is True
+    assert status['requires_admin'] is False
+    assert status['last_error'] is None
+    assert status['last_success']
+
+
+def test_firewall_permission_error_sets_status(device_control_environment, monkeypatch):
+    firecoast_app = device_control_environment
+
+    class PermissionStub(FirewallManagerStub):
+        def ensure_registration_access(self, port):  # noqa: D401 - test helper
+            raise firecoast_app.firewall_service.FirewallPermissionError('Access is denied.')
+
+    stub = PermissionStub()
+    monkeypatch.setattr(firecoast_app.firewall_service, '_manager_instance', None)
+    monkeypatch.setattr(
+        firecoast_app.firewall_service,
+        'get_firewall_manager',
+        lambda: stub,
+    )
+
+    firecoast_app._synchronize_firewall_rules()
+
+    status = firecoast_app.get_firewall_status()
+    assert status['supported'] is True
+    assert status['requires_admin'] is True
+    assert status['last_success'] is None
+    assert 'access is denied' in (status['last_error'] or '').lower()
+
+
+def test_firewall_unsupported_marks_status(device_control_environment, monkeypatch):
+    firecoast_app = device_control_environment
+
+    def raise_unsupported():
+        raise firecoast_app.firewall_service.FirewallUnsupportedError('Unsupported platform')
+
+    monkeypatch.setattr(firecoast_app.firewall_service, '_manager_instance', None)
+    monkeypatch.setattr(firecoast_app.firewall_service, 'get_firewall_manager', raise_unsupported)
+
+    firecoast_app._synchronize_firewall_rules()
+
+    status = firecoast_app.get_firewall_status()
+    assert status['supported'] is False
+    assert status['requires_admin'] is False
+    assert status['last_success'] is None
+    assert 'unsupported platform' in (status['last_error'] or '').lower()
 
 
 def test_new_device_is_redirected_and_logged(device_control_environment, monkeypatch):
