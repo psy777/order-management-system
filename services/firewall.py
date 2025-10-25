@@ -23,6 +23,7 @@ class FirewallUnsupportedError(FirewallError):
 
 _FIREWALL_LEDGER_FILENAME = "firecoast_firewall.json"
 _RULE_PREFIX = "FireCoastTrusted"
+_REGISTRATION_RULE_PREFIX = "FireCoastRegistration"
 
 
 def _normalize_ip(ip: Optional[str]) -> Optional[str]:
@@ -77,6 +78,24 @@ class FirewallManager:
 
         ledger.setdefault("trusted", {})[port_key] = sorted(existing)
         self._save_ledger(ledger)
+
+    def ensure_registration_access(self, port: int) -> None:
+        """Ensure the port is open so new devices can submit registration requests."""
+        if not self._is_supported():
+            raise FirewallUnsupportedError(
+                f"Firewall automation is not supported on platform '{self._system}'."
+            )
+
+        ledger = self._load_ledger()
+        port_key = str(port)
+        already_enabled = bool(ledger.get("registration", {}).get(port_key))
+        if already_enabled:
+            return
+
+        if self._open_port(port):
+            registration = ledger.setdefault("registration", {})
+            registration[port_key] = True
+            self._save_ledger(ledger)
 
     # -- internal helpers -------------------------------------------------
 
@@ -206,6 +225,63 @@ class FirewallManager:
                 ]
         raise FirewallUnsupportedError(
             f"Firewall revoke command is unavailable for platform '{self._system}'."
+        )
+
+    def _open_port(self, port: int) -> bool:
+        try:
+            command = self._build_open_port_command(port)
+            self._run_command(command)
+            return True
+        except FirewallUnsupportedError:
+            raise
+        except FirewallError as exc:
+            self._logger.warning("Failed to open port %s: %s", port, exc)
+            return False
+
+    def _build_open_port_command(self, port: int) -> Sequence[str]:
+        if self._system == "windows":
+            rule_name = f"{_REGISTRATION_RULE_PREFIX}_{port}"
+            return [
+                "netsh",
+                "advfirewall",
+                "firewall",
+                "add",
+                "rule",
+                f"name={rule_name}",
+                "dir=in",
+                "action=allow",
+                f"localport={port}",
+                "protocol=TCP",
+            ]
+        if self._system == "linux":
+            if self._supports_ufw:
+                return [
+                    "ufw",
+                    "--force",
+                    "allow",
+                    "to",
+                    "any",
+                    "port",
+                    str(port),
+                    "proto",
+                    "tcp",
+                    "comment",
+                    _REGISTRATION_RULE_PREFIX,
+                ]
+            if self._supports_iptables:
+                return [
+                    "iptables",
+                    "-I",
+                    "INPUT",
+                    "-p",
+                    "tcp",
+                    "--dport",
+                    str(port),
+                    "-j",
+                    "ACCEPT",
+                ]
+        raise FirewallUnsupportedError(
+            f"Firewall open-port command is unavailable for platform '{self._system}'."
         )
 
     def _run_command(self, command: Sequence[str]) -> None:

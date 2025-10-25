@@ -57,6 +57,10 @@ def device_control_environment(tmp_path, monkeypatch):
 class FirewallManagerStub:
     def __init__(self):
         self.reconciliations = []
+        self.registration_ports = []
+
+    def ensure_registration_access(self, port):
+        self.registration_ports.append(port)
 
     def reconcile_trusted_ips(self, ips, port):
         sorted_ips = tuple(sorted(ips))
@@ -70,6 +74,20 @@ def firewall_manager_stub(device_control_environment, monkeypatch):
     monkeypatch.setattr(firecoast_app.firewall_service, '_manager_instance', None)
     monkeypatch.setattr(firecoast_app.firewall_service, 'get_firewall_manager', lambda: stub)
     return stub
+
+
+def test_firewall_sync_opens_registration_port(device_control_environment, firewall_manager_stub):
+    firecoast_app = device_control_environment
+    stub = firewall_manager_stub
+
+    firecoast_app._synchronize_firewall_rules()
+
+    assert stub.registration_ports
+    assert stub.registration_ports[-1] == firecoast_app.SERVER_PORT
+    assert stub.reconciliations
+    recorded_ips, recorded_port = stub.reconciliations[-1]
+    assert recorded_port == firecoast_app.SERVER_PORT
+    assert isinstance(recorded_ips, tuple)
 
 
 def test_new_device_is_redirected_and_logged(device_control_environment, monkeypatch):
@@ -267,6 +285,8 @@ def test_approving_device_triggers_firewall_sync(device_control_environment, fir
         response = firecoast_app.api_approve_network_device(device_id)
         assert response.status_code == 200
 
+    assert stub.registration_ports
+    assert stub.registration_ports[-1] == firecoast_app.SERVER_PORT
     assert stub.reconciliations
     recorded_ips, recorded_port = stub.reconciliations[-1]
     assert recorded_port == firecoast_app.SERVER_PORT
@@ -309,6 +329,8 @@ def test_blocking_device_removes_firewall_access(device_control_environment, fir
         response = firecoast_app.api_block_network_device(device_id)
         assert response.status_code == 200
 
+    assert stub.registration_ports
+    assert stub.registration_ports[-1] == firecoast_app.SERVER_PORT
     assert stub.reconciliations
     recorded_ips, recorded_port = stub.reconciliations[-1]
     assert recorded_port == firecoast_app.SERVER_PORT
@@ -360,6 +382,8 @@ def test_trusted_device_ip_change_triggers_firewall_sync(device_control_environm
     recorded_ips, recorded_port = stub.reconciliations[-1]
     assert recorded_port == firecoast_app.SERVER_PORT
     assert '192.168.0.200' in recorded_ips
+    assert stub.registration_ports
+    assert stub.registration_ports[-1] == firecoast_app.SERVER_PORT
 
 
 def test_trusted_device_does_not_block_new_device_registration(device_control_environment, monkeypatch):

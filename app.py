@@ -846,6 +846,15 @@ def _synchronize_firewall_rules() -> None:
             app.logger.warning('Unable to initialize firewall manager: %s', exc)
         return
 
+    try:
+        manager.ensure_registration_access(SERVER_PORT)
+    except firewall_service.FirewallUnsupportedError:
+        return
+    except firewall_service.FirewallError as exc:
+        if app.logger:
+            app.logger.warning('Failed to ensure registration firewall rule: %s', exc)
+        return
+
     conn = get_db_connection()
     try:
         cursor = conn.execute(
