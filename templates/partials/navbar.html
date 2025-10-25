@@ -1,8 +1,26 @@
 {% set shortcuts = nav_links or [] %}
 <nav class="bg-slate-900 text-white shadow">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div class="flex h-16 items-center justify-between">
-            <div class="flex items-center space-x-10">
+        <div class="flex h-16 items-center justify-between gap-4">
+            <div class="flex items-center gap-3">
+                <button
+                    type="button"
+                    id="nav-mobile-toggle"
+                    class="inline-flex items-center justify-center rounded-md bg-slate-800/60 p-2 text-slate-200 transition hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-orange-400 md:hidden"
+                    aria-expanded="false"
+                    aria-controls="nav-mobile-panel"
+                >
+                    <span class="sr-only">Toggle navigation</span>
+                    <svg data-icon="menu" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="3" y1="12" x2="21" y2="12" />
+                        <line x1="3" y1="6" x2="21" y2="6" />
+                        <line x1="3" y1="18" x2="21" y2="18" />
+                    </svg>
+                    <svg data-icon="close" xmlns="http://www.w3.org/2000/svg" class="hidden h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                </button>
                 <a href="/dashboard" id="nav-home-link" class="text-lg font-semibold tracking-wide">FireCoast</a>
                 <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
                     {% for link in shortcuts %}
@@ -18,13 +36,37 @@
                     {% endfor %}
                 </div>
             </div>
-            <div class="flex items-center space-x-3 text-sm font-medium">
+            <div class="hidden md:flex items-center space-x-6 text-sm font-medium">
                 {% if current_device %}
-                    <span class="hidden md:inline text-xs uppercase tracking-wide text-slate-400">{{ current_device.display_name }}</span>
+                    <span class="text-xs uppercase tracking-wide text-slate-400">{{ current_device.display_name }}</span>
                 {% endif %}
                 {% set settings_active = active_nav == 'settings' %}
                 <a href="/settings" class="transition {{ 'text-orange-300' if settings_active else 'hover:text-orange-300' }}">Settings</a>
-                <a href="#" id="nav-log-out" class="hover:text-orange-300 transition">Log Out</a>
+                <a href="#" data-role="logout" class="hover:text-orange-300 transition">Log Out</a>
+            </div>
+            {% if current_device %}
+                <span class="md:hidden text-xs font-semibold uppercase tracking-wide text-slate-300">{{ current_device.display_name }}</span>
+            {% endif %}
+        </div>
+    </div>
+    <div id="nav-mobile-panel" class="md:hidden hidden border-t border-slate-800/60 bg-slate-900/95 backdrop-blur">
+        <div class="px-4 py-4 space-y-5 text-sm">
+            <div class="space-y-2">
+                {% for link in shortcuts %}
+                    {% set is_active = active_nav == link.id %}
+                    <a
+                        href="{{ link.href }}"
+                        data-nav-id="{{ link.id }}"
+                        class="block rounded-lg px-3 py-2 font-medium transition {{ 'bg-slate-800/80 text-orange-300' if is_active else 'hover:bg-slate-800/70' }}"
+                        {% if is_active %}aria-current="page"{% endif %}
+                    >
+                        {{ link.label }}
+                    </a>
+                {% endfor %}
+            </div>
+            <div class="space-y-2 border-t border-slate-800/70 pt-3">
+                <a href="/settings" class="block rounded-lg px-3 py-2 font-medium hover:bg-slate-800/70 transition">Settings</a>
+                <a href="#" data-role="logout" class="block rounded-lg px-3 py-2 font-medium hover:bg-slate-800/70 transition">Log Out</a>
             </div>
         </div>
     </div>
@@ -49,8 +91,8 @@
             });
         });
 
-        const logoutLink = document.getElementById('nav-log-out');
-        if (logoutLink) {
+        const logoutLinks = document.querySelectorAll('[data-role="logout"]');
+        logoutLinks.forEach((logoutLink) => {
             logoutLink.addEventListener('click', async (event) => {
                 event.preventDefault();
                 if (window.fireCoastLogout) {
@@ -67,6 +109,43 @@
                 } catch (error) {
                     console.error('Error logging out:', error);
                     alert('Error attempting to log out.');
+                }
+            });
+        });
+
+        const mobileToggle = document.getElementById('nav-mobile-toggle');
+        const mobilePanel = document.getElementById('nav-mobile-panel');
+        if (mobileToggle && mobilePanel) {
+            const menuIcon = mobileToggle.querySelector('[data-icon="menu"]');
+            const closeIcon = mobileToggle.querySelector('[data-icon="close"]');
+            const setMenuState = (isOpen) => {
+                mobileToggle.setAttribute('aria-expanded', String(isOpen));
+                if (isOpen) {
+                    mobilePanel.classList.remove('hidden');
+                    mobilePanel.setAttribute('data-state', 'open');
+                    if (menuIcon) menuIcon.classList.add('hidden');
+                    if (closeIcon) closeIcon.classList.remove('hidden');
+                } else {
+                    mobilePanel.classList.add('hidden');
+                    mobilePanel.setAttribute('data-state', 'closed');
+                    if (menuIcon) menuIcon.classList.remove('hidden');
+                    if (closeIcon) closeIcon.classList.add('hidden');
+                }
+            };
+            setMenuState(false);
+
+            mobileToggle.addEventListener('click', () => {
+                const isOpen = mobilePanel.getAttribute('data-state') === 'open';
+                setMenuState(!isOpen);
+            });
+
+            mobilePanel.querySelectorAll('a').forEach((link) => {
+                link.addEventListener('click', () => setMenuState(false));
+            });
+
+            window.addEventListener('resize', () => {
+                if (window.innerWidth >= 768) {
+                    setMenuState(false);
                 }
             });
         }

@@ -3,322 +3,457 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Manage Contacts - Order Manager</title>
-    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <title>Manage Contacts - FireNotes OMS</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png">
     <link rel="icon" href="/favicon.ico" type="image/x-icon">
     <link rel="manifest" href="/assets/site.webmanifest">
-    <style>
-        .back-to-settings-button {
-            display: inline-block;
-            padding: 0.5rem 1rem;
-            color: #dd6b20; /* text-orange-600 */
-            font-weight: 600; /* font-semibold */
-            text-decoration: none;
-            margin-bottom: 1rem;
-        }
-        .back-to-settings-button:hover {
-            color: #c05621; /* text-orange-800 */
-        }
-        .modal-lg { max-width: 800px; }
-        .action-buttons button { margin-left: 5px; }
-        textarea { resize: vertical; }
-    </style>
+    <link rel="stylesheet" href="/assets/css/styles.css">
 </head>
 <body class="bg-slate-50 min-h-screen font-sans">
     {% include 'partials/navbar.html' %}
-    <div class="container mt-6">
-        <a href="/settings" target="_top" class="back-to-settings-button">&larr; Back to Settings</a>
-        <h1>Manage Contacts</h1>
-        <hr>
+
+    <main class="page-main page-main--wide space-y-10">
+        <header class="page-header">
+            <a href="/settings" class="inline-flex items-center gap-2 text-sm font-semibold text-orange-600 hover:text-orange-700 transition">
+                <span aria-hidden="true">&larr;</span>
+                Back to Settings
+            </a>
+            <div class="space-y-2">
+                <h1 class="text-3xl font-bold text-slate-800">Manage Contacts</h1>
+                <p class="max-w-2xl text-slate-600">Maintain a clean directory for your workspace. Add or edit contacts, keep billing details up to date, and import records in bulk.</p>
+            </div>
+        </header>
+
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
-                {% for category, message in messages %}
-                    <div class="alert alert-{{ category }}">{{ message }}</div>
-                {% endfor %}
+                <div class="space-y-3">
+                    {% for category, message in messages %}
+                        <div class="rounded-lg border px-4 py-3 text-sm {{ 'border-amber-300 bg-amber-50 text-amber-900' if category == 'warning' else 'border-emerald-200 bg-emerald-50 text-emerald-700' }}">
+                            {{ message }}
+                        </div>
+                    {% endfor %}
+                </div>
             {% endif %}
         {% endwith %}
 
-        <button type="button" class="btn btn-primary mb-3" data-toggle="modal" data-target="#contactModal" onclick="prepareAddContactModal()">
-            Add New Contact
-        </button>
-
-        <hr>
-        <h5>Import Contacts from CSV</h5>
-        <form id="importCsvForm" action="/api/import-contacts-csv" method="post" enctype="multipart/form-data" class="form-inline mb-3">
-            <div class="form-group mr-2">
-                <input type="file" class="form-control-file" name="csv_file" id="csv_file" accept=".csv" required>
-            </div>
-            <button type="submit" class="btn btn-secondary">Import CSV</button>
-        </form>
-        <hr>
-
-        <table class="table table-striped">
-            <thead>
-                <tr>
-                    <th>Company Name</th>
-                    <th>Contact Name</th>
-                    <th>Email</th>
-                    <th>Phone</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody id="contactsTableBody">
-                <!-- Contacts will be loaded here by JavaScript -->
-            </tbody>
-        </table>
-    </div>
-
-    <!-- Contact Modal (Add/Edit) -->
-    <div class="modal fade" id="contactModal" tabindex="-1" role="dialog" aria-labelledby="contactModalLabel" aria-hidden="true">
-        <div class="modal-dialog modal-lg" role="document">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="contactModalLabel">Add Contact</h5>
-                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                        <span aria-hidden="true">&times;</span>
-                    </button>
+        <section class="page-section space-y-6">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div class="space-y-1">
+                    <h2 class="text-xl font-semibold text-slate-800">Workspace Directory</h2>
+                    <p class="text-sm text-slate-500">Contacts appear throughout FireCoast for quick shipping, billing, and @mention lookups.</p>
                 </div>
-                <div class="modal-body">
-                    <form id="contactForm">
-                        <input type="hidden" id="contactId">
-                        <div class="form-group">
-                            <label for="contactCompanyName">Company Name</label>
-                            <input type="text" class="form-control" id="contactCompanyName" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="contactContactName">Contact Name</label>
-                            <input type="text" class="form-control" id="contactContactName">
-                        </div>
-                        <div class="form-group">
-                            <label for="contactEmail">Email</label>
-                            <input type="email" class="form-control" id="contactEmail">
-                        </div>
-                        <div class="form-group">
-                            <label for="contactPhone">Phone</label>
-                            <input type="tel" class="form-control" id="contactPhone">
-                        </div>
-                        <div class="form-row">
-                            <div class="form-group col-md-12">
-                                <label for="contactShippingAddress">Shipping Address</label>
-                                <input type="text" class="form-control" id="contactShippingAddress">
-                            </div>
-                        </div>
-                        <div class="form-row">
-                            <div class="form-group col-md-6">
-                                <label for="contactShippingCity">City</label>
-                                <input type="text" class="form-control" id="contactShippingCity">
-                            </div>
-                            <div class="form-group col-md-4">
-                                <label for="contactShippingState">State</label>
-                                <input type="text" class="form-control" id="contactShippingState">
-                            </div>
-                            <div class="form-group col-md-2">
-                                <label for="contactShippingZipCode">Zip Code</label>
-                                <input type="text" class="form-control" id="contactShippingZipCode">
-                            </div>
-                        </div>
-                        <div class="form-check mb-3">
-                            <input class="form-check-input" type="checkbox" id="sameAsShipping" onchange="toggleBillingAddress(this.checked)">
-                            <label class="form-check-label" for="sameAsShipping">
-                                Billing address is the same as shipping
-                            </label>
-                        </div>
-                        <div id="billingAddressSection">
-                            <div class="form-row">
-                                <div class="form-group col-md-12">
-                                    <label for="contactBillingAddress">Billing Address</label>
-                                    <input type="text" class="form-control" id="contactBillingAddress">
-                                </div>
-                            </div>
-                        <div class="form-row">
-                            <div class="form-group col-md-6">
-                                <label for="contactBillingCity">City</label>
-                                <input type="text" class="form-control" id="contactBillingCity">
-                            </div>
-                            <div class="form-group col-md-4">
-                                <label for="contactBillingState">State</label>
-                                <input type="text" class="form-control" id="contactBillingState">
-                            </div>
-                            <div class="form-group col-md-2">
-                                <label for="contactBillingZipCode">Zip Code</label>
-                                <input type="text" class="form-control" id="contactBillingZipCode">
-                            </div>
-                        </div>
-                        </div>
+                <div class="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:items-center">
+                    <form id="importCsvForm" action="/api/import-contacts-csv" method="post" enctype="multipart/form-data" class="flex flex-col gap-2 rounded-lg border border-dashed border-slate-300 bg-white px-3 py-2 text-sm text-slate-500 sm:flex-row sm:items-center sm:gap-3">
+                        <label for="csv_file" class="font-semibold text-slate-600">Import CSV</label>
+                        <input type="file" class="w-full rounded-md border border-slate-200 px-3 py-1.5 text-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-200" name="csv_file" id="csv_file" accept=".csv" required>
+                        <button type="submit" class="self-start rounded-md border border-slate-300 px-3 py-1.5 font-semibold text-slate-700 transition hover:bg-slate-100 sm:self-auto">Upload</button>
                     </form>
+                    <button id="addContactButton" class="button-primary">+ New Contact</button>
                 </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
-                    <button type="button" class="btn btn-primary" onclick="saveContact()">Save Contact</button>
+            </div>
+
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th scope="col">Company</th>
+                            <th scope="col">Contact</th>
+                            <th scope="col">Email</th>
+                            <th scope="col">Phone</th>
+                            <th scope="col" class="text-right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="contactsTableBody"></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <div id="contactToast" class="toast" role="status" aria-live="assertive"></div>
+
+    <div id="contactModal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="contactModalTitle">
+        <div class="modal-backdrop"></div>
+        <div class="modal-shell">
+            <div class="modal-panel">
+                <div class="modal-panel__header flex items-center justify-between">
+                    <h2 id="contactModalTitle" class="modal-panel__title">New Contact</h2>
+                    <button type="button" id="closeContactModal" class="modal-close" aria-label="Close">&times;</button>
+                </div>
+                <form id="contactForm" class="modal-panel__body space-y-5">
+                    <input type="hidden" id="contactId">
+                    <div class="field-group field-group--two">
+                        <div class="field">
+                            <label for="contactCompanyName" class="field__label">Company Name</label>
+                            <input type="text" id="contactCompanyName" required>
+                        </div>
+                        <div class="field">
+                            <label for="contactContactName" class="field__label">Contact Name</label>
+                            <input type="text" id="contactContactName">
+                        </div>
+                    </div>
+                    <div class="field-group field-group--two">
+                        <div class="field">
+                            <label for="contactEmail" class="field__label">Email</label>
+                            <input type="email" id="contactEmail">
+                        </div>
+                        <div class="field">
+                            <label for="contactPhone" class="field__label">Phone</label>
+                            <input type="tel" id="contactPhone" placeholder="(555) 123 4567">
+                        </div>
+                    </div>
+                    <div class="space-y-4">
+                        <div class="field">
+                            <span class="field__label">Shipping Address</span>
+                            <input type="text" id="contactShippingAddress" placeholder="Street">
+                        </div>
+                        <div class="field-group field-group--three">
+                            <div class="field">
+                                <label for="contactShippingCity" class="field__label">City</label>
+                                <input type="text" id="contactShippingCity">
+                            </div>
+                            <div class="field">
+                                <label for="contactShippingState" class="field__label">State</label>
+                                <input type="text" id="contactShippingState">
+                            </div>
+                            <div class="field">
+                                <label for="contactShippingZipCode" class="field__label">Zip Code</label>
+                                <input type="text" id="contactShippingZipCode">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex items-start gap-3">
+                        <input type="checkbox" id="sameAsShipping" class="mt-1 h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500">
+                        <label for="sameAsShipping" class="text-sm text-slate-600">Billing address is the same as shipping</label>
+                    </div>
+                    <div id="billingAddressSection" class="space-y-4">
+                        <div class="field">
+                            <span class="field__label">Billing Address</span>
+                            <input type="text" id="contactBillingAddress" placeholder="Street">
+                        </div>
+                        <div class="field-group field-group--three">
+                            <div class="field">
+                                <label for="contactBillingCity" class="field__label">City</label>
+                                <input type="text" id="contactBillingCity">
+                            </div>
+                            <div class="field">
+                                <label for="contactBillingState" class="field__label">State</label>
+                                <input type="text" id="contactBillingState">
+                            </div>
+                            <div class="field">
+                                <label for="contactBillingZipCode" class="field__label">Zip Code</label>
+                                <input type="text" id="contactBillingZipCode">
+                            </div>
+                        </div>
+                    </div>
+                    <p id="contactMeta" class="text-xs text-slate-400"></p>
+                </form>
+                <div class="modal-panel__footer">
+                    <button type="button" id="cancelContactModal" class="button-secondary">Cancel</button>
+                    <button type="submit" form="contactForm" id="saveContactButton" class="button-primary">Save Contact</button>
                 </div>
             </div>
         </div>
     </div>
 
-    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.5.4/dist/umd/popper.min.js"></script>
-    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
     <script>
-        $(document).ready(function() {
-            loadContacts();
-        });
+        document.addEventListener('DOMContentLoaded', () => {
+            const tableBody = document.getElementById('contactsTableBody');
+            const toast = document.getElementById('contactToast');
+            const modal = document.getElementById('contactModal');
+            const addButton = document.getElementById('addContactButton');
+            const closeModalButton = document.getElementById('closeContactModal');
+            const cancelModalButton = document.getElementById('cancelContactModal');
+            const contactForm = document.getElementById('contactForm');
+            const contactIdInput = document.getElementById('contactId');
+            const contactModalTitle = document.getElementById('contactModalTitle');
+            const contactMeta = document.getElementById('contactMeta');
+            const sameAsShippingCheckbox = document.getElementById('sameAsShipping');
+            const billingSection = document.getElementById('billingAddressSection');
 
-        let allContacts = []; // To store contacts for editing
+            const companyInput = document.getElementById('contactCompanyName');
+            const contactNameInput = document.getElementById('contactContactName');
+            const emailInput = document.getElementById('contactEmail');
+            const phoneInput = document.getElementById('contactPhone');
+            const shippingAddressInput = document.getElementById('contactShippingAddress');
+            const shippingCityInput = document.getElementById('contactShippingCity');
+            const shippingStateInput = document.getElementById('contactShippingState');
+            const shippingZipInput = document.getElementById('contactShippingZipCode');
+            const billingAddressInput = document.getElementById('contactBillingAddress');
+            const billingCityInput = document.getElementById('contactBillingCity');
+            const billingStateInput = document.getElementById('contactBillingState');
+            const billingZipInput = document.getElementById('contactBillingZipCode');
 
-        function loadContacts() {
-            fetch('/api/contacts')
-                .then(response => response.json())
-                .then(data => {
-                    allContacts = data; // Store for later use
-                    const tableBody = $('#contactsTableBody');
-                    tableBody.empty(); 
-                    allContacts.forEach(contact => {
-                        const row = `
-                            <tr>
-                                <td>${contact.companyName || 'N/A'}</td>
-                                <td>${contact.contactName || 'N/A'}</td>
-                                <td>${contact.email || 'N/A'}</td>
-                                <td>${contact.phone || 'N/A'}</td>
-                                <td class="action-buttons">
-                                    <button class="btn btn-sm btn-info" onclick="prepareEditContactModal('${contact.id}')">Edit</button>
-                                    <button class="btn btn-sm btn-danger" onclick="deleteContact('${contact.id}')">Delete</button>
-                                </td>
-                            </tr>
-                        `;
-                        tableBody.append(row);
-                    });
-                })
-                .catch(error => console.error('Error loading contacts:', error));
-        }
+            let contacts = [];
+            let toastTimer = null;
 
-        function prepareAddContactModal() {
-            $('#contactModalLabel').text('Add New Contact');
-            $('#contactForm')[0].reset();
-            $('#contactId').val('');
-        }
+            const escapeHtml = (value = '') => String(value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
 
-        function prepareEditContactModal(contactId) {
-            const contact = allContacts.find(c => c.id === contactId);
-            if (contact) {
-                $('#contactModalLabel').text('Edit Contact');
-                $('#contactId').val(contact.id);
-                $('#contactCompanyName').val(contact.companyName || '');
-                $('#contactContactName').val(contact.contactName || '');
-                $('#contactEmail').val(contact.email || '');
-                $('#contactPhone').val(contact.phone || '');
-                $('#contactShippingAddress').val(contact.shippingAddress || '');
-                $('#contactShippingCity').val(contact.shippingCity || '');
-                $('#contactShippingState').val(contact.shippingState || '');
-                $('#contactShippingZipCode').val(contact.shippingZipCode || '');
-
-                const sameAsShipping = contact.shippingAddress === contact.billingAddress &&
-                                     contact.shippingCity === contact.billingCity &&
-                                     contact.shippingState === contact.billingState &&
-                                     contact.shippingZipCode === contact.billingZipCode;
-
-                $('#sameAsShipping').prop('checked', sameAsShipping);
-                toggleBillingAddress(sameAsShipping);
-
-                if (!sameAsShipping) {
-                    $('#contactBillingAddress').val(contact.billingAddress || '');
-                    $('#contactBillingCity').val(contact.billingCity || '');
-                    $('#contactBillingState').val(contact.billingState || '');
-                    $('#contactBillingZipCode').val(contact.billingZipCode || '');
-                }
-
-                $('#contactModal').modal('show');
-            } else {
-                alert('Contact not found for editing.');
-            }
-        }
-
-        function saveContact() {
-            const contactId = $('#contactId').val();
-            const sameAsShipping = $('#sameAsShipping').is(':checked');
-            const contactData = {
-                companyName: $('#contactCompanyName').val().trim(),
-                contactName: $('#contactContactName').val().trim(),
-                email: $('#contactEmail').val().trim(),
-                phone: $('#contactPhone').val().trim(),
-                shippingAddress: $('#contactShippingAddress').val().trim(),
-                shippingCity: $('#contactShippingCity').val().trim(),
-                shippingState: $('#contactShippingState').val().trim(),
-                shippingZipCode: $('#contactShippingZipCode').val().trim(),
-                billingAddress: sameAsShipping ? $('#contactShippingAddress').val().trim() : $('#contactBillingAddress').val().trim(),
-                billingCity: sameAsShipping ? $('#contactShippingCity').val().trim() : $('#contactBillingCity').val().trim(),
-                billingState: sameAsShipping ? $('#contactShippingState').val().trim() : $('#contactBillingState').val().trim(),
-                billingZipCode: sameAsShipping ? $('#contactShippingZipCode').val().trim() : $('#contactBillingZipCode').val().trim(),
+            const showToast = (message, tone = 'success') => {
+                if (!toast || !message) return;
+                toast.textContent = message;
+                toast.dataset.visible = 'true';
+                toast.dataset.tone = tone;
+                clearTimeout(toastTimer);
+                toastTimer = setTimeout(() => {
+                    toast.dataset.visible = 'false';
+                }, 3200);
             };
 
-            if (!contactData.companyName) {
-                alert('Company Name is required.');
-                return;
-            }
-
-            let url = '/api/contacts';
-            let method = 'POST';
-
-            if (contactId) { // If contactId exists, it's an update (PUT)
-                url = `/api/contacts/${contactId}`;
-                method = 'PUT';
-                contactData.id = contactId; 
-            }
-
-            fetch(url, {
-                method: method,
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(contactData),
-            })
-            .then(response => response.json().then(data => ({ status: response.status, body: data })))
-            .then(result => {
-                if (result.status === 200 || result.status === 201) {
-                    $('#contactModal').modal('hide');
-                    loadContacts(); 
-                    alert(result.body.message || 'Contact saved successfully!');
-                } else {
-                    alert('Error saving contact: ' + (result.body.message || 'Unknown error'));
+            const closeToast = () => {
+                if (toast) {
+                    toast.dataset.visible = 'false';
                 }
-            })
-            .catch(error => {
-                console.error('Error saving contact:', error);
-                alert('Error saving contact. See console for details.');
-            });
-        }
-
-        function deleteContact(contactId) {
-            if (!confirm('Are you sure you want to delete this contact? This action cannot be undone.')) {
-                return;
-            }
-
-            fetch(`/api/contacts/${contactId}`, {
-                method: 'DELETE',
-            })
-            .then(response => response.json().then(data => ({ status: response.status, body: data })))
-            .then(result => {
-                if (result.status === 200) {
-                    loadContacts(); 
-                    alert(result.body.message || 'Contact deleted successfully!');
-                } else {
-                    alert('Error deleting contact: ' + (result.body.message || 'Unknown error'));
+                if (toastTimer) {
+                    clearTimeout(toastTimer);
+                    toastTimer = null;
                 }
-            })
-            .catch(error => {
-                console.error('Error deleting contact:', error);
-                alert('Error deleting contact. See console for details.');
-            });
-        }
+            };
 
-        function toggleBillingAddress(isSame) {
-            if (isSame) {
-                $('#billingAddressSection').hide();
-            } else {
-                $('#billingAddressSection').show();
-            }
-        }
+            const clearForm = () => {
+                contactForm.reset();
+                contactIdInput.value = '';
+                contactMeta.textContent = '';
+                sameAsShippingCheckbox.checked = false;
+                billingSection.classList.remove('hidden');
+            };
+
+            const openModal = () => {
+                modal.classList.remove('hidden');
+                document.body.style.overflow = 'hidden';
+            };
+
+            const closeModal = () => {
+                modal.classList.add('hidden');
+                document.body.style.overflow = '';
+            };
+
+            const populateTable = () => {
+                tableBody.innerHTML = '';
+                if (!contacts.length) {
+                    const emptyRow = document.createElement('tr');
+                    emptyRow.innerHTML = `<td colspan="5" class="table-empty-state">No contacts yet. Add your first contact above.</td>`;
+                    tableBody.appendChild(emptyRow);
+                    return;
+                }
+                contacts.forEach((contact) => {
+                    const safeCompany = contact && contact.companyName ? escapeHtml(contact.companyName) : 'Untitled Company';
+                    const safeHandle = contact && contact.handle ? `<div class="text-xs uppercase tracking-wide text-slate-400">${escapeHtml(contact.handle)}</div>` : '';
+                    const safeContactName = contact && contact.contactName
+                        ? escapeHtml(contact.contactName)
+                        : '<span class="text-slate-400">Not specified</span>';
+                    const safeEmail = contact && contact.email
+                        ? escapeHtml(contact.email)
+                        : '<span class="text-slate-400">No email</span>';
+                    const safePhone = contact && contact.phone
+                        ? escapeHtml(contact.phone)
+                        : '<span class="text-slate-400">No phone</span>';
+
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>
+                            <div class="font-semibold text-slate-800">${safeCompany}</div>
+                            ${safeHandle}
+                        </td>
+                        <td class="text-slate-600">${safeContactName}</td>
+                        <td class="text-slate-600">${safeEmail}</td>
+                        <td class="text-slate-600">${safePhone}</td>
+                        <td class="text-right">
+                            <div class="inline-flex items-center gap-3">
+                                <button type="button" class="text-sm font-semibold text-orange-600 hover:text-orange-700" data-action="edit" data-id="">Edit</button>
+                                <button type="button" class="text-sm text-slate-400 hover:text-red-600" data-action="delete" data-id="">Delete</button>
+                            </div>
+                        </td>
+                    `;
+                    const identifier = contact && contact.id != null ? String(contact.id) : '';
+                    const editButton = row.querySelector('[data-action="edit"]');
+                    const deleteButton = row.querySelector('[data-action="delete"]');
+                    if (editButton) editButton.dataset.id = identifier;
+                    if (deleteButton) deleteButton.dataset.id = identifier;
+                    tableBody.appendChild(row);
+                });
+            };
+
+            const loadContacts = async () => {
+                try {
+                    const response = await fetch('/api/contacts');
+                    if (!response.ok) throw new Error('Failed to load contacts');
+                    contacts = await response.json();
+                    populateTable();
+                } catch (error) {
+                    console.error('Error loading contacts:', error);
+                    tableBody.innerHTML = `<tr><td colspan="5" class="table-empty-state text-red-500">Unable to load contacts right now.</td></tr>`;
+                }
+            };
+
+            const fillFormForContact = (contact) => {
+                contactIdInput.value = contact.id || '';
+                companyInput.value = contact.companyName || '';
+                contactNameInput.value = contact.contactName || '';
+                emailInput.value = contact.email || '';
+                phoneInput.value = contact.phone || '';
+                shippingAddressInput.value = contact.shippingAddress || '';
+                shippingCityInput.value = contact.shippingCity || '';
+                shippingStateInput.value = contact.shippingState || '';
+                shippingZipInput.value = contact.shippingZipCode || '';
+                const same = contact.shippingAddress === contact.billingAddress &&
+                    contact.shippingCity === contact.billingCity &&
+                    contact.shippingState === contact.billingState &&
+                    contact.shippingZipCode === contact.billingZipCode;
+                sameAsShippingCheckbox.checked = Boolean(same);
+                billingSection.classList.toggle('hidden', same);
+                billingAddressInput.value = contact.billingAddress || '';
+                billingCityInput.value = contact.billingCity || '';
+                billingStateInput.value = contact.billingState || '';
+                billingZipInput.value = contact.billingZipCode || '';
+                contactMeta.textContent = contact.id ? `Contact ID: ${contact.id}` : '';
+            };
+
+            const prepareForNewContact = () => {
+                clearForm();
+                contactModalTitle.textContent = 'New Contact';
+                contactMeta.textContent = '';
+                openModal();
+                companyInput.focus();
+            };
+
+            const prepareForEdit = (contactId) => {
+                const contact = contacts.find((entry) => entry.id === contactId);
+                if (!contact) {
+                    showToast('Unable to find that contact.', 'error');
+                    return;
+                }
+                clearForm();
+                contactModalTitle.textContent = 'Edit Contact';
+                fillFormForContact(contact);
+                openModal();
+                companyInput.focus();
+            };
+
+            const buildPayload = () => {
+                const same = sameAsShippingCheckbox.checked;
+                const payload = {
+                    companyName: companyInput.value.trim(),
+                    contactName: contactNameInput.value.trim(),
+                    email: emailInput.value.trim(),
+                    phone: phoneInput.value.trim(),
+                    shippingAddress: shippingAddressInput.value.trim(),
+                    shippingCity: shippingCityInput.value.trim(),
+                    shippingState: shippingStateInput.value.trim(),
+                    shippingZipCode: shippingZipInput.value.trim(),
+                    billingAddress: same ? shippingAddressInput.value.trim() : billingAddressInput.value.trim(),
+                    billingCity: same ? shippingCityInput.value.trim() : billingCityInput.value.trim(),
+                    billingState: same ? shippingStateInput.value.trim() : billingStateInput.value.trim(),
+                    billingZipCode: same ? shippingZipInput.value.trim() : billingZipInput.value.trim(),
+                };
+                const id = contactIdInput.value.trim();
+                if (!payload.companyName) {
+                    throw new Error('Company name is required');
+                }
+                if (id) {
+                    payload.id = id;
+                }
+                return payload;
+            };
+
+            const saveContact = async () => {
+                let payload;
+                try {
+                    payload = buildPayload();
+                } catch (error) {
+                    showToast(error.message || 'Unable to save contact.', 'error');
+                    return;
+                }
+                const isUpdate = Boolean(payload.id);
+                const url = isUpdate ? `/api/contacts/${payload.id}` : '/api/contacts';
+                const method = isUpdate ? 'PUT' : 'POST';
+                try {
+                    const response = await fetch(url, {
+                        method,
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload),
+                    });
+                    const result = await response.json();
+                    if (!response.ok) {
+                        throw new Error(result.message || 'Unable to save contact.');
+                    }
+                    showToast(result.message || 'Contact saved successfully.');
+                    closeModal();
+                    await loadContacts();
+                } catch (error) {
+                    console.error('Error saving contact:', error);
+                    showToast(error.message || 'Unable to save contact.', 'error');
+                }
+            };
+
+            const deleteContact = async (contactId) => {
+                if (!contactId) return;
+                const confirmed = window.confirm('Delete this contact? This action cannot be undone.');
+                if (!confirmed) {
+                    return;
+                }
+                try {
+                    const response = await fetch(`/api/contacts/${contactId}`, { method: 'DELETE' });
+                    const result = await response.json();
+                    if (!response.ok) {
+                        throw new Error(result.message || 'Unable to delete contact.');
+                    }
+                    showToast(result.message || 'Contact deleted.');
+                    await loadContacts();
+                } catch (error) {
+                    console.error('Error deleting contact:', error);
+                    showToast(error.message || 'Unable to delete contact.', 'error');
+                }
+            };
+
+            sameAsShippingCheckbox.addEventListener('change', () => {
+                billingSection.classList.toggle('hidden', sameAsShippingCheckbox.checked);
+            });
+
+            addButton.addEventListener('click', prepareForNewContact);
+            closeModalButton.addEventListener('click', () => {
+                closeModal();
+                closeToast();
+            });
+            cancelModalButton.addEventListener('click', () => {
+                closeModal();
+            });
+
+            document.addEventListener('keydown', (event) => {
+                if (event.key === 'Escape' && !modal.classList.contains('hidden')) {
+                    closeModal();
+                }
+            });
+
+            modal.addEventListener('click', (event) => {
+                if (event.target === modal || event.target.classList.contains('modal-backdrop')) {
+                    closeModal();
+                }
+            });
+
+            contactForm.addEventListener('submit', (event) => {
+                event.preventDefault();
+                saveContact();
+            });
+
+            tableBody.addEventListener('click', (event) => {
+                const button = event.target.closest('button[data-action]');
+                if (!button) return;
+                const { action, id } = button.dataset;
+                if (action === 'edit') {
+                    prepareForEdit(id);
+                } else if (action === 'delete') {
+                    deleteContact(id);
+                }
+            });
+
+            loadContacts();
+        });
     </script>
 </body>
 </html>
