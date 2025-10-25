@@ -44,6 +44,15 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 
+echo [FireCoast] Ensuring firewall access for new device registration...
+"%PYTHON_EXE%" scripts\ensure_firewall_registration.py
+set "FIRECOAST_FIREWALL_EXIT=%ERRORLEVEL%"
+if "%FIRECOAST_FIREWALL_EXIT%"=="2" (
+    echo [FireCoast] Firewall automation requires Administrator privileges. FireCoast will continue to launch, but automatic device approval may be blocked until access is granted.
+) else if "%FIRECOAST_FIREWALL_EXIT%"=="3" (
+    echo [FireCoast] Warning: Automatic firewall configuration failed. Review the message above and adjust the firewall manually if needed.
+)
+
 echo [FireCoast] Starting the application...
 python app.py
 

@@ -17,6 +17,30 @@
             <p class="max-w-2xl text-slate-600">Approve new devices, manage trusted hardware, and review every attempt to reach FireCoast from your local network.</p>
         </header>
 
+        {% if firewall_status %}
+            {% if firewall_status.requires_admin %}
+                <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    FireCoast couldn’t update the host firewall because administrator permissions are required.
+                    Run FireCoast with elevated privileges or manually allow inbound TCP connections on port {{ firewall_status.port }} so new devices can reach the registration page.
+                    {% if firewall_status.last_error %}
+                        <span class="mt-2 block text-xs text-amber-700/80">Last attempt: {{ firewall_status.last_error }}</span>
+                    {% endif %}
+                </div>
+            {% elif not firewall_status.supported %}
+                <div class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                    This operating system doesn’t support automatic firewall configuration. Add a manual inbound rule for TCP port {{ firewall_status.port }} to allow registrations and trusted devices.
+                    {% if firewall_status.last_error %}
+                        <span class="mt-2 block text-xs text-rose-700/80">Details: {{ firewall_status.last_error }}</span>
+                    {% endif %}
+                </div>
+            {% elif firewall_status.last_error %}
+                <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    FireCoast couldn’t refresh the firewall rules automatically. Check the host firewall configuration for TCP port {{ firewall_status.port }}.
+                    <span class="mt-2 block text-xs text-amber-700/80">{{ firewall_status.last_error }}</span>
+                </div>
+            {% endif %}
+        {% endif %}
+
         <section class="bg-white border border-slate-200 rounded-xl shadow-sm">
             <div class="flex items-center justify-between border-b border-slate-200 px-6 py-4">
                 <div>
@@ -56,7 +80,7 @@
                         <tr>
                             <th scope="col" class="px-4 py-3">When</th>
                             <th scope="col" class="px-4 py-3">Device</th>
-                            <th scope="col" class="px-4 py-3">MAC</th>
+                            <th scope="col" class="px-4 py-3">Device Key</th>
                             <th scope="col" class="px-4 py-3">IP</th>
                             <th scope="col" class="px-4 py-3">Status</th>
                             <th scope="col" class="px-4 py-3">Endpoint</th>
@@ -94,6 +118,32 @@
             return stamp.toLocaleString();
         };
 
+        const formatTokenPreview = (token) => {
+            if (!token || typeof token !== 'string') {
+                return '';
+            }
+            const trimmed = token.trim();
+            if (!trimmed) {
+                return '';
+            }
+            if (trimmed.length <= 12) {
+                return trimmed;
+            }
+            return `${trimmed.slice(0, 6)}…${trimmed.slice(-4)}`;
+        };
+
+        const getDeviceKeyLabel = (device) => {
+            if (!device) {
+                return '—';
+            }
+            const token = device.device_token || device.deviceToken || device.device_key || '';
+            const preview = formatTokenPreview(token);
+            if (preview) {
+                return preview;
+            }
+            return device.mac_address || device.macAddress || '—';
+        };
+
         const buildStatusBadge = (status) => {
             const normalized = String(status || '').toLowerCase();
             const config = statusLabels[normalized] || { label: normalized || 'Unknown', classes: 'bg-slate-200 text-slate-700' };
@@ -112,7 +162,7 @@
             nameCell.className = 'whitespace-nowrap px-4 py-4 align-top';
             nameCell.innerHTML = `
                 <div class="font-semibold text-slate-800">${device.display_name || 'Unnamed Device'}</div>
-                <div class="text-xs text-slate-500">MAC: ${device.mac_address || '—'}</div>
+                <div class="text-xs text-slate-500">Key: ${getDeviceKeyLabel(device)}</div>
             `;
 
             const ownerCell = document.createElement('td');
@@ -199,7 +249,7 @@
                 row.innerHTML = `
                     <td class="whitespace-nowrap px-4 py-3 text-slate-700">${formatDateTime(log.created_at)}</td>
                     <td class="px-4 py-3 text-slate-600">${log.device_id || '—'}</td>
-                    <td class="px-4 py-3 text-slate-600">${log.mac_address || '—'}</td>
+                    <td class="px-4 py-3 text-slate-600">${getDeviceKeyLabel(log)}</td>
                     <td class="px-4 py-3 text-slate-600">${log.ip_address || '—'}</td>
                     <td class="px-4 py-3 text-slate-600">${(log.status || '').toUpperCase()}</td>
                     <td class="px-4 py-3 text-slate-500">${log.endpoint || '/'}</td>

@@ -136,10 +136,18 @@ def test_chat_message_includes_ping_metadata(configure_chat_environment):
     try:
         conn.execute(
             """
-            INSERT INTO network_devices (id, mac_address, owner_name, device_name, status, permissions)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO network_devices (id, access_token, mac_address, owner_name, device_name, status, permissions)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            ('device-1', 'aa:bb:cc:dd:ee:ff', 'Jamie', 'Jamie Laptop', firenotes_app.DEVICE_STATUS_TRUSTED, '[]'),
+            (
+                'device-1',
+                'token-device-1',
+                'aa:bb:cc:dd:ee:ff',
+                'Jamie',
+                'Jamie Laptop',
+                firenotes_app.DEVICE_STATUS_TRUSTED,
+                '[]',
+            ),
         )
         conn.commit()
     finally:
@@ -211,17 +219,33 @@ def test_participants_endpoint_returns_trusted_devices(configure_chat_environmen
     try:
         conn.execute(
             """
-            INSERT INTO network_devices (id, mac_address, owner_name, device_name, status, permissions)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO network_devices (id, access_token, mac_address, owner_name, device_name, status, permissions)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            ('trusted-1', '00:11:22:33:44:55', 'Taylor', 'Taylor Tablet', firenotes_app.DEVICE_STATUS_TRUSTED, '[]'),
+            (
+                'trusted-1',
+                'token-trusted-1',
+                '00:11:22:33:44:55',
+                'Taylor',
+                'Taylor Tablet',
+                firenotes_app.DEVICE_STATUS_TRUSTED,
+                '[]',
+            ),
         )
         conn.execute(
             """
-            INSERT INTO network_devices (id, mac_address, owner_name, device_name, status, permissions)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO network_devices (id, access_token, mac_address, owner_name, device_name, status, permissions)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            ('blocked-1', '00:aa:bb:cc:dd:ee', 'Sam', 'Sam Phone', firenotes_app.DEVICE_STATUS_BLOCKED, '[]'),
+            (
+                'blocked-1',
+                'token-blocked-1',
+                '00:aa:bb:cc:dd:ee',
+                'Sam',
+                'Sam Phone',
+                firenotes_app.DEVICE_STATUS_BLOCKED,
+                '[]',
+            ),
         )
         conn.commit()
     finally:

@@ -23,6 +23,8 @@ import time
 import json
 import csv
 import pytz
+import secrets
+import hashlib
 from typing import Any, Dict, List, Optional, Set, Tuple
 import ipaddress
 
@@ -62,12 +64,29 @@ from services.records import (
     reset_record_service,
     sync_record_mentions,
 )
+from services import firewall as firewall_service
 
 # Load environment variables from .env file
 load_dotenv()
 
+
+def _resolve_server_port() -> int:
+    """Determine the port the HTTP server should bind to."""
+    for candidate in (os.getenv('FIRECOAST_PORT'), os.getenv('PORT')):
+        if not candidate:
+            continue
+        try:
+            value = int(candidate)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    return 5002
+
+
 # --- App Initialization ---
 RESTART_DELAY_SECONDS = 1.0
+SERVER_PORT = _resolve_server_port()
 
 app = Flask(__name__, template_folder='templates')
 app.config['JSON_SORT_KEYS'] = False
@@ -83,6 +102,49 @@ _typing_states: Dict[str, Dict[str, Dict[str, Any]]] = defaultdict(dict)
 
 _TYPING_TTL_SECONDS = 8.0
 MAX_CHAT_PING_RECIPIENTS = 8
+
+_FIREWALL_SYNC_INTERVAL_SECONDS = 60
+_firewall_sync_thread: Optional[Thread] = None
+_firewall_sync_thread_lock = Lock()
+
+
+def _default_firewall_status() -> Dict[str, Any]:
+    return {
+        'supported': True,
+        'requires_admin': False,
+        'last_error': None,
+        'last_success': None,
+        'port': SERVER_PORT,
+    }
+
+
+_firewall_status_lock = Lock()
+_firewall_status: Dict[str, Any] = _default_firewall_status()
+
+
+def _update_firewall_status(**kwargs: Any) -> None:
+    with _firewall_status_lock:
+        _firewall_status.update(kwargs)
+        _firewall_status['port'] = SERVER_PORT
+
+
+def _get_firewall_status() -> Dict[str, Any]:
+    with _firewall_status_lock:
+        snapshot = dict(_firewall_status)
+    snapshot['port'] = SERVER_PORT
+    return snapshot
+
+
+def reset_firewall_status_for_testing() -> None:
+    if not app.config.get('TESTING'):
+        return
+    with _firewall_status_lock:
+        _firewall_status.clear()
+        _firewall_status.update(_default_firewall_status())
+
+
+def get_firewall_status() -> Dict[str, Any]:
+    return _get_firewall_status()
 
 
 def _event_default_serializer(value: Any) -> str:
@@ -175,7 +237,7 @@ def _resolve_chat_ping_targets(
         placeholders = ','.join('?' for _ in filtered)
         cursor = conn.execute(
             f"""
-            SELECT id, mac_address, owner_name, device_name, status, permissions, last_ip, last_seen
+            SELECT id, access_token, mac_address, owner_name, device_name, status, permissions, last_ip, last_seen
             FROM network_devices
             WHERE id IN ({placeholders})
             """,
@@ -391,24 +453,60 @@ def _enforce_device_access_gate():
         g.current_device = _build_host_device_context(ip_address)
         return None
 
-    mac_address = _resolve_mac_address_for_ip(ip_address)
-    if mac_address:
-        session['pending_mac'] = mac_address
-    elif session.get('pending_mac'):
-        mac_address = session.get('pending_mac')
-
+    device_token = _get_session_device_token()
+    session[PENDING_DEVICE_TOKEN_SESSION_KEY] = device_token
     session['pending_ip'] = ip_address
 
     conn = get_db_connection()
     device_row: Optional[Dict[str, Any]] = None
+    created_new_device = False
     log_status = 'new'
+    previous_ip: Optional[str] = None
+    firewall_sync_needed = False
     try:
-        device_row = _fetch_device_by_mac(conn, mac_address)
+        device_row = _fetch_device_by_token(conn, device_token)
+        if not device_row:
+            placeholder_identifier = _derive_device_identifier_from_token(device_token)
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO network_devices (
+                    id,
+                    access_token,
+                    mac_address,
+                    owner_name,
+                    device_name,
+                    status,
+                    permissions,
+                    last_ip,
+                    last_seen
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    device_token,
+                    placeholder_identifier,
+                    None,
+                    None,
+                    DEVICE_STATUS_PENDING,
+                    json.dumps([]),
+                    ip_address,
+                ),
+            )
+            device_row = _fetch_device_by_token(conn, device_token)
+            if device_row:
+                created_new_device = True
         if device_row:
+            previous_ip = (device_row.get('last_ip') or '').strip() or None
             current_status = device_row.get('status') or DEVICE_STATUS_PENDING
-            log_status = current_status
+            log_status = 'new' if created_new_device else current_status
             _update_device_last_seen(conn, device_row.get('id'), ip_address)
-        _log_device_access(conn, device_row, mac_address, ip_address, request.path, log_status)
+            if current_status == DEVICE_STATUS_TRUSTED:
+                normalized_ip = (ip_address or '').strip()
+                if normalized_ip and normalized_ip != (previous_ip or ''):
+                    firewall_sync_needed = True
+            if ip_address:
+                device_row['last_ip'] = ip_address
+        _log_device_access(conn, device_row, device_token, ip_address, request.path, log_status)
         conn.commit()
     except sqlite3.Error:
         conn.rollback()
@@ -416,26 +514,41 @@ def _enforce_device_access_gate():
     finally:
         conn.close()
 
+    if firewall_sync_needed:
+        try:
+            _synchronize_firewall_rules()
+        except Exception:  # pragma: no cover - best effort logging
+            if app.logger:
+                app.logger.warning('Failed to refresh firewall rules after IP change', exc_info=True)
+
     if not device_row:
         return redirect(url_for('device_register'))
 
     device_context = _build_device_context(device_row)
     status = device_context.get('status') or DEVICE_STATUS_PENDING
+    owner_details_provided = bool(device_context.get('owner_name'))
+    device_details_provided = bool(device_context.get('device_name'))
+    if created_new_device or (
+        status == DEVICE_STATUS_PENDING and not (owner_details_provided and device_details_provided)
+    ):
+        session[PENDING_DEVICE_TOKEN_SESSION_KEY] = device_context.get('device_token')
+        session['pending_ip'] = ip_address
+        return redirect(url_for('device_register'))
     if status == DEVICE_STATUS_BLOCKED:
         g.current_device = device_context
-        session['pending_mac'] = device_context.get('mac_address')
+        session[PENDING_DEVICE_TOKEN_SESSION_KEY] = device_context.get('device_token')
         return (
             render_template(
                 'device_blocked.html',
                 device=device_context,
-                mac_address=device_context.get('mac_address'),
+                device_key=device_context.get('device_token'),
                 ip_address=ip_address,
             ),
             403,
         )
     if status == DEVICE_STATUS_PENDING:
         g.current_device = device_context
-        session['pending_mac'] = device_context.get('mac_address')
+        session[PENDING_DEVICE_TOKEN_SESSION_KEY] = device_context.get('device_token')
         return redirect(url_for('device_pending'))
     if status != DEVICE_STATUS_TRUSTED:
         return redirect(url_for('device_register'))
@@ -536,9 +649,8 @@ PUBLIC_PATH_PREFIXES = (
     '/device/blocked',
 )
 
-MAC_ADDRESS_PATTERN = re.compile(r'^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$')
-
-_HOST_MAC_CACHE: Optional[str] = None
+DEVICE_TOKEN_SESSION_KEY = 'device_token'
+PENDING_DEVICE_TOKEN_SESSION_KEY = 'pending_device_token'
 
 UPLOAD_FOLDER = DATA_DIR
 UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
@@ -578,31 +690,6 @@ def write_password_entries(entries):
     write_json_file(PASSWORDS_FILE, {"entries": entries})
 
 
-def _normalize_mac_address(candidate: Optional[str]) -> Optional[str]:
-    if not candidate:
-        return None
-    normalized = candidate.strip().lower().replace('-', ':')
-    return normalized if MAC_ADDRESS_PATTERN.match(normalized) else None
-
-
-def _get_host_mac_address() -> Optional[str]:
-    global _HOST_MAC_CACHE
-    if _HOST_MAC_CACHE:
-        return _HOST_MAC_CACHE
-    try:
-        node_value = uuid.getnode()
-    except Exception:  # pragma: no cover - best effort system lookup
-        node_value = None
-    if not node_value:
-        return None
-    mac_parts = [f"{(node_value >> offset) & 0xFF:02x}" for offset in range(40, -1, -8)]
-    candidate = ':'.join(mac_parts)
-    normalized = _normalize_mac_address(candidate)
-    if normalized:
-        _HOST_MAC_CACHE = normalized
-    return normalized
-
-
 def _get_request_ip_address() -> str:
     forwarded_for = request.headers.get('X-Forwarded-For')
     if forwarded_for:
@@ -613,104 +700,41 @@ def _get_request_ip_address() -> str:
     return remote.strip()
 
 
-def _prime_neighbor_table_for_ip(ip_address: str) -> None:
-    ping_variants: List[List[str]] = [
-        ['ping', '-c', '1', '-W', '1', ip_address],
-        ['ping', '-c', '1', ip_address],
-        ['ping', '-n', '1', ip_address],
-    ]
-    for command in ping_variants:
-        try:
-            subprocess.run(  # noqa: S603, S607 - local network inspection
-                command,
-                capture_output=True,
-                text=True,
-                timeout=1.5,
-            )
-        except (FileNotFoundError, subprocess.SubprocessError):
-            continue
-        else:
-            break
+def _generate_device_token() -> str:
+    return secrets.token_urlsafe(32)
 
 
-def _extract_mac_from_neighbor_output(output: str, ip_address: str) -> Optional[str]:
-    if not output or not ip_address:
+def _is_valid_device_token(candidate: Any) -> bool:
+    if not isinstance(candidate, str):
+        return False
+    return bool(candidate.strip())
+
+
+def _get_session_device_token(create_if_missing: bool = True) -> Optional[str]:
+    existing = session.get(DEVICE_TOKEN_SESSION_KEY)
+    if _is_valid_device_token(existing):
+        return str(existing)
+    if not create_if_missing:
         return None
-    normalized_ip = ip_address.strip().lower()
-    if not normalized_ip:
-        return None
-    ip_boundary_pattern = re.compile(
-        rf'(^|[^0-9a-f:.]){re.escape(normalized_ip)}([^0-9a-f:.]|$)',
-        re.IGNORECASE,
-    )
-    mac_pattern = re.compile(r'([0-9a-f]{2}[:-]){5}[0-9a-f]{2}', re.IGNORECASE)
-    for raw_line in output.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        if not ip_boundary_pattern.search(line.lower()):
-            continue
-        match = mac_pattern.search(line)
-        if match:
-            normalized = _normalize_mac_address(match.group(0))
-            if normalized:
-                return normalized
-    return None
+    token = _generate_device_token()
+    session[DEVICE_TOKEN_SESSION_KEY] = token
+    session.modified = True
+    return token
 
 
-def _resolve_mac_address_for_ip(ip_address: Optional[str]) -> Optional[str]:
-    if not ip_address:
-        return None
-    try:
-        parsed_ip = ipaddress.ip_address(ip_address)
-    except ValueError:
-        return None
+def _format_device_token_preview(token: Optional[str]) -> str:
+    if not _is_valid_device_token(token):
+        return 'Device'
+    clean = str(token)
+    if len(clean) <= 10:
+        return clean
+    return f"{clean[:6]}…{clean[-4:]}"
 
-    if isinstance(parsed_ip, ipaddress.IPv6Address) and parsed_ip.ipv4_mapped:
-        parsed_ip = parsed_ip.ipv4_mapped
-        ip_address = str(parsed_ip)
-    if parsed_ip.is_loopback:
-        return _get_host_mac_address()
-    if parsed_ip.is_unspecified:
-        return None
-    commands = [
-        ['ip', 'neigh', 'show', ip_address],
-        ['arp', '-n', ip_address],
-    ]
 
-    def run_commands(command_list: List[List[str]]) -> Optional[str]:
-        for command in command_list:
-            try:
-                completed = subprocess.run(  # noqa: S603, S607 - local network inspection
-                    command,
-                    capture_output=True,
-                    text=True,
-                    timeout=1.5,
-                )
-            except (FileNotFoundError, subprocess.SubprocessError):
-                continue
-            output = ' '.join(filter(None, [completed.stdout, completed.stderr]))
-            mac_address = _extract_mac_from_neighbor_output(output, ip_address)
-            if mac_address:
-                return mac_address
-        return None
-
-    mac_address = run_commands(commands)
-    if mac_address:
-        return mac_address
-
-    _prime_neighbor_table_for_ip(ip_address)
-
-    fallback_commands = commands + [
-        ['ip', 'neigh', 'show'],
-        ['ip', 'neigh'],
-        ['arp', '-an'],
-    ]
-
-    mac_address = run_commands(fallback_commands)
-    if mac_address:
-        return mac_address
-    return None
+def _derive_device_identifier_from_token(token: str) -> str:
+    digest = hashlib.sha1(token.encode('utf-8')).hexdigest()
+    mac_like = ':'.join(digest[index:index + 2] for index in range(0, 12, 2))
+    return f'token:{mac_like}'
 
 
 def _get_device_permissions_list(raw_permissions: Any) -> List[str]:
@@ -741,12 +765,15 @@ def _build_device_context(row: Dict[str, Any]) -> Dict[str, Any]:
     permissions_list = _get_device_permissions_list(row.get('permissions'))
     owner_name = (row.get('owner_name') or '').strip()
     device_name = (row.get('device_name') or '').strip()
+    device_token = row.get('access_token') or row.get('device_token')
     mac_address = row.get('mac_address')
-    display_name = owner_name or device_name or (mac_address[-5:] if mac_address else 'Device')
+    display_name = owner_name or device_name or _format_device_token_preview(device_token)
     chat_author = owner_name or device_name or 'user'
     return {
         'id': row.get('id'),
         'mac_address': mac_address,
+        'device_token': device_token,
+        'device_token_preview': _format_device_token_preview(device_token),
         'owner_name': owner_name,
         'device_name': device_name,
         'status': row.get('status') or DEVICE_STATUS_PENDING,
@@ -761,11 +788,13 @@ def _build_device_context(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _build_host_device_context(ip_address: str) -> Dict[str, Any]:
-    mac_address = _get_host_mac_address()
     display_name = 'FireCoast Admin'
+    device_token = 'host-device'
     return {
         'id': 'host',
-        'mac_address': mac_address,
+        'mac_address': None,
+        'device_token': device_token,
+        'device_token_preview': _format_device_token_preview(device_token),
         'owner_name': 'Administrator',
         'device_name': socket.gethostname(),
         'status': DEVICE_STATUS_HOST,
@@ -779,16 +808,16 @@ def _build_host_device_context(ip_address: str) -> Dict[str, Any]:
     }
 
 
-def _fetch_device_by_mac(conn: sqlite3.Connection, mac_address: Optional[str]) -> Optional[Dict[str, Any]]:
-    if not mac_address:
+def _fetch_device_by_token(conn: sqlite3.Connection, device_token: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not device_token:
         return None
     cursor = conn.execute(
         """
-        SELECT id, mac_address, owner_name, device_name, status, permissions, last_ip, last_seen, created_at, updated_at
+        SELECT id, access_token, mac_address, owner_name, device_name, status, permissions, last_ip, last_seen, created_at, updated_at
         FROM network_devices
-        WHERE mac_address = ?
+        WHERE access_token = ?
         """,
-        (mac_address,),
+        (device_token,),
     )
     row = cursor.fetchone()
     return dict(row) if row else None
@@ -799,7 +828,7 @@ def _fetch_device_by_id(conn: sqlite3.Connection, device_id: str) -> Optional[Di
         return None
     cursor = conn.execute(
         """
-        SELECT id, mac_address, owner_name, device_name, status, permissions, last_ip, last_seen, created_at, updated_at
+        SELECT id, access_token, mac_address, owner_name, device_name, status, permissions, last_ip, last_seen, created_at, updated_at
         FROM network_devices
         WHERE id = ?
         """,
@@ -821,19 +850,20 @@ def _update_device_last_seen(conn: sqlite3.Connection, device_id: Optional[str],
 def _log_device_access(
     conn: sqlite3.Connection,
     device_row: Optional[Dict[str, Any]],
-    mac_address: Optional[str],
+    device_token: Optional[str],
     ip_address: Optional[str],
     endpoint: str,
     status: str,
 ) -> None:
     conn.execute(
         """
-        INSERT INTO device_access_logs (device_id, mac_address, ip_address, user_agent, endpoint, status)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO device_access_logs (device_id, device_token, mac_address, ip_address, user_agent, endpoint, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         (
             device_row.get('id') if device_row else None,
-            mac_address,
+            device_token,
+            device_row.get('mac_address') if device_row else None,
             ip_address,
             (request.headers.get('User-Agent') or '')[:512],
             endpoint[:255] if endpoint else '',
@@ -849,10 +879,166 @@ def _serialize_device_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+def _firewall_exception_message(exc: Exception, fallback: str) -> str:
+    message = str(exc or '').strip()
+    return message or fallback
+
+
+def _record_firewall_success() -> None:
+    _update_firewall_status(
+        supported=True,
+        requires_admin=False,
+        last_error=None,
+        last_success=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+def _record_firewall_permission_error(exc: Exception) -> None:
+    _update_firewall_status(
+        supported=True,
+        requires_admin=True,
+        last_error=_firewall_exception_message(
+            exc,
+            'Firewall changes require administrator privileges.',
+        ),
+        last_success=None,
+    )
+
+
+def _record_firewall_generic_error(exc: Exception) -> None:
+    _update_firewall_status(
+        supported=True,
+        requires_admin=False,
+        last_error=_firewall_exception_message(
+            exc,
+            'Unable to update host firewall rules.',
+        ),
+        last_success=None,
+    )
+
+
+def _record_firewall_unsupported(exc: Exception) -> None:
+    _update_firewall_status(
+        supported=False,
+        requires_admin=False,
+        last_error=_firewall_exception_message(
+            exc,
+            'Firewall automation is not available on this system.',
+        ),
+        last_success=None,
+    )
+
+
+def _record_firewall_exception(exc: Exception) -> None:
+    if isinstance(exc, firewall_service.FirewallUnsupportedError):
+        _record_firewall_unsupported(exc)
+    elif isinstance(exc, firewall_service.FirewallPermissionError):
+        _record_firewall_permission_error(exc)
+    elif isinstance(exc, firewall_service.FirewallError):
+        _record_firewall_generic_error(exc)
+
+
+def _synchronize_firewall_rules() -> None:
+    try:
+        manager = firewall_service.get_firewall_manager()
+    except firewall_service.FirewallError as exc:
+        _record_firewall_exception(exc)
+        if isinstance(exc, firewall_service.FirewallUnsupportedError):
+            return
+        if app.logger:
+            app.logger.warning('Unable to initialize firewall manager: %s', exc)
+        return
+
+    try:
+        manager.ensure_registration_access(SERVER_PORT)
+    except firewall_service.FirewallError as exc:
+        _record_firewall_exception(exc)
+        if isinstance(exc, firewall_service.FirewallUnsupportedError):
+            return
+        if app.logger:
+            app.logger.warning('Failed to ensure registration firewall rule: %s', exc)
+        return
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.execute(
+            """
+            SELECT last_ip
+            FROM network_devices
+            WHERE status = ? AND last_ip IS NOT NULL
+            """,
+            (DEVICE_STATUS_TRUSTED,),
+        )
+        ips: List[str] = []
+        for row in cursor.fetchall():
+            raw_ip = row['last_ip']
+            if not raw_ip:
+                continue
+            normalized = str(raw_ip).strip()
+            if normalized:
+                ips.append(normalized)
+    finally:
+        conn.close()
+
+    try:
+        manager.reconcile_trusted_ips(ips, port=SERVER_PORT)
+    except firewall_service.FirewallError as exc:
+        _record_firewall_exception(exc)
+        if isinstance(exc, firewall_service.FirewallUnsupportedError):
+            return
+        if app.logger:
+            app.logger.warning('Failed to synchronize firewall rules: %s', exc)
+        return
+
+    _record_firewall_success()
+
+
+def _ensure_firewall_sync_loop() -> None:
+    if app.config.get('TESTING'):
+        return
+    global _firewall_sync_thread
+    with _firewall_sync_thread_lock:
+        if _firewall_sync_thread and _firewall_sync_thread.is_alive():
+            return
+
+        def _firewall_sync_worker() -> None:
+            while True:
+                time.sleep(_FIREWALL_SYNC_INTERVAL_SECONDS)
+                try:
+                    _synchronize_firewall_rules()
+                except Exception as exc:  # pragma: no cover - defensive logging
+                    if app.logger:
+                        app.logger.warning('Background firewall sync failed: %s', exc)
+
+        thread = Thread(
+            target=_firewall_sync_worker,
+            name='firecoast-firewall-sync',
+            daemon=True,
+        )
+        _firewall_sync_thread = thread
+        thread.start()
+
+
+def _prepare_firewall_background_sync() -> None:
+    if app.config.get('TESTING'):
+        return
+    try:
+        _synchronize_firewall_rules()
+    except Exception as exc:  # pragma: no cover - defensive logging
+        if app.logger:
+            app.logger.warning('Failed to pre-sync firewall rules: %s', exc)
+    try:
+        _ensure_firewall_sync_loop()
+    except Exception as exc:  # pragma: no cover - defensive logging
+        if app.logger:
+            app.logger.warning('Failed to start firewall sync loop: %s', exc)
+
+
 def _serialize_access_log_row(row: sqlite3.Row) -> Dict[str, Any]:
     return {
         'id': row['id'],
         'device_id': row['device_id'],
+        'device_token': row['device_token'],
         'mac_address': row['mac_address'],
         'ip_address': row['ip_address'],
         'user_agent': row['user_agent'],
@@ -911,12 +1097,12 @@ def get_available_nav_shortcuts() -> List[Dict[str, Any]]:
     return [dict(NAV_SHORTCUT_REGISTRY[key]) for key, _ in NAV_SHORTCUT_CATALOG]
 
 
-def _lookup_session_device(mac_address: Optional[str]) -> Optional[Dict[str, Any]]:
-    if not mac_address:
+def _lookup_session_device(device_token: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not device_token:
         return None
     conn = get_db_connection()
     try:
-        return _fetch_device_by_mac(conn, mac_address)
+        return _fetch_device_by_token(conn, device_token)
     finally:
         conn.close()
 
@@ -924,20 +1110,30 @@ def _lookup_session_device(mac_address: Optional[str]) -> Optional[Dict[str, Any
 @app.route('/device/register', methods=['GET', 'POST'])
 def device_register():
     ip_address = session.get('pending_ip') or _get_request_ip_address()
-    mac_address = session.get('pending_mac') or _resolve_mac_address_for_ip(ip_address)
-    if mac_address:
-        session['pending_mac'] = mac_address
+    device_token = session.get(PENDING_DEVICE_TOKEN_SESSION_KEY) or _get_session_device_token()
+    session[PENDING_DEVICE_TOKEN_SESSION_KEY] = device_token
     session['pending_ip'] = ip_address
 
-    existing_device = _lookup_session_device(mac_address)
+    existing_device = _lookup_session_device(device_token)
+    device_context = _build_device_context(existing_device) if existing_device else None
+    existing_owner_name = (existing_device.get('owner_name') or '').strip() if existing_device else ''
+    existing_device_name = (existing_device.get('device_name') or '').strip() if existing_device else ''
+
     if existing_device:
         status = existing_device.get('status') or DEVICE_STATUS_PENDING
+        owner_details_provided = bool(existing_owner_name)
+        device_details_provided = bool(existing_device_name)
         if status == DEVICE_STATUS_TRUSTED:
-            g.current_device = _build_device_context(existing_device)
+            g.current_device = device_context
             return redirect(url_for('dashboard_page'))
         if status == DEVICE_STATUS_BLOCKED:
             return redirect(url_for('device_blocked'))
-        if status == DEVICE_STATUS_PENDING and request.method == 'GET':
+        if (
+            status == DEVICE_STATUS_PENDING
+            and request.method == 'GET'
+            and owner_details_provided
+            and device_details_provided
+        ):
             return redirect(url_for('device_pending'))
 
     error_message: Optional[str] = None
@@ -946,15 +1142,13 @@ def device_register():
         device_name = (request.form.get('device_name') or request.form.get('deviceName') or '').strip()
         if not owner_name or not device_name:
             error_message = 'Please provide both your name and a device label so the admin can recognize you.'
-        elif not mac_address:
-            error_message = 'Unable to determine your device address. Contact the administrator.'
         else:
             conn = get_db_connection()
             try:
-                current_row = _fetch_device_by_mac(conn, mac_address)
+                current_row = _fetch_device_by_token(conn, device_token)
                 if current_row and (current_row.get('status') or DEVICE_STATUS_PENDING) == DEVICE_STATUS_BLOCKED:
                     conn.close()
-                    session['pending_mac'] = mac_address
+                    session[PENDING_DEVICE_TOKEN_SESSION_KEY] = device_token
                     return redirect(url_for('device_blocked'))
                 if current_row:
                     conn.execute(
@@ -972,10 +1166,12 @@ def device_register():
                         ),
                     )
                 else:
+                    placeholder_identifier = _derive_device_identifier_from_token(device_token)
                     conn.execute(
                         """
                         INSERT INTO network_devices (
                             id,
+                            access_token,
                             mac_address,
                             owner_name,
                             device_name,
@@ -983,11 +1179,12 @@ def device_register():
                             permissions,
                             last_ip,
                             last_seen
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                         """,
                         (
                             str(uuid.uuid4()),
-                            mac_address,
+                            device_token,
+                            placeholder_identifier,
                             owner_name or None,
                             device_name or None,
                             DEVICE_STATUS_PENDING,
@@ -996,7 +1193,7 @@ def device_register():
                         ),
                     )
                 conn.commit()
-                session['pending_mac'] = mac_address
+                session[PENDING_DEVICE_TOKEN_SESSION_KEY] = device_token
                 session['pending_ip'] = ip_address
                 flash('Access request submitted for review.', 'info')
                 return redirect(url_for('device_pending'))
@@ -1006,19 +1203,28 @@ def device_register():
             finally:
                 conn.close()
 
+    submitted_owner_name = (request.form.get('owner_name') or request.form.get('ownerName') or '').strip()
+    submitted_device_name = (request.form.get('device_name') or request.form.get('deviceName') or '').strip()
+
+    form_owner_name = submitted_owner_name or existing_owner_name
+    form_device_name = submitted_device_name or existing_device_name
+
     return render_template(
         'device_register.html',
-        mac_address=mac_address,
+        device_key=device_token,
         ip_address=ip_address,
         error=error_message,
+        device=device_context,
+        form_owner_name=form_owner_name,
+        form_device_name=form_device_name,
     )
 
 
 @app.route('/device/pending')
 def device_pending():
-    mac_address = session.get('pending_mac')
+    device_token = session.get(PENDING_DEVICE_TOKEN_SESSION_KEY)
     ip_address = session.get('pending_ip') or _get_request_ip_address()
-    device_row = _lookup_session_device(mac_address)
+    device_row = _lookup_session_device(device_token)
     if device_row:
         status = device_row.get('status') or DEVICE_STATUS_PENDING
         if status == DEVICE_STATUS_TRUSTED:
@@ -1028,7 +1234,7 @@ def device_pending():
             return redirect(url_for('device_blocked'))
     return render_template(
         'device_pending.html',
-        mac_address=mac_address,
+        device_key=device_token,
         ip_address=ip_address,
         device=_build_device_context(device_row) if device_row else None,
     )
@@ -1036,15 +1242,15 @@ def device_pending():
 
 @app.route('/device/blocked')
 def device_blocked():
-    mac_address = session.get('pending_mac')
+    device_token = session.get(PENDING_DEVICE_TOKEN_SESSION_KEY)
     ip_address = session.get('pending_ip') or _get_request_ip_address()
-    device_row = _lookup_session_device(mac_address)
+    device_row = _lookup_session_device(device_token)
     context = _build_device_context(device_row) if device_row else None
     status_code = 403 if context else 400
     return (
         render_template(
             'device_blocked.html',
-            mac_address=mac_address,
+            device_key=device_token,
             ip_address=ip_address,
             device=context,
         ),
@@ -1069,7 +1275,7 @@ def api_list_network_devices():
     try:
         cursor = conn.execute(
             """
-            SELECT id, mac_address, owner_name, device_name, status, permissions, last_ip, last_seen, created_at, updated_at
+            SELECT id, access_token, mac_address, owner_name, device_name, status, permissions, last_ip, last_seen, created_at, updated_at
             FROM network_devices
             ORDER BY datetime(created_at) DESC
             """
@@ -1087,6 +1293,7 @@ def api_list_device_logs():
         return guard
     device_id = (request.args.get('device_id') or request.args.get('deviceId') or '').strip()
     mac_address = (request.args.get('mac') or '').strip().lower()
+    device_token_filter = (request.args.get('token') or request.args.get('device_token') or request.args.get('deviceToken') or '').strip()
     limit_param = request.args.get('limit') or request.args.get('pageSize')
     try:
         limit_value = int(limit_param) if limit_param else 50
@@ -1101,9 +1308,12 @@ def api_list_device_logs():
     if mac_address:
         conditions.append('LOWER(mac_address) = ?')
         params.append(mac_address)
+    if device_token_filter:
+        conditions.append('device_token = ?')
+        params.append(device_token_filter)
     where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ''
     query = f"""
-        SELECT id, device_id, mac_address, ip_address, user_agent, endpoint, status, created_at
+        SELECT id, device_id, device_token, mac_address, ip_address, user_agent, endpoint, status, created_at
         FROM device_access_logs
         {where_clause}
         ORDER BY datetime(created_at) DESC, id DESC
@@ -1172,6 +1382,8 @@ def api_update_network_device(device_id: str):
     updated, error = _update_device_record(device_id, payload)
     if error:
         return error
+    if updated:
+        _synchronize_firewall_rules()
     return jsonify({'device': _serialize_device_row(updated) if updated else None})
 
 
@@ -1185,6 +1397,8 @@ def api_approve_network_device(device_id: str):
     updated, error = _update_device_record(device_id, payload)
     if error:
         return error
+    if updated:
+        _synchronize_firewall_rules()
     return jsonify({'device': _serialize_device_row(updated) if updated else None})
 
 
@@ -1198,6 +1412,8 @@ def api_block_network_device(device_id: str):
     updated, error = _update_device_record(device_id, payload)
     if error:
         return error
+    if updated:
+        _synchronize_firewall_rules()
     return jsonify({'device': _serialize_device_row(updated) if updated else None})
 
 def _fetch_attachments_for_logs(cursor, log_ids: List[int]) -> Dict[int, List[Dict[str, Any]]]:
@@ -6711,6 +6927,7 @@ def render_with_navigation(template_name: str, active_nav: Optional[str] = None,
     context.setdefault('nav_links', get_navigation_shortcuts(settings=settings))
     context.setdefault('active_nav', active_nav)
     context.setdefault('current_device', getattr(g, 'current_device', None))
+    context.setdefault('firewall_status', _get_firewall_status())
     return render_template(template_name, **context)
 
 @app.route('/api/settings', methods=['POST'])
@@ -7018,7 +7235,7 @@ def api_firenotes_participants():
     try:
         cursor = conn.execute(
             """
-            SELECT id, mac_address, owner_name, device_name, status, permissions, last_ip, last_seen
+            SELECT id, access_token, mac_address, owner_name, device_name, status, permissions, last_ip, last_seen
             FROM network_devices
             WHERE status = ?
             ORDER BY LOWER(COALESCE(owner_name, '')) ASC,
@@ -7136,7 +7353,7 @@ def api_firenotes_chat():
             display_author = (device_context.get('display_name') or author or 'user').strip() or 'user'
             metadata_payload.setdefault('display_author', display_author)
             metadata_payload.setdefault('device_id', device_context.get('id'))
-            metadata_payload.setdefault('device_mac', device_context.get('mac_address'))
+            metadata_payload.setdefault('device_token', device_context.get('device_token'))
             metadata_payload.setdefault('device_name', device_context.get('device_name'))
             metadata_payload.setdefault('owner_name', device_context.get('owner_name'))
             metadata_payload.setdefault('actor_role', 'user')
@@ -7509,7 +7726,7 @@ def home():
 def shutdown(): Timer(0.1,lambda:os._exit(0)).start(); return "Shutdown initiated.",200
 
 def open_browser():
-    webbrowser.open_new("http://127.0.0.1:5002/")
+    webbrowser.open_new(f"http://127.0.0.1:{SERVER_PORT}/")
 
 
 def _get_local_network_address() -> str:
@@ -7526,17 +7743,18 @@ def is_port_in_use(port):
         return s.connect_ex(('127.0.0.1', port)) == 0
 
 def main():
-    PORT = 5002
-    if is_port_in_use(PORT):
-        print(f"Port {PORT} is already in use. Opening browser to existing instance.")
+    port = SERVER_PORT
+    if is_port_in_use(port):
+        print(f"Port {port} is already in use. Opening browser to existing instance.")
         open_browser()
         sys.exit(0)
     else:
-        print(f"Port {PORT} is free. Starting new server.")
+        print(f"Port {port} is free. Starting new server.")
         Timer(1, open_browser).start()
         network_ip = _get_local_network_address()
-        print(f"FireCoast available on the local network at http://{network_ip}:{PORT}")
-        app.run(host='0.0.0.0', port=PORT, debug=False)
+        print(f"FireCoast available on the local network at http://{network_ip}:{port}")
+        _prepare_firewall_background_sync()
+        app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
 
 if __name__ == '__main__':
     init_db()

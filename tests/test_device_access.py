@@ -2,7 +2,6 @@ import json
 import pathlib
 import sys
 import uuid
-from types import SimpleNamespace
 
 import pytest
 
@@ -49,38 +48,187 @@ def device_control_environment(tmp_path, monkeypatch):
     monkeypatch.setattr(firecoast_app, 'ensure_data_root', lambda: data_dir)
 
     firecoast_app.init_db()
+    firecoast_app.reset_firewall_status_for_testing()
 
     yield firecoast_app
 
     firecoast_app._db_bootstrapped = False
 
 
+class FirewallManagerStub:
+    def __init__(self):
+        self.reconciliations = []
+        self.registration_ports = []
+
+    def ensure_registration_access(self, port):
+        self.registration_ports.append(port)
+
+    def reconcile_trusted_ips(self, ips, port):
+        sorted_ips = tuple(sorted(ips))
+        self.reconciliations.append((sorted_ips, port))
+
+
+@pytest.fixture
+def firewall_manager_stub(device_control_environment, monkeypatch):
+    firecoast_app = device_control_environment
+    stub = FirewallManagerStub()
+    monkeypatch.setattr(firecoast_app.firewall_service, '_manager_instance', None)
+    monkeypatch.setattr(firecoast_app.firewall_service, 'get_firewall_manager', lambda: stub)
+    return stub
+
+
+def test_firewall_sync_opens_registration_port(device_control_environment, firewall_manager_stub):
+    firecoast_app = device_control_environment
+    stub = firewall_manager_stub
+
+    firecoast_app._synchronize_firewall_rules()
+
+    assert stub.registration_ports
+    assert stub.registration_ports[-1] == firecoast_app.SERVER_PORT
+    assert stub.reconciliations
+    recorded_ips, recorded_port = stub.reconciliations[-1]
+    assert recorded_port == firecoast_app.SERVER_PORT
+    assert isinstance(recorded_ips, tuple)
+    status = firecoast_app.get_firewall_status()
+    assert status['supported'] is True
+    assert status['requires_admin'] is False
+    assert status['last_error'] is None
+    assert status['last_success']
+
+
+def test_firewall_permission_error_sets_status(device_control_environment, monkeypatch):
+    firecoast_app = device_control_environment
+
+    class PermissionStub(FirewallManagerStub):
+        def ensure_registration_access(self, port):  # noqa: D401 - test helper
+            raise firecoast_app.firewall_service.FirewallPermissionError('Access is denied.')
+
+    stub = PermissionStub()
+    monkeypatch.setattr(firecoast_app.firewall_service, '_manager_instance', None)
+    monkeypatch.setattr(
+        firecoast_app.firewall_service,
+        'get_firewall_manager',
+        lambda: stub,
+    )
+
+    firecoast_app._synchronize_firewall_rules()
+
+    status = firecoast_app.get_firewall_status()
+    assert status['supported'] is True
+    assert status['requires_admin'] is True
+    assert status['last_success'] is None
+    assert 'access is denied' in (status['last_error'] or '').lower()
+
+
+def test_firewall_unsupported_marks_status(device_control_environment, monkeypatch):
+    firecoast_app = device_control_environment
+
+    def raise_unsupported():
+        raise firecoast_app.firewall_service.FirewallUnsupportedError('Unsupported platform')
+
+    monkeypatch.setattr(firecoast_app.firewall_service, '_manager_instance', None)
+    monkeypatch.setattr(firecoast_app.firewall_service, 'get_firewall_manager', raise_unsupported)
+
+    firecoast_app._synchronize_firewall_rules()
+
+    status = firecoast_app.get_firewall_status()
+    assert status['supported'] is False
+    assert status['requires_admin'] is False
+    assert status['last_success'] is None
+    assert 'unsupported platform' in (status['last_error'] or '').lower()
+
+
 def test_new_device_is_redirected_and_logged(device_control_environment, monkeypatch):
     firecoast_app = device_control_environment
 
     monkeypatch.setattr(firecoast_app, '_get_request_ip_address', lambda: '192.168.0.42')
-    monkeypatch.setattr(firecoast_app, '_resolve_mac_address_for_ip', lambda ip: 'aa:bb:cc:dd:ee:ff')
+    monkeypatch.setattr(firecoast_app, '_generate_device_token', lambda: 'token-new-device')
 
     original_testing = firecoast_app.app.config.get('TESTING')
     firecoast_app.app.config['TESTING'] = False
     try:
         with firecoast_app.app.test_request_context('/orders'):
+            session.clear()
             response = firecoast_app._enforce_device_access_gate()
             assert response.status_code == 302
-            assert response.location.endswith('/device/register')
-            assert session.get('pending_mac') == 'aa:bb:cc:dd:ee:ff'
+            assert response.location.endswith('/device/register') or response.location.endswith('/device/pending')
+            assert session.get(firecoast_app.DEVICE_TOKEN_SESSION_KEY) == 'token-new-device'
+            assert session.get(firecoast_app.PENDING_DEVICE_TOKEN_SESSION_KEY) == 'token-new-device'
             assert session.get('pending_ip') == '192.168.0.42'
     finally:
         firecoast_app.app.config['TESTING'] = original_testing
 
     conn = get_db_connection()
     try:
-        row = conn.execute(
-            "SELECT mac_address, ip_address, status FROM device_access_logs ORDER BY id DESC LIMIT 1"
+        device = conn.execute(
+            "SELECT owner_name, device_name, status, access_token, last_ip FROM network_devices WHERE access_token = ?",
+            ('token-new-device',),
         ).fetchone()
-        assert row['mac_address'] == 'aa:bb:cc:dd:ee:ff'
+        assert device is not None
+        assert device['access_token'] == 'token-new-device'
+        assert device['status'] == firecoast_app.DEVICE_STATUS_PENDING
+        assert device['owner_name'] is None
+        assert device['device_name'] is None
+        assert device['last_ip'] == '192.168.0.42'
+        row = conn.execute(
+            "SELECT device_token, ip_address, status FROM device_access_logs WHERE device_token = ? ORDER BY id DESC LIMIT 1",
+            ('token-new-device',),
+        ).fetchone()
+        assert row['device_token'] == 'token-new-device'
         assert row['ip_address'] == '192.168.0.42'
-        assert row['status'] == 'new'
+        assert row['status'] in {'new', firecoast_app.DEVICE_STATUS_PENDING}
+    finally:
+        conn.close()
+
+
+def test_pending_device_without_details_can_submit_request(device_control_environment, monkeypatch):
+    firecoast_app = device_control_environment
+
+    device_token = f'token-form-flow-{uuid.uuid4()}'
+
+    monkeypatch.setattr(firecoast_app, '_get_request_ip_address', lambda: '192.168.0.77')
+    monkeypatch.setattr(firecoast_app, '_generate_device_token', lambda: device_token)
+
+    original_testing = firecoast_app.app.config.get('TESTING')
+    firecoast_app.app.config['TESTING'] = False
+    try:
+        with firecoast_app.app.test_client() as client:
+            response = client.get('/orders')
+            assert response.status_code == 302
+            assert response.headers['Location']
+            assert response.headers['Location'].endswith('/device/register')
+
+            response = client.get('/device/register')
+            assert response.status_code == 200
+            html = response.get_data(as_text=True)
+            assert 'name="owner_name"' in html
+            assert 'name="device_name"' in html
+
+            post_response = client.post(
+                '/device/register',
+                data={'owner_name': 'Jordan', 'device_name': 'Warehouse Tablet'},
+                follow_redirects=False,
+            )
+            assert post_response.status_code == 302
+            assert post_response.headers['Location'].endswith('/device/pending')
+
+            # Once the details are recorded, subsequent visits should go to the pending page.
+            response = client.get('/device/register')
+            assert response.status_code == 302
+            assert response.headers['Location'].endswith('/device/pending')
+    finally:
+        firecoast_app.app.config['TESTING'] = original_testing
+
+    conn = get_db_connection()
+    try:
+        row = conn.execute(
+            "SELECT owner_name, device_name, status FROM network_devices WHERE access_token = ?",
+            (device_token,),
+        ).fetchone()
+        assert row is not None
+        assert row['owner_name'] == 'Jordan'
+        assert row['device_name'] == 'Warehouse Tablet'
+        assert row['status'] == firecoast_app.DEVICE_STATUS_PENDING
     finally:
         conn.close()
 
@@ -88,33 +236,34 @@ def test_new_device_is_redirected_and_logged(device_control_environment, monkeyp
 def test_trusted_device_gains_access_without_login(device_control_environment, monkeypatch):
     firecoast_app = device_control_environment
 
-    unique_suffix = uuid.uuid4().hex[:2]
-    trusted_mac = f"11:22:33:44:55:{unique_suffix}"
+    trusted_token = 'trusted-token'
+    placeholder_mac = firecoast_app._derive_device_identifier_from_token(trusted_token)
+
+    initial_testing = firecoast_app.app.config.get('TESTING')
+    monkeypatch.setattr(firecoast_app, '_generate_device_token', lambda: trusted_token)
+    firecoast_app.app.config['TESTING'] = False
+    try:
+        with firecoast_app.app.test_request_context('/orders'):
+            session.clear()
+            firecoast_app._enforce_device_access_gate()
+    finally:
+        firecoast_app.app.config['TESTING'] = initial_testing
 
     conn = get_db_connection()
     try:
-        device_id = str(uuid.uuid4())
         conn.execute(
             """
-            INSERT INTO network_devices (
-                id,
-                mac_address,
-                owner_name,
-                device_name,
-                status,
-                permissions,
-                last_ip,
-                last_seen
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            UPDATE network_devices
+            SET owner_name = ?, device_name = ?, status = ?, permissions = ?, last_ip = ?, last_seen = CURRENT_TIMESTAMP
+            WHERE access_token = ?
             """,
             (
-                device_id,
-                trusted_mac,
                 'Jordan',
                 'Warehouse Tablet',
                 firecoast_app.DEVICE_STATUS_TRUSTED,
                 json.dumps(['orders']),
                 '192.168.0.99',
+                trusted_token,
             ),
         )
         conn.commit()
@@ -122,138 +271,268 @@ def test_trusted_device_gains_access_without_login(device_control_environment, m
         conn.close()
 
     monkeypatch.setattr(firecoast_app, '_get_request_ip_address', lambda: '192.168.0.99')
-    monkeypatch.setattr(firecoast_app, '_resolve_mac_address_for_ip', lambda ip: trusted_mac)
 
     original_testing = firecoast_app.app.config.get('TESTING')
     firecoast_app.app.config['TESTING'] = False
     try:
         with firecoast_app.app.test_request_context('/orders'):
+            session[firecoast_app.DEVICE_TOKEN_SESSION_KEY] = trusted_token
             response = firecoast_app._enforce_device_access_gate()
             assert response is None
-            assert session.get('pending_mac') == trusted_mac
+            assert session.get(firecoast_app.PENDING_DEVICE_TOKEN_SESSION_KEY) == trusted_token
             assert g.current_device['status'] == firecoast_app.DEVICE_STATUS_TRUSTED
             assert g.current_device['display_name'] == 'Jordan'
+            assert g.current_device['device_token'] == trusted_token
     finally:
         firecoast_app.app.config['TESTING'] = original_testing
 
     conn = get_db_connection()
     try:
         row = conn.execute(
-            "SELECT status FROM device_access_logs ORDER BY id DESC LIMIT 1"
+            "SELECT status, device_token FROM device_access_logs ORDER BY id DESC LIMIT 1"
         ).fetchone()
         assert row['status'] == firecoast_app.DEVICE_STATUS_TRUSTED
+        assert row['device_token'] == trusted_token
     finally:
         conn.close()
 
 
-def test_mac_resolution_uses_specific_neighbor_line(device_control_environment, monkeypatch):
+def test_approving_device_triggers_firewall_sync(device_control_environment, firewall_manager_stub):
+    firecoast_app = device_control_environment
+    stub = firewall_manager_stub
+    device_id = str(uuid.uuid4())
+    pending_token = f'pending-token-{uuid.uuid4()}'
+
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO network_devices (id, access_token, status, permissions, last_ip, last_seen, owner_name, device_name)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+            """,
+            (
+                device_id,
+                pending_token,
+                firecoast_app.DEVICE_STATUS_PENDING,
+                json.dumps([]),
+                '192.168.0.5',
+                None,
+                None,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    with firecoast_app.app.test_request_context(
+        f'/api/network/devices/{device_id}/approve',
+        method='POST',
+        json={},
+    ):
+        g.current_device = firecoast_app._build_host_device_context('127.0.0.1')
+        response = firecoast_app.api_approve_network_device(device_id)
+        assert response.status_code == 200
+
+    assert stub.registration_ports
+    assert stub.registration_ports[-1] == firecoast_app.SERVER_PORT
+    assert stub.reconciliations
+    recorded_ips, recorded_port = stub.reconciliations[-1]
+    assert recorded_port == firecoast_app.SERVER_PORT
+    assert '192.168.0.5' in recorded_ips
+
+
+def test_blocking_device_removes_firewall_access(device_control_environment, firewall_manager_stub):
+    firecoast_app = device_control_environment
+    stub = firewall_manager_stub
+    device_id = str(uuid.uuid4())
+    trusted_token = f'trusted-token-{uuid.uuid4()}'
+
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO network_devices (id, access_token, status, permissions, last_ip, last_seen, owner_name, device_name)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+            """,
+            (
+                device_id,
+                trusted_token,
+                firecoast_app.DEVICE_STATUS_TRUSTED,
+                json.dumps(['orders']),
+                '192.168.0.7',
+                'Jordan',
+                'Warehouse Tablet',
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    with firecoast_app.app.test_request_context(
+        f'/api/network/devices/{device_id}/block',
+        method='POST',
+        json={},
+    ):
+        g.current_device = firecoast_app._build_host_device_context('127.0.0.1')
+        response = firecoast_app.api_block_network_device(device_id)
+        assert response.status_code == 200
+
+    assert stub.registration_ports
+    assert stub.registration_ports[-1] == firecoast_app.SERVER_PORT
+    assert stub.reconciliations
+    recorded_ips, recorded_port = stub.reconciliations[-1]
+    assert recorded_port == firecoast_app.SERVER_PORT
+    assert '192.168.0.7' not in recorded_ips
+
+
+def test_trusted_device_ip_change_triggers_firewall_sync(device_control_environment, firewall_manager_stub, monkeypatch):
+    firecoast_app = device_control_environment
+    stub = firewall_manager_stub
+
+    device_id = str(uuid.uuid4())
+    trusted_token = f'trusted-token-ip-change-{uuid.uuid4()}'
+
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO network_devices (id, access_token, status, permissions, last_ip, last_seen, owner_name, device_name)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+            """,
+            (
+                device_id,
+                trusted_token,
+                firecoast_app.DEVICE_STATUS_TRUSTED,
+                json.dumps(['orders']),
+                '192.168.0.11',
+                'Jordan',
+                'Warehouse Tablet',
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(firecoast_app, '_get_request_ip_address', lambda: '192.168.0.200')
+
+    original_testing = firecoast_app.app.config.get('TESTING')
+    firecoast_app.app.config['TESTING'] = False
+    try:
+        with firecoast_app.app.test_request_context('/orders'):
+            session.clear()
+            session[firecoast_app.DEVICE_TOKEN_SESSION_KEY] = trusted_token
+            response = firecoast_app._enforce_device_access_gate()
+            assert response is None
+    finally:
+        firecoast_app.app.config['TESTING'] = original_testing
+
+    assert stub.reconciliations
+    recorded_ips, recorded_port = stub.reconciliations[-1]
+    assert recorded_port == firecoast_app.SERVER_PORT
+    assert '192.168.0.200' in recorded_ips
+    assert stub.registration_ports
+    assert stub.registration_ports[-1] == firecoast_app.SERVER_PORT
+
+
+def test_trusted_device_does_not_block_new_device_registration(device_control_environment, monkeypatch):
     firecoast_app = device_control_environment
 
-    neighbor_output = """
-    192.168.0.42 dev wlan0 lladdr aa:aa:aa:aa:aa:aa REACHABLE
-    192.168.0.77 dev wlan0 lladdr bb:bb:bb:bb:bb:bb STALE
-    """
-    arp_output = """
-    ? (192.168.0.42) at aa:aa:aa:aa:aa:aa on wlan0 ifscope [ethernet]
-    ? (192.168.0.77) at bb:bb:bb:bb:bb:bb on wlan0 ifscope [ethernet]
-    """
+    trusted_token = f'trusted-token-{uuid.uuid4()}'
+    new_token = f'new-token-{uuid.uuid4()}'
 
-    def fake_run(command, capture_output, text, timeout):
-        if command[0] == 'ip':
-            return SimpleNamespace(stdout=neighbor_output, stderr='')
-        return SimpleNamespace(stdout=arp_output, stderr='')
+    original_testing = firecoast_app.app.config.get('TESTING')
+    firecoast_app.app.config['TESTING'] = False
 
-    monkeypatch.setattr(firecoast_app.subprocess, 'run', fake_run)
+    try:
+        monkeypatch.setattr(firecoast_app, '_get_request_ip_address', lambda: '192.168.0.10')
+        monkeypatch.setattr(firecoast_app, '_generate_device_token', lambda: trusted_token)
 
-    mac = firecoast_app._resolve_mac_address_for_ip('192.168.0.77')
-    assert mac == 'bb:bb:bb:bb:bb:bb'
+        with firecoast_app.app.test_request_context('/orders'):
+            session.clear()
+            firecoast_app._enforce_device_access_gate()
+
+        conn = get_db_connection()
+        try:
+            conn.execute(
+                """
+                UPDATE network_devices
+                SET owner_name = ?, device_name = ?, status = ?, permissions = ?, last_ip = ?, last_seen = CURRENT_TIMESTAMP
+                WHERE access_token = ?
+                """,
+                (
+                    'Jordan',
+                    'Admin Laptop',
+                    firecoast_app.DEVICE_STATUS_TRUSTED,
+                    json.dumps(['orders']),
+                    '192.168.0.10',
+                    trusted_token,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        monkeypatch.setattr(firecoast_app, '_get_request_ip_address', lambda: '192.168.0.42')
+        monkeypatch.setattr(firecoast_app, '_generate_device_token', lambda: new_token)
+
+        with firecoast_app.app.test_request_context('/orders'):
+            session.clear()
+            response = firecoast_app._enforce_device_access_gate()
+            assert response is not None
+            assert response.status_code == 302
+            assert response.location.endswith('/device/register')
+            assert session.get(firecoast_app.DEVICE_TOKEN_SESSION_KEY) == new_token
+            assert session.get(firecoast_app.PENDING_DEVICE_TOKEN_SESSION_KEY) == new_token
+    finally:
+        firecoast_app.app.config['TESTING'] = original_testing
 
 
-def test_mac_resolution_ignores_non_matching_lines(device_control_environment, monkeypatch):
+def test_blocked_device_receives_blocked_page(device_control_environment, monkeypatch):
     firecoast_app = device_control_environment
 
-    neighbor_output = "192.168.0.42 dev wlan0 lladdr aa:aa:aa:aa:aa:aa REACHABLE"
+    blocked_token = 'blocked-token'
+    placeholder_mac = firecoast_app._derive_device_identifier_from_token(blocked_token)
 
-    def fake_run(command, capture_output, text, timeout):
-        return SimpleNamespace(stdout=neighbor_output, stderr='')
+    initial_testing = firecoast_app.app.config.get('TESTING')
+    monkeypatch.setattr(firecoast_app, '_generate_device_token', lambda: blocked_token)
+    firecoast_app.app.config['TESTING'] = False
+    try:
+        with firecoast_app.app.test_request_context('/orders'):
+            session.clear()
+            firecoast_app._enforce_device_access_gate()
+    finally:
+        firecoast_app.app.config['TESTING'] = initial_testing
 
-    monkeypatch.setattr(firecoast_app.subprocess, 'run', fake_run)
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            """
+            UPDATE network_devices
+            SET owner_name = ?, device_name = ?, status = ?, permissions = ?, last_ip = ?, last_seen = CURRENT_TIMESTAMP
+            WHERE access_token = ?
+            """,
+            (
+                'Jamie',
+                'Blocked Tablet',
+                firecoast_app.DEVICE_STATUS_BLOCKED,
+                json.dumps([]),
+                '192.168.0.55',
+                blocked_token,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
-    mac = firecoast_app._resolve_mac_address_for_ip('192.168.0.77')
-    assert mac is None
+    monkeypatch.setattr(firecoast_app, '_get_request_ip_address', lambda: '192.168.0.55')
 
-
-def test_mac_resolution_falls_back_to_full_neighbor_scan(device_control_environment, monkeypatch):
-    firecoast_app = device_control_environment
-
-    neighbor_output = ""
-    fallback_output = "192.168.0.77 dev wlan0 lladdr cc:cc:cc:cc:cc:cc STALE"
-
-    def fake_run(command, capture_output, text, timeout):
-        if len(command) == 4 and command[:3] == ['ip', 'neigh', 'show']:
-            return SimpleNamespace(stdout=neighbor_output, stderr='')
-        if command[:2] == ['arp', '-n']:
-            return SimpleNamespace(stdout='', stderr='')
-        if command == ['ping', '-c', '1', '-W', '1', '192.168.0.77']:
-            raise FileNotFoundError
-        if command == ['ping', '-c', '1', '192.168.0.77']:
-            raise FileNotFoundError
-        if command == ['ping', '-n', '1', '192.168.0.77']:
-            raise FileNotFoundError
-        if command == ['ip', 'neigh', 'show']:
-            return SimpleNamespace(stdout=fallback_output, stderr='')
-        if command == ['ip', 'neigh']:
-            return SimpleNamespace(stdout='', stderr='')
-        if command == ['arp', '-an']:
-            return SimpleNamespace(stdout='', stderr='')
-        raise AssertionError(f"Unexpected command {command}")
-
-    monkeypatch.setattr(firecoast_app.subprocess, 'run', fake_run)
-
-    mac = firecoast_app._resolve_mac_address_for_ip('192.168.0.77')
-    assert mac == 'cc:cc:cc:cc:cc:cc'
-
-
-def test_mac_resolution_retries_after_ping_prime(device_control_environment, monkeypatch):
-    firecoast_app = device_control_environment
-
-    attempts = {'ip_runs': 0}
-
-    def fake_run(command, capture_output, text, timeout):
-        if len(command) == 4 and command[:3] == ['ip', 'neigh', 'show']:
-            attempts['ip_runs'] += 1
-            if attempts['ip_runs'] >= 2:
-                output = "192.168.0.88 dev eth0 lladdr dd:dd:dd:dd:dd:dd REACHABLE"
-            else:
-                output = ''
-            return SimpleNamespace(stdout=output, stderr='')
-        if command[:2] == ['arp', '-n']:
-            return SimpleNamespace(stdout='', stderr='')
-        if command == ['ip', 'neigh', 'show']:
-            return SimpleNamespace(stdout='', stderr='')
-        if command == ['ip', 'neigh']:
-            return SimpleNamespace(stdout='', stderr='')
-        if command == ['arp', '-an']:
-            return SimpleNamespace(stdout='', stderr='')
-        if command[0] == 'ping':
-            return SimpleNamespace(stdout='', stderr='')
-        raise AssertionError(f"Unexpected command {command}")
-
-    monkeypatch.setattr(firecoast_app.subprocess, 'run', fake_run)
-
-    mac = firecoast_app._resolve_mac_address_for_ip('192.168.0.88')
-    assert mac == 'dd:dd:dd:dd:dd:dd'
-
-
-def test_mac_resolution_handles_ipv4_mapped_addresses(device_control_environment, monkeypatch):
-    firecoast_app = device_control_environment
-
-    neighbor_output = '192.168.0.55 dev wlan0 lladdr ee:ee:ee:ee:ee:ee REACHABLE'
-
-    def fake_run(command, capture_output, text, timeout):
-        return SimpleNamespace(stdout=neighbor_output, stderr='')
-
-    monkeypatch.setattr(firecoast_app.subprocess, 'run', fake_run)
-
-    mac = firecoast_app._resolve_mac_address_for_ip('::ffff:192.168.0.55')
-    assert mac == 'ee:ee:ee:ee:ee:ee'
+    original_testing = firecoast_app.app.config.get('TESTING')
+    firecoast_app.app.config['TESTING'] = False
+    try:
+        with firecoast_app.app.test_request_context('/orders'):
+            session[firecoast_app.DEVICE_TOKEN_SESSION_KEY] = blocked_token
+            response, status_code = firecoast_app._enforce_device_access_gate()
+            assert status_code == 403
+            assert session.get(firecoast_app.PENDING_DEVICE_TOKEN_SESSION_KEY) == blocked_token
+    finally:
+        firecoast_app.app.config['TESTING'] = original_testing

@@ -2,6 +2,7 @@ import sqlite3
 import json
 import logging
 import re
+import secrets
 import uuid
 from typing import Optional
 
@@ -643,7 +644,7 @@ def init_db():
         """
         CREATE TABLE IF NOT EXISTS network_devices (
             id TEXT PRIMARY KEY NOT NULL,
-            mac_address TEXT NOT NULL UNIQUE,
+            mac_address TEXT UNIQUE,
             owner_name TEXT,
             device_name TEXT,
             status TEXT NOT NULL DEFAULT 'pending',
@@ -651,10 +652,36 @@ def init_db():
             last_ip TEXT,
             last_seen TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            access_token TEXT UNIQUE
         );
         """
     )
+    cursor.execute("PRAGMA table_info(network_devices)")
+    network_device_columns = set()
+    for column in cursor.fetchall():
+        if isinstance(column, sqlite3.Row):
+            network_device_columns.add(column["name"])
+        else:
+            network_device_columns.add(column[1])
+    if "access_token" not in network_device_columns:
+        cursor.execute("ALTER TABLE network_devices ADD COLUMN access_token TEXT")
+    cursor.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_network_devices_access_token ON network_devices(access_token)"
+    )
+    cursor.execute(
+        "SELECT id, access_token FROM network_devices WHERE access_token IS NULL OR access_token = ''"
+    )
+    for row in cursor.fetchall():
+        token = secrets.token_urlsafe(32)
+        if isinstance(row, sqlite3.Row):
+            device_id = row["id"]
+        else:
+            device_id = row[0]
+        cursor.execute(
+            "UPDATE network_devices SET access_token = ? WHERE id = ?",
+            (token, device_id),
+        )
     cursor.execute(
         """
         CREATE TRIGGER IF NOT EXISTS update_network_devices_updated_at
@@ -670,6 +697,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS device_access_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             device_id TEXT,
+            device_token TEXT,
             mac_address TEXT,
             ip_address TEXT,
             user_agent TEXT,
@@ -680,6 +708,15 @@ def init_db():
         );
         """
     )
+    cursor.execute("PRAGMA table_info(device_access_logs)")
+    access_log_columns = set()
+    for column in cursor.fetchall():
+        if isinstance(column, sqlite3.Row):
+            access_log_columns.add(column["name"])
+        else:
+            access_log_columns.add(column[1])
+    if "device_token" not in access_log_columns:
+        cursor.execute("ALTER TABLE device_access_logs ADD COLUMN device_token TEXT")
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_device_access_logs_device ON device_access_logs(device_id)"
     )
