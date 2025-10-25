@@ -7515,7 +7515,7 @@ def main():
         Timer(1, open_browser).start()
         network_ip = _get_local_network_address()
         print(f"FireCoast available on the local network at http://{network_ip}:{PORT}")
-        app.run(host='0.0.0.0', port=PORT, debug=False)
+        app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
 
 if __name__ == '__main__':
     init_db()
