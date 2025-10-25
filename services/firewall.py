@@ -66,17 +66,25 @@ class FirewallManager:
                 f"Firewall automation is not supported on platform '{self._system}'."
             )
 
-        # Add any new IPs that were not already granted access.
-        for ip in sorted(normalized - existing):
+        updated_existing = set(existing)
+
+        # Ensure each desired IP currently has an allow rule applied.
+        for ip in sorted(normalized):
             if self._allow_ip(ip, port):
-                existing.add(ip)
+                updated_existing.add(ip)
+            elif ip in existing:
+                # If we could not re-apply the rule but it was previously tracked,
+                # keep the entry so we can retry on the next sync.
+                updated_existing.add(ip)
 
         # Remove stale entries that no longer correspond to trusted devices.
         for ip in sorted(existing - normalized):
-            if self._revoke_ip(ip, port):
-                existing.discard(ip)
+            if not self._revoke_ip(ip, port):
+                updated_existing.add(ip)
+            elif ip in updated_existing:
+                updated_existing.discard(ip)
 
-        ledger.setdefault("trusted", {})[port_key] = sorted(existing)
+        ledger.setdefault("trusted", {})[port_key] = sorted(updated_existing)
         self._save_ledger(ledger)
 
     def ensure_registration_access(self, port: int) -> None:
@@ -88,10 +96,6 @@ class FirewallManager:
 
         ledger = self._load_ledger()
         port_key = str(port)
-        already_enabled = bool(ledger.get("registration", {}).get(port_key))
-        if already_enabled:
-            return
-
         if self._open_port(port):
             registration = ledger.setdefault("registration", {})
             registration[port_key] = True
@@ -107,6 +111,7 @@ class FirewallManager:
         return False
 
     def _allow_ip(self, ip: str, port: int) -> bool:
+        rule_name = self._rule_name_for_ip(ip) if self._system == "windows" else None
         try:
             command = self._build_allow_command(ip, port)
             self._run_command(command)
@@ -114,6 +119,12 @@ class FirewallManager:
         except FirewallUnsupportedError:
             raise
         except FirewallError as exc:
+            if (
+                rule_name
+                and "already exists" in str(exc).lower()
+                and self._enable_rule(rule_name)
+            ):
+                return True
             self._logger.warning("Failed to allow %s for port %s: %s", ip, port, exc)
             return False
 
@@ -130,7 +141,7 @@ class FirewallManager:
 
     def _build_allow_command(self, ip: str, port: int) -> Sequence[str]:
         if self._system == "windows":
-            rule_name = f"{_RULE_PREFIX}_{ip.replace('.', '_')}"
+            rule_name = self._rule_name_for_ip(ip)
             return [
                 "netsh",
                 "advfirewall",
@@ -181,7 +192,7 @@ class FirewallManager:
 
     def _build_revoke_command(self, ip: str, port: int) -> Sequence[str]:
         if self._system == "windows":
-            rule_name = f"{_RULE_PREFIX}_{ip.replace('.', '_')}"
+            rule_name = self._rule_name_for_ip(ip)
             return [
                 "netsh",
                 "advfirewall",
@@ -235,12 +246,18 @@ class FirewallManager:
         except FirewallUnsupportedError:
             raise
         except FirewallError as exc:
+            if (
+                self._system == "windows"
+                and "already exists" in str(exc).lower()
+                and self._enable_rule(self._registration_rule_name(port))
+            ):
+                return True
             self._logger.warning("Failed to open port %s: %s", port, exc)
             return False
 
     def _build_open_port_command(self, port: int) -> Sequence[str]:
         if self._system == "windows":
-            rule_name = f"{_REGISTRATION_RULE_PREFIX}_{port}"
+            rule_name = self._registration_rule_name(port)
             return [
                 "netsh",
                 "advfirewall",
@@ -283,6 +300,41 @@ class FirewallManager:
         raise FirewallUnsupportedError(
             f"Firewall open-port command is unavailable for platform '{self._system}'."
         )
+
+    def _enable_rule(self, rule_name: str) -> bool:
+        if self._system != "windows":
+            return False
+        try:
+            command = self._build_enable_rule_command(rule_name)
+            self._run_command(command)
+            return True
+        except FirewallUnsupportedError:
+            raise
+        except FirewallError as exc:
+            self._logger.warning("Failed to enable firewall rule %s: %s", rule_name, exc)
+            return False
+
+    def _build_enable_rule_command(self, rule_name: str) -> Sequence[str]:
+        if self._system == "windows":
+            return [
+                "netsh",
+                "advfirewall",
+                "firewall",
+                "set",
+                "rule",
+                f"name={rule_name}",
+                "new",
+                "enable=yes",
+            ]
+        raise FirewallUnsupportedError(
+            f"Firewall enable command is unavailable for platform '{self._system}'."
+        )
+
+    def _rule_name_for_ip(self, ip: str) -> str:
+        return f"{_RULE_PREFIX}_{ip.replace('.', '_')}"
+
+    def _registration_rule_name(self, port: int) -> str:
+        return f"{_REGISTRATION_RULE_PREFIX}_{port}"
 
     def _run_command(self, command: Sequence[str]) -> None:
         try:

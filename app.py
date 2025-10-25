@@ -103,6 +103,10 @@ _typing_states: Dict[str, Dict[str, Dict[str, Any]]] = defaultdict(dict)
 _TYPING_TTL_SECONDS = 8.0
 MAX_CHAT_PING_RECIPIENTS = 8
 
+_FIREWALL_SYNC_INTERVAL_SECONDS = 60
+_firewall_sync_thread: Optional[Thread] = None
+_firewall_sync_thread_lock = Lock()
+
 
 def _event_default_serializer(value: Any) -> str:
     if isinstance(value, datetime):
@@ -883,6 +887,47 @@ def _synchronize_firewall_rules() -> None:
     except firewall_service.FirewallError as exc:
         if app.logger:
             app.logger.warning('Failed to synchronize firewall rules: %s', exc)
+
+
+def _ensure_firewall_sync_loop() -> None:
+    if app.config.get('TESTING'):
+        return
+    global _firewall_sync_thread
+    with _firewall_sync_thread_lock:
+        if _firewall_sync_thread and _firewall_sync_thread.is_alive():
+            return
+
+        def _firewall_sync_worker() -> None:
+            while True:
+                time.sleep(_FIREWALL_SYNC_INTERVAL_SECONDS)
+                try:
+                    _synchronize_firewall_rules()
+                except Exception as exc:  # pragma: no cover - defensive logging
+                    if app.logger:
+                        app.logger.warning('Background firewall sync failed: %s', exc)
+
+        thread = Thread(
+            target=_firewall_sync_worker,
+            name='firecoast-firewall-sync',
+            daemon=True,
+        )
+        _firewall_sync_thread = thread
+        thread.start()
+
+
+def _prepare_firewall_background_sync() -> None:
+    if app.config.get('TESTING'):
+        return
+    try:
+        _synchronize_firewall_rules()
+    except Exception as exc:  # pragma: no cover - defensive logging
+        if app.logger:
+            app.logger.warning('Failed to pre-sync firewall rules: %s', exc)
+    try:
+        _ensure_firewall_sync_loop()
+    except Exception as exc:  # pragma: no cover - defensive logging
+        if app.logger:
+            app.logger.warning('Failed to start firewall sync loop: %s', exc)
 
 
 def _serialize_access_log_row(row: sqlite3.Row) -> Dict[str, Any]:
@@ -7603,11 +7648,7 @@ def main():
         Timer(1, open_browser).start()
         network_ip = _get_local_network_address()
         print(f"FireCoast available on the local network at http://{network_ip}:{port}")
-        try:
-            _synchronize_firewall_rules()
-        except Exception as exc:  # pragma: no cover - defensive logging
-            if app.logger:
-                app.logger.warning('Failed to pre-sync firewall rules: %s', exc)
+        _prepare_firewall_background_sync()
         app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
 
 if __name__ == '__main__':
